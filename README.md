@@ -1,303 +1,386 @@
-# V8 App Template
+# PadiHub
 
-A modern, production-ready web application template built with Vite, React, and TypeScript. Designed for AI-assisted development with component introspection, layout systems, and excellent developer experience.
+PadiHub is a full-stack web application for managing rotating savings groups (ROSCA-style circles). Members contribute on a schedule, rotate payouts, build trust scores, and manage subscriptions with Stripe or Flutterwave.
 
-## 🚀 Features
+This repository is the active development codebase for Booker Global. Use the branch workflow below when contributing.
 
-- **⚡ Lightning Fast**: Vite for instant hot module replacement and optimized builds
-- **🎯 Type Safe**: Full TypeScript coverage across frontend and backend
-- **🎨 Beautiful UI**: shadcn/ui components with Tailwind CSS
-- **🧠 AI-Friendly**: Component introspection for AI development tools
-- **📱 Responsive**: Mobile-first design with modern CSS
-- **🔧 Developer Experience**: Hot reload, linting, formatting, and testing setup
-- **🚀 Production Ready**: SSR support, optimized builds, and deployment-ready
+---
 
-## 🛠️ Tech Stack
+## Table of contents
+
+1. [Overview](#overview)
+2. [Tech stack](#tech-stack)
+3. [Repository branches](#repository-branches)
+4. [Prerequisites](#prerequisites)
+5. [Getting started](#getting-started)
+6. [Environment variables](#environment-variables)
+7. [Project structure](#project-structure)
+8. [Application domains](#application-domains)
+9. [Scripts](#scripts)
+10. [Database](#database)
+11. [API and server](#api-and-server)
+12. [Frontend conventions](#frontend-conventions)
+13. [Testing](#testing)
+14. [Linting and type checking](#linting-and-type-checking)
+15. [Development workflow](#development-workflow)
+16. [Deployment notes](#deployment-notes)
+17. [Security notes](#security-notes)
+
+---
+
+## Overview
+
+PadiHub supports:
+
+- User registration, email verification, and password reset
+- Savings group creation, joining, leaving, and contributions
+- Rotation schedules and payout management for group leaders
+- Trust scores and identity verification (Stripe Identity / Flutterwave BVN flows)
+- Membership and subscription billing (Stripe / Flutterwave)
+- Notifications, help centre, and admin tooling
+- Marketing and product pages (home, features, pricing, FAQ, legal)
+
+The app is a Vite + React SPA with an Express TypeScript API, MySQL via Drizzle ORM, and scheduled jobs.
+
+---
+
+## Tech stack
 
 ### Frontend
 
-- **React 18+** - Modern React with hooks and concurrent features
-- **TypeScript 5** - Full type safety across the application
-- **Vite 5** - Fast build tool and dev server with HMR
-- **Tailwind CSS 3** - Utility-first CSS framework
-- **shadcn/ui** - Beautiful, accessible component library
-- **React Router DOM** - Client-side routing
-- **Framer Motion** - Smooth animations and transitions
+| Technology | Role |
+| --- | --- |
+| React 19 | UI |
+| TypeScript 5 | Type safety |
+| Vite 6 | Dev server and builds |
+| React Router 7 | Client routing |
+| Tailwind CSS 3 | Styling |
+| shadcn/ui + Radix | Accessible UI primitives |
+| TanStack Query | Server state |
+| Zustand | Client state |
+| React Hook Form + Zod | Forms and validation |
+| Motion | Animations |
 
 ### Backend
 
-- **Node.js API** - Simple health check and utilities
-- **TypeScript** - Type-safe backend development
+| Technology | Role |
+| --- | --- |
+| Express 5 | HTTP API |
+| Drizzle ORM | MySQL schema and queries |
+| JWT + bcrypt | Auth |
+| Stripe / Flutterwave | Payments and identity |
+| Resend | Transactional email |
+| Trigger.dev | Background / scheduled jobs |
+| Swagger | API documentation |
 
-### Development Tools
+### Tooling
 
-- **ESLint 9** - Code linting
-- **Prettier** - Code formatting
-- **Vitest** - Fast unit testing
-- **TypeScript ESLint** - TypeScript-specific linting
+- ESLint 9, Prettier, Vitest, Testing Library
+- Node.js 22 or newer (`engines.node >= 22`)
 
-> **Note:** SSR support with vite-plugin-ssr has been temporarily removed due to compatibility issues with the directory structure. This can be re-added later when the plugin is updated or replaced with a more stable alternative.
+---
 
-## 📁 Project Structure
+## Repository branches
 
-```
-v8-app-template/
-├── src/
-│   ├── components/       # React components
-│   │   ├── ui/           # shadcn/ui base components (40+ components)
-│   │   └── Spinner.tsx
-│   ├── layouts/          # Layout systems
-│   │   ├── RootLayout.tsx    # Centralized layout wrapper
-│   │   ├── Website.tsx       # Structural container
-│   │   ├── Dashboard.tsx     # Dashboard layout
-│   │   ├── RootLayout.md     # RootLayout documentation
-│   │   ├── Website.md        # Website layout documentation
-│   │   └── parts/            # Layout components
-│   │       ├── Header.tsx
-│   │       └── Footer.tsx
-│   ├── pages/            # Page components (content only)
-│   │   ├── index.tsx     # Homepage
-│   │   └── _404.tsx      # 404 page
-│   ├── lib/              # Utilities and API
-│   │   ├── utils.ts      # Utility functions
-│   │   └── api-client.ts # API client
-│   ├── api/              # Backend API routes
-│   │   └── health.ts     # Health check endpoint
-│   ├── styles/           # Global styles
-│   │   └── globals.css
-│   ├── test/             # Test setup
-│   │   └── setup.ts
-│   ├── App.tsx           # Root application component
-│   ├── main.tsx          # Application entry point
-│   ├── router.ts         # Route definitions
-│   └── routes.tsx        # Route components
-├── dev-tools/            # Development mode enhancements
-├── source-mapper/        # AI introspection plugin
-├── public/               # Static assets
-└── scripts/              # Development scripts
-```
+| Branch | Purpose |
+| --- | --- |
+| `main` | Stable / production-ready baseline |
+| `developer` | Integration branch for backend, API, database, and full-stack work |
+| `frontend` | UI, pages, layouts, and client-side feature work |
 
-## 📜 Available Scripts
+**Recommended flow**
 
-- `npm run dev` - Start development server with hot reload
-- `npm run build` - Build for production
-- `npm run preview` - Preview production build locally
-- `npm run test` - Run Vitest unit tests
-- `npm run lint` - Run ESLint code linting
-- `npm run type-check` - Run TypeScript type checking
-- `npm run setup` - Initialize project with dependencies
+1. Branch from `developer` for API/backend tasks, or from `frontend` for UI-only tasks.
+2. Open a pull request into the matching long-lived branch.
+3. Merge long-lived branches into `main` when a release is ready.
 
-## 🎨 UI Components
+Do not commit secrets, `.env` files, or `node_modules`.
 
-This template includes shadcn/ui components that are:
+---
 
-- **Accessible** - Built with Radix UI primitives
-- **Customizable** - Easy to modify and extend
-- **Consistent** - Design system with CSS variables
-- **Copy-paste friendly** - Own your components
+## Prerequisites
 
-The template includes 40+ pre-configured shadcn/ui components:
+- Node.js **22+**
+- npm (comes with Node)
+- MySQL 8+ (local or remote) for database-backed features
+- Git
 
-- **Layout**: Card, Separator, Tabs, Sheet, Dialog
-- **Forms**: Button, Input, Textarea, Select, Checkbox, Switch
-- **Navigation**: Navigation Menu, Breadcrumb, Pagination
-- **Feedback**: Alert, Badge, Progress, Skeleton, Sonner
-- **Data Display**: Table, Avatar, Calendar, Hover Card
-- **Overlays**: Popover, Tooltip, Alert Dialog, Drawer
-- **Interactive**: Accordion, Collapsible, Command, Context Menu
+Optional for full feature parity:
 
-To add new components:
+- Stripe account (payments + Identity)
+- Flutterwave account (payments + identity where configured)
+- Resend API key (email)
+- Trigger.dev project (scheduled jobs)
+
+---
+
+## Getting started
 
 ```bash
-npx shadcn-ui@latest add component-name
+# Clone
+git clone https://github.com/Booker-Global/New-PadiHub.git
+cd New-PadiHub
+
+# Install dependencies
+npm install
+
+# Configure environment
+cp env.example .env
+# Edit .env with your local values
+
+# Start the development server
+npm run dev
 ```
 
-## 🧠 AI Integration
+The Vite dev server typically runs on port **5173**. API configuration is controlled by `PORT` and `VITE_API_URL` in `.env` (see `env.example`).
 
-### Component Introspection
+---
 
-The custom source-mapper plugin adds metadata to components in development:
+## Environment variables
 
-```html
-<div
-  data-source-file="/src/components/Button.tsx"
-  data-source-line="15"
-  data-source-component="Button"
->
-  Click Me
-</div>
+Copy `env.example` to `.env`. Never commit `.env`.
+
+### Required for local UI development
+
+```env
+VITE_APP_NAME=PadiHub
+VITE_PUBLIC_URL=http://localhost:5173
+VITE_API_URL=http://localhost:3000/api
+NODE_ENV=development
+PORT=3000
 ```
 
-### Development Mode Integration
+### Database (when using MySQL)
 
-The dev-tools package provides:
-
-- **Element selection**: Click to identify components
-- **Live editing**: Modify component props in real-time
-- **Source mapping**: Navigate directly to component source
-- **AI integration**: Enhanced context for AI development tools
-
-### AI-Friendly Patterns
-
-- **Consistent naming**: PascalCase components, camelCase hooks
-- **Clear file structure**: Logical separation of concerns
-- **Type-first approach**: Comprehensive TypeScript types
-- **Standard patterns**: CRUD operations, form handling, error boundaries
-
-## 🗃️ API & Layouts
-
-### API Routes
-
-The template includes:
-
-- `GET /api/health` - Health check endpoint
-- Extensible API client setup in `src/lib/api-client.ts`
-
-### Layout System
-
-**RootLayout Pattern** (recommended for multi-page sites):
-
-`App.tsx` already wraps every route in RootLayout, which renders a shared header and footer on every page. Customize them by editing `src/layouts/parts/Header.tsx` and `Footer.tsx` directly — there is no config prop. For reference, the routing shape is a pathless layout route:
-
-```tsx
-// src/App.tsx (already wired)
-const router = createBrowserRouter([
-  {
-    element: (
-      <RootLayout>
-        <Outlet />
-      </RootLayout>
-    ),
-    children: routes,
-  },
-]);
+```env
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=your_user
+DB_PASS=your_password
+DB_NAME=padihub
 ```
 
-Pages become simple content components:
+Or a single connection string where your deployment supplies one (see `src/server/db/config.ts` and `drizzle.config.ts`).
 
-```tsx
-// src/pages/home.tsx
-export default function HomePage() {
-  return <div>Your content here</div>;
-}
+### Auth and integrations (enable as needed)
+
+```env
+JWT_SECRET=replace-with-a-long-random-secret
+SESSION_SECRET=replace-with-a-long-random-secret
+
+# Stripe / Flutterwave / Resend / AI keys as documented in env.example
 ```
 
-**Available Layouts**:
+Feature flags in `env.example`:
 
-- **RootLayout** (`src/layouts/RootLayout.tsx`) - Centralized header/footer wrapper
-- **Website** (`src/layouts/Website.tsx`) - Structural container (used by RootLayout)
-- **Dashboard** (`src/layouts/Dashboard.tsx`) - Admin panels and dashboards
+- `VITE_ENABLE_SOURCE_MAPPING` — component source mapping in development
+- `VITE_ENABLE_SSR` — SSR-related build behaviour
+- `VITE_SHOW_DEV_TOOLS` — in-app developer tools
 
-See `src/layouts/*.md` for detailed usage documentation.
+---
 
-## 🧪 Testing
+## Project structure
 
-Run tests with:
+```
+PadiHub/
+├── public/                 # Static assets, favicons, marketing PDFs
+├── src/
+│   ├── components/         # Shared React components (including ui/)
+│   ├── content/            # Content schemas and page JSON
+│   ├── layouts/            # RootLayout, Website, Dashboard + Header/Footer
+│   ├── lib/                # Client utilities, SEO, API client, analytics
+│   ├── pages/              # Route pages (marketing, auth, app, admin)
+│   ├── server/             # Express API, services, DB, jobs, middleware
+│   │   ├── api/            # Lightweight route handlers (health, contact, geo)
+│   │   ├── controllers/    # HTTP controllers
+│   │   ├── db/             # Drizzle client, config, schema
+│   │   ├── integrations/   # Email, payments, identity providers
+│   │   ├── jobs/           # Daily / weekly / monthly jobs
+│   │   ├── middleware/     # Auth, validation, errors, audit logging
+│   │   ├── services/       # Business logic
+│   │   └── __tests__/      # Server unit tests
+│   ├── styles/             # Global and responsive CSS
+│   ├── test/               # Vitest setup
+│   ├── trigger/            # Trigger.dev job entry points
+│   ├── App.tsx             # Router shell
+│   ├── main.tsx            # Client entry
+│   ├── routes.tsx          # Route table
+│   └── router.ts           # Route helpers
+├── airo-secrets/           # Local stub for platform secrets module
+├── content-plugin/         # Vite content plugin
+├── dev-tools/              # Dev-only Vite plugins and overlays
+├── source-mapper/          # Component introspection for AI-assisted work
+├── drizzle.config.ts       # Drizzle Kit config
+├── env.example             # Environment template
+├── package.json
+└── vite.config.ts
+```
+
+---
+
+## Application domains
+
+| Area | Location | Notes |
+| --- | --- | --- |
+| Auth | `src/pages/login.tsx`, `forgot-password`, `verify-email`, `src/server/services/authService.ts` | JWT sessions, email verification |
+| Savings groups | `src/pages/savings-groups/**`, `groupService`, `contributionService`, `rotationService` | Create, join, contribute, rotate |
+| Leader tools | `src/pages/leader/**`, `leader-dashboard` | Members and contributions |
+| Trust | `src/pages/trust/**`, `trustScoreService`, identity integrations | Scores and verification |
+| Subscriptions | `src/pages/subscription/**`, `subscriptionService`, payment providers | Billing lifecycle |
+| Notifications | `src/pages/notifications/**`, `notificationService` | In-app prefs and delivery |
+| Admin | `src/pages/admin`, `adminController` | Operational controls |
+| Marketing / legal | `index`, `features`, `pricing`, `faq`, `terms`, `privacy`, `contact` | Public site |
+
+---
+
+## Scripts
+
+| Command | Description |
+| --- | --- |
+| `npm run dev` | Start Vite development server with HMR |
+| `npm run build` | Production client build + SSR server entry build |
+| `npm run preview` | Preview the production client build locally |
+| `npm run test` | Run Vitest |
+| `npm run test:ui` | Vitest UI |
+| `npm run test:coverage` | Coverage report |
+| `npm run lint` | ESLint |
+| `npm run lint:fix` | ESLint with auto-fix |
+| `npm run type-check` | TypeScript (`tsc --noEmit`) |
+| `npm run format` | Prettier on `src/**/*.{ts,tsx,json,md}` |
+| `npm run clean` | Remove `dist` and Vite cache |
+| `npm run reset` | Clean and reinstall dependencies |
+
+---
+
+## Database
+
+Schema lives in `src/server/db/schema.ts` (MySQL via Drizzle).
+
+Core tables include users, email/password tokens, savings groups, memberships, contributions, rotations, votes, subscriptions, and related audit fields.
+
+### Drizzle commands
+
+```bash
+npx drizzle-kit generate   # Generate migrations from schema
+npx drizzle-kit push       # Push schema to the configured database
+```
+
+Credentials are resolved through `src/server/db/config.ts` / `getDatabaseCredentials()` as used by `drizzle.config.ts`. Ensure your DB env vars or platform config are set before running migrations.
+
+---
+
+## API and server
+
+Server entry: `src/server/entry.ts`.
+
+Patterns:
+
+- **Controllers** accept HTTP requests and delegate to **services**
+- **Services** own business rules and persistence
+- **Integrations** wrap Stripe, Flutterwave, Resend, and identity providers
+- **Middleware** handles auth, validation, rate limiting concerns, and errors
+- **Jobs** under `src/server/jobs` and `src/trigger` cover scheduled work
+
+Health and utility routes exist under `src/server/api/` (for example health and contact). Swagger setup is in `src/server/swagger.ts`.
+
+Client calls should go through `src/lib/api-client.ts` rather than ad-hoc `fetch` scattered across pages.
+
+---
+
+## Frontend conventions
+
+- Pages under `src/pages` should be content-focused; shared chrome belongs in layouts (`RootLayout`, `Website`, `Dashboard`).
+- Reusable primitives live in `src/components/ui`.
+- Prefer TypeScript types and Zod schemas at API and form boundaries.
+- Use TanStack Query for remote data; keep ephemeral UI state local or in Zustand when shared across a feature.
+- Follow existing naming: PascalCase for components, camelCase for functions and hooks.
+- Keep accessibility: prefer Radix-based controls and meaningful labels.
+
+Adding shadcn components:
+
+```bash
+npx shadcn-ui@latest add <component-name>
+```
+
+---
+
+## Testing
 
 ```bash
 npm run test
 ```
 
-The template includes:
+- Unit tests for services live under `src/server/__tests__`
+- Component tests live next to components or under `__tests__` folders
+- Shared Vitest setup: `src/test/setup.ts`
 
-- **Vitest** - Fast unit testing framework
-- **React Testing Library** - Component testing utilities
-- **Jest DOM** - Custom Jest matchers
+When changing business logic (contributions, rotations, trust, payments), add or update service tests before opening a PR.
 
-## 📦 Deployment
+---
 
-### Build for production:
+## Linting and type checking
+
+Before every pull request:
+
+```bash
+npm run type-check
+npm run lint
+npm run test
+```
+
+Fix formatting with:
+
+```bash
+npm run format
+```
+
+---
+
+## Development workflow
+
+1. Sync the target long-lived branch (`git pull origin developer` or `frontend`).
+2. Create a short-lived branch, for example `feature/group-invite-link` or `fix/trust-score-rounding`.
+3. Implement the change with focused commits.
+4. Run type-check, lint, and tests locally.
+5. Push and open a PR into `developer` or `frontend` as appropriate.
+6. After review and merge, coordinate promotion into `main` for release.
+
+### Commit message guidance
+
+- Prefer imperative summaries: `Add contribution receipt email`, `Fix rotation position reset`
+- Keep PRs small and reviewable; separate backend and pure UI when practical
+
+---
+
+## Deployment notes
 
 ```bash
 npm run build
 ```
 
-### Deploy options:
+This produces the client build and the SSR/server entry build (`vite build --ssr src/server/entry.ts`). Host according to your infrastructure (Node process, container, or platform). Ensure production env vars for database, JWT, payment providers, and public URLs are set before starting the server.
 
-- **Vercel/Netlify** - Frontend deployment
-- **Railway/Render** - Full-stack deployment
-- **Docker** - Containerized deployment
+Suggested checklist for a release:
 
-## 🔧 Configuration
-
-### Environment Variables
-
-Copy `env.example` to `.env` and configure:
-
-```env
-VITE_APP_NAME=V8 App Template
-VITE_API_URL=http://localhost:5173/api
-NODE_ENV=development
-PORT=5173
-```
-
-### Custom Plugins
-
-**Source Mapper Plugin**: Adds component introspection for AI tools
-**Dev Tools Plugin**: Enables development mode enhancements
-**Fullstory Integration**: Optional user analytics (configurable)
-
-Configure in `vite.config.ts`:
-
-```typescript
-import { defineConfig } from "vite";
-import { sourceMapperPlugin } from "./source-mapper";
-import { devToolsPlugin } from "./dev-tools";
-
-export default defineConfig({
-  plugins: [sourceMapperPlugin(), devToolsPlugin()],
-});
-```
-
-## 🎯 Best Practices
-
-### Component Architecture
-
-- Keep components small and focused
-- Use composition over inheritance
-- Extract reusable logic into hooks
-- Prefer function components with hooks
-
-### State Management
-
-- Keep local state in components with useState/useReducer
-- Use React Context for app-wide state (theme, auth)
-- Consider external libraries (Zustand, Redux Toolkit) for complex state
-- Leverage layout props for shared configuration
-
-### Layout Usage
-
-- Use RootLayout for multi-page sites (configure in `App.tsx`)
-- Pages should only contain content, not layout concerns
-- Define header/footer once, applies to all pages
-- Follow layout documentation in `src/layouts/*.md`
-- Never duplicate header/footer config across pages
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if needed
-5. Run linting and tests
-6. Submit a pull request
-
-## 📄 License
-
-MIT License - feel free to use this template for any project.
-
-## 🙏 Acknowledgments
-
-Built with amazing open-source tools:
-
-- [Vite](https://vitejs.dev/)
-- [React](https://react.dev/)
-- [shadcn/ui](https://ui.shadcn.com/)
-- [Tailwind CSS](https://tailwindcss.com/)
-- [TypeScript](https://www.typescriptlang.org/)
-- [Framer Motion](https://www.framer.com/motion/)
-- [Vitest](https://vitest.dev/)
+- [ ] Migrations applied
+- [ ] Env vars verified (no placeholder secrets)
+- [ ] `npm run build` succeeds
+- [ ] Smoke-test auth, group create/join, and a payment webhook path in staging
+- [ ] Monitoring / health endpoint responding
 
 ---
 
-**Happy coding! 🎉**
+## Security notes
+
+- Never commit `.env`, API keys, or private keys
+- Use strong `JWT_SECRET` / `SESSION_SECRET` values in every non-local environment
+- Treat webhook handlers (`webhookStripeController`, `webhookFlutterwaveController`) as trusted-entry points: verify signatures and keep handlers idempotent
+- Prefer server-side validation (Zod + middleware) even when the client already validates
+- Keep dependency installs locked to `package-lock.json`
+
+---
+
+## License
+
+Private repository — Booker Global. All rights reserved unless a separate license file is added.
+```
