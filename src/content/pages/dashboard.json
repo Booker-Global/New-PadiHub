@@ -1,0 +1,48 @@
+{
+  "myGroups": [
+    {
+      "id": "lagos-savers-circle",
+      "name": "Lagos Savers Circle",
+      "members": 12,
+      "contribution": "₦35,000",
+      "nextPayment": "Jul 10",
+      "color": "#2EAF6F"
+    },
+    {
+      "id": "uk-homeowners-hub",
+      "name": "UK Homeowners Hub",
+      "members": 8,
+      "contribution": "£150",
+      "nextPayment": "Jul 15",
+      "color": "#2eafaf"
+    },
+    {
+      "id": "family-first-network",
+      "name": "Family First Network",
+      "members": 6,
+      "contribution": "£75",
+      "nextPayment": "Jul 20",
+      "color": "#F59E0B"
+    }
+  ],
+  "notifications": [
+    {
+      "text": "Contribution due in 3 days — Lagos Savers Circle",
+      "type": "warning",
+      "time": "2h ago",
+      "id": "E1Hjmq37b1y_WNentbgIE"
+    },
+    {
+      "text": "New member joined UK Homeowners Hub",
+      "type": "info",
+      "time": "1d ago",
+      "id": "WzURUHtyCTbxFlzCNsoa0"
+    },
+    {
+      "text": "Your July contribution was confirmed",
+      "type": "success",
+      "time": "2d ago",
+      "id": "bvuiShksfwIHZBbaGlVms"
+    }
+  ]
+}

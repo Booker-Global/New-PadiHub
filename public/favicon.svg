@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 64 64">
+  <defs>
+    <clipPath id="c">
+      <rect width="64" height="64" rx="12"/>
+    </clipPath>
+  </defs>
+  <!-- Emerald background -->
+  <rect width="64" height="64" rx="12" fill="#2EAF6F"/>
+  <!-- Logo icon mark: crop left ~30% of the horizontal logo PNG (the icon sits on the left) -->
+  <!-- Source image is 1114x767; icon mark occupies roughly x:0-334, y:216-550 (334x334 square) -->
+  <image
+    href="https://isteam.wsimg.com/genai-assistant/logoagent/customer/7a82f1fc-a400-4784-8020-33f5ff52f5f7/session/2d27c3b9-2807-4cdd-9334-ea65ec873e7b/horizontal-transparent-df86d900ebb0864cb64608b90636b504/logo-logo-df86d9.png"
+    x="-4" y="-28"
+    width="200" height="138"
+    clip-path="url(#c)"
+    preserveAspectRatio="xMinYMid meet"
+  />
+</svg>

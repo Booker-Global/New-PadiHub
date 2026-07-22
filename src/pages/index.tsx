@@ -1,0 +1,585 @@
+import { Link } from 'react-router-dom';
+import { Helmet } from '@dr.pogodin/react-helmet';
+import { useEffect, useState } from 'react';
+import {
+  ArrowRight, Shield, Users, TrendingUp, Star, CheckCircle,
+  Zap, Globe, ChevronRight, Play, Heart, Sparkles, PiggyBank, Bell
+} from 'lucide-react';
+import { Button } from '@/components/ui/button';
+
+const _jsonLd = "{\"@context\":\"https://schema.org\",\"@graph\":[{\"@type\":\"WebSite\",\"@id\":\"https://padihub.com/#website\",\"name\":\"PadiHub\",\"url\":\"https://padihub.com/\"},{\"@type\":\"Organization\",\"@id\":\"https://padihub.com/#organization\",\"name\":\"PadiHub\",\"url\":\"https://padihub.com/\",\"logo\":\"https://padihub.com/airo-assets/images/logo/primary\"},{\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/#webpage\",\"url\":\"https://padihub.com/\",\"name\":\"PadiHub — Save Together. Grow Together. Belong.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"},\"datePublished\":\"2026-07-16\",\"dateModified\":\"2026-07-16\"},{\"@type\":\"SoftwareApplication\",\"name\":\"PadiHub\",\"applicationCategory\":\"FinanceApplication\",\"operatingSystem\":\"Web\",\"offers\":{\"@type\":\"Offer\",\"price\":\"4.99\",\"priceCurrency\":\"GBP\"}}]}";
+
+type Region = 'UK' | 'NG' | 'BOTH';
+
+function usePricingRegion(): Region {
+  const [region, setRegion] = useState<Region>('BOTH');
+  useEffect(() => {
+    // Only fetch geo after hydration — never during SSR or first client render
+    fetch('/api/geo')
+      .then(r => r.json())
+      .then(data => { if (data?.region) setRegion(data.region); })
+      .catch(() => setRegion('BOTH'));
+  }, []);
+  return region;
+}
+
+
+
+// ── Auth state hook ──────────────────────────────────────────────────────────
+// IMPORTANT: `isMounted` must start `false` and only flip to `true` inside a
+// useEffect. This guarantees the first client render is identical to the SSR
+// output (both see isLoggedIn=false / isMounted=false), preventing hydration
+// error #418 which fires when the server and client produce different DOM trees.
+function useAuthUser(): { isMounted: boolean; isLoggedIn: boolean; name: string; trust: number } {
+  const [state, setState] = useState<{ isMounted: boolean; isLoggedIn: boolean; name: string; trust: number }>({
+    isMounted: false, isLoggedIn: false, name: '', trust: 0,
+  });
+  useEffect(() => {
+    // This effect runs only in the browser, after hydration is complete.
+    // Reading localStorage here is safe — it never runs on the server.
+    try {
+      const raw = localStorage.getItem('padihub_user');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed?.name) {
+          setState({ isMounted: true, isLoggedIn: true, name: parsed.name, trust: parsed.trust ?? 0 });
+          return;
+        }
+      }
+      const sessionFlag = sessionStorage.getItem('padihub_session');
+      if (sessionFlag) {
+        const parsed = JSON.parse(sessionFlag);
+        setState({ isMounted: true, isLoggedIn: true, name: parsed.name ?? 'Member', trust: parsed.trust ?? 0 });
+        return;
+      }
+    } catch {
+      // storage unavailable or malformed — fall through to mounted-but-not-logged-in
+    }
+    setState(s => ({ ...s, isMounted: true }));
+  }, []);
+  return state;
+}
+
+// ── Mini Dashboard Card (logged-in only) ─────────────────────────────────────
+function DashboardPreview({ name, trust }: { name: string; trust: number }) {
+  // Default to neutral greeting for SSR/first render — avoids hydration mismatch
+  // when server clock and visitor's local time disagree on morning/afternoon/evening.
+  const [greeting, setGreeting] = useState('Welcome back');
+  useEffect(() => {
+    const hour = new Date().getHours();
+    setGreeting(hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening');
+  }, []);
+  return (
+    <div className="relative w-full max-w-md mx-auto">
+      <div className="absolute inset-0 rounded-3xl blur-3xl opacity-30" style={{ background: 'linear-gradient(135deg, #2EAF6F, #F59E0B)' }} />
+      <div className="relative rounded-3xl p-6 border border-white/20 shadow-2xl"
+        style={{ background: 'linear-gradient(145deg, #1A1A2E, #0D2818)' }}>
+        {/* Header */}
+        <div className="flex items-center justify-between mb-5">
+          <div>
+            <p className="text-xs text-gray-400 font-medium">{greeting},</p>
+            <p className="text-white font-bold text-lg">{name} 👋</p>
+          </div>
+          <div className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-bold"
+            style={{ background: 'rgba(46,175,111,0.2)', color: '#2EAF6F', border: '1px solid rgba(46,175,111,0.3)' }}>
+            <Shield size={12} /> Trust: {trust}
+          </div>
+        </div>
+        {/* Quick actions */}
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          {[
+            { label: 'My Groups',      icon: PiggyBank, color: '#2EAF6F', to: '/savings-groups' },
+            { label: 'Dashboard',      icon: TrendingUp, color: '#2eafaf', to: '/dashboard' },
+          ].map(a => (
+            <Link key={a.label} to={a.to}
+              className="flex items-center gap-2 rounded-2xl p-3 text-sm font-semibold text-white transition-all hover:opacity-80"
+              style={{ background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.08)' }}>
+              <a.icon size={15} style={{ color: a.color }} />
+              {a.label}
+            </Link>
+          ))}
+        </div>
+        {/* Savings group */}
+        <div className="rounded-2xl p-4 mb-3" style={{ background: 'rgba(46,175,111,0.1)', border: '1px solid rgba(46,175,111,0.2)' }}>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-white font-semibold text-sm">Lagos Savers Circle</span>
+            <span className="text-xs font-bold" style={{ color: '#2EAF6F' }}>78% funded</span>
+          </div>
+          <div className="w-full h-2 rounded-full bg-white/10">
+            <div className="h-2 rounded-full" style={{ width: '78%', background: 'linear-gradient(90deg, #2EAF6F, #F59E0B)' }} />
+          </div>
+          <div className="flex items-center justify-between mt-2">
+            <span className="text-gray-400 text-xs">12 of 15 members contributed</span>
+            <span className="text-gray-400 text-xs">3 days left</span>
+          </div>
+        </div>
+        {/* Notification */}
+        <div className="flex items-center gap-3 rounded-2xl p-3" style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.2)' }}>
+          <div className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: 'rgba(245,158,11,0.2)' }}>
+            <Bell size={15} style={{ color: '#F59E0B' }} />
+          </div>
+          <div>
+            <p className="text-white text-xs font-bold">Payment reminder</p>
+            <p className="text-gray-400 text-xs">Your next contribution is due in 3 days</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Hero illustration (logged-out — purely visual, no fake user data) ─────────
+function HeroIllustration() {
+  const features = [
+    { icon: Shield,     label: 'Trust Score™',        sub: 'Built on payment history',   color: '#2EAF6F' },
+    { icon: Users,      label: 'Savings Groups',       sub: 'Ajo, Esusu & more',          color: '#F59E0B' },
+    { icon: CheckCircle,label: 'Secure Payouts',       sub: 'Stripe & Flutterwave',       color: '#2eafaf' },
+    { icon: TrendingUp, label: 'Full Transparency',    sub: 'Every contribution tracked', color: '#8B5CF6' },
+  ];
+  return (
+    <div className="relative w-full max-w-md mx-auto">
+      <div className="absolute inset-0 rounded-3xl blur-3xl opacity-20" style={{ background: 'linear-gradient(135deg, #2EAF6F, #F59E0B)' }} />
+      <div className="relative rounded-3xl p-7 border border-white/10 shadow-2xl"
+        style={{ background: 'linear-gradient(145deg, rgba(26,26,46,0.95), rgba(13,40,24,0.95))' }}>
+
+        {/* Top label */}
+        <div className="flex items-center gap-2 mb-6">
+          <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: 'rgba(46,175,111,0.2)' }}>
+            <PiggyBank size={16} style={{ color: '#2EAF6F' }} />
+          </div>
+          <div>
+            <p className="text-white text-sm font-bold">How PadiHub works</p>
+            <p className="text-gray-400 text-xs">Save smarter, together</p>
+          </div>
+        </div>
+
+        {/* Feature tiles */}
+        <div className="grid grid-cols-2 gap-3 mb-6">
+          {features.map(f => (
+            <div key={f.label} className="rounded-2xl p-4"
+              style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
+              <div className="w-9 h-9 rounded-xl flex items-center justify-center mb-3" style={{ background: `${f.color}20` }}>
+                <f.icon size={16} style={{ color: f.color }} />
+              </div>
+              <p className="text-white text-xs font-bold leading-tight mb-0.5">{f.label}</p>
+              <p className="text-gray-500 text-xs">{f.sub}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* CTA strip */}
+        <div className="rounded-2xl p-4 flex items-center gap-3"
+          style={{ background: 'linear-gradient(135deg, rgba(46,175,111,0.15), rgba(245,158,11,0.1))', border: '1px solid rgba(46,175,111,0.2)' }}>
+          <div style={{ display: 'flex', flexDirection: 'row' }}>
+            {['#2EAF6F','#F59E0B','#2eafaf','#8B5CF6','#EF4444'].map((c, i) => (
+              <div key={i}
+                style={{
+                  width: 28, height: 28, borderRadius: '50%',
+                  border: '2px solid rgba(26,26,46,0.9)',
+                  background: c,
+                  marginLeft: i === 0 ? 0 : -8,
+                  flexShrink: 0,
+                }} />
+            ))}
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-white text-xs font-bold">Join thousands saving together</p>
+            <p className="text-gray-400 text-xs">UK &amp; Nigeria</p>
+          </div>
+          <ArrowRight size={14} style={{ color: '#2EAF6F' }} className="shrink-0" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Main Page ────────────────────────────────────────────────────────────────
+export default function HomePage() {
+  const pricingRegion = usePricingRegion();
+  const authUser = useAuthUser();
+  return (
+    <>
+      <Helmet>
+        <title>PadiHub — Save Together. Grow Together. Belong.</title>
+        <meta name="description" content="PadiHub is a Community Operating System for savings. Build trust, join savings groups, earn Community Karma™ and reach your goals together." />
+        <link rel="canonical" href="https://padihub.com/" />
+        <meta property="og:title" content="PadiHub — Save Together. Grow Together. Belong." />
+        <meta property="og:description" content="The world's most trusted community savings platform. Join 10,000+ members saving smarter together." />
+        <meta property="og:type" content="website" />
+        <meta property="og:url" content="https://padihub.com/" />
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta property="og:image" content="https://padihub.com/airo-assets/images/og/default" />
+        <meta name="twitter:image" content="https://padihub.com/airo-assets/images/og/default" />
+        {/* JSON-LD inside Helmet so the SSR collector places it in <head>.
+            A bare <script dangerouslySetInnerHTML> in the page body is treated
+            by React 19 as a hoistable resource — it moves to <head> on the
+            client but stays inline on the server, causing hydration error #418. */}
+        <script type="application/ld+json">{_jsonLd}</script>
+      </Helmet>
+
+      {/* ── HERO ─────────────────────────────────────────────────────────── */}
+      <section style={{ position: 'relative', background: 'linear-gradient(135deg, #0F172A 0%, #1A1A2E 40%, #0D2818 100%)', overflow: 'hidden' }}>
+
+        {/* Decorative blobs */}
+        <div style={{ position: 'absolute', top: 80, left: 40, width: 160, height: 160, borderRadius: '50%', filter: 'blur(60px)', opacity: 0.2, background: '#2EAF6F', pointerEvents: 'none' }} />
+        <div style={{ position: 'absolute', bottom: 80, right: 40, width: 192, height: 192, borderRadius: '50%', filter: 'blur(60px)', opacity: 0.15, background: '#F59E0B', pointerEvents: 'none' }} />
+
+        <style>{`
+          @media (min-width: 1024px) {
+            .hero-inner { flex-direction: row !important; align-items: center !important; }
+            .hero-left  { width: 52% !important; }
+            .hero-right { display: flex !important; width: 48% !important; padding-left: 3rem; }
+            .hero-cta   { flex-direction: row !important; }
+            .hero-cta > * { width: auto !important; }
+          }
+        `}</style>
+
+        <div style={{ position: 'relative', width: '100%', maxWidth: '80rem', margin: '0 auto', padding: '4rem 1.25rem', boxSizing: 'border-box' }}>
+          <h1 style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clip: 'rect(0,0,0,0)', whiteSpace: 'nowrap', border: 0 }}>
+            PadiHub — Save Together. Grow Together. Belong.
+          </h1>
+
+          {/* Two-column flex — stacks on mobile, side-by-side on lg */}
+          <div className="hero-inner" style={{ display: 'flex', flexDirection: 'column', gap: '2.5rem', width: '100%', boxSizing: 'border-box' }}>
+
+            {/* Left column */}
+            <div className="hero-left" style={{ width: '100%', boxSizing: 'border-box', minWidth: 0 }}>
+
+              {/* Badge */}
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 16px', borderRadius: 999, fontSize: 12, fontWeight: 700, marginBottom: 24, background: 'rgba(46,175,111,0.15)', color: '#2EAF6F', border: '1px solid rgba(46,175,111,0.3)' }}>
+                <Sparkles size={12} /> Communal Savings System
+              </div>
+
+              {/* Heading */}
+              <div style={{ fontSize: 'clamp(1.75rem, 6vw, 3.75rem)', fontWeight: 800, lineHeight: 1.15, marginBottom: 24, fontFamily: 'Nunito, sans-serif', color: '#FFFFFF', wordBreak: 'break-word', overflowWrap: 'break-word' }}>
+                Save Together.{' '}
+                <span style={{ background: 'linear-gradient(135deg, #2EAF6F, #F59E0B)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+                  Grow Together.
+                </span>{' '}
+                Belong.
+              </div>
+
+              {/* Subheading */}
+              <div style={{ fontSize: 'clamp(0.9rem, 2.5vw, 1.1rem)', color: '#D1D5DB', lineHeight: 1.7, marginBottom: 32, wordBreak: 'break-word', overflowWrap: 'break-word' }}>
+                PadiHub is a trusted digital platform for rotating savings groups — Ajo, Esusu, Contribution Groups. Save together, track every contribution, and receive your payout when it's your turn.
+              </div>
+
+              {/* Stat */}
+              <div style={{ marginBottom: 32 }}>
+                <div style={{ fontSize: 'clamp(2.5rem, 8vw, 4.5rem)', fontWeight: 900, fontFamily: 'Nunito, sans-serif', background: 'linear-gradient(135deg, #2EAF6F, #F59E0B)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', lineHeight: 1 }}>
+                  £2.4M+
+                </div>
+                <div style={{ color: '#9CA3AF', fontSize: 14, marginTop: 4 }}>saved by our community and counting</div>
+              </div>
+
+              {/* CTA buttons */}
+              <div className="hero-cta" style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 40 }}>
+                <Button asChild size="lg" style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', color: '#fff', boxShadow: '0 0 30px rgba(46,175,111,0.5)', borderRadius: 999, fontWeight: 700, width: '100%' }}>
+                  <Link to="/get-started" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                    Start saving together <ArrowRight size={18} />
+                  </Link>
+                </Button>
+                <Button asChild variant="outline" size="lg" style={{ borderRadius: 999, fontWeight: 700, width: '100%', borderColor: 'rgba(255,255,255,0.2)', color: '#fff', background: 'transparent' }}>
+                  <Link to="/how-it-works" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                    <Play size={16} /> Learn more
+                  </Link>
+                </Button>
+              </div>
+
+              {/* Social proof */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                <div style={{ display: 'flex', flexDirection: 'row', flexShrink: 0 }}>
+                  {['A', 'K', 'O', 'M', 'T'].map((l, i) => (
+                    <div key={i} style={{
+                      width: 36, height: 36, borderRadius: '50%',
+                      border: '2px solid #1F2937',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: 12, fontWeight: 700, color: '#fff', flexShrink: 0,
+                      background: ['#2EAF6F','#F59E0B','#2eafaf','#8B5CF6','#EF4444'][i],
+                      marginLeft: i === 0 ? 0 : -10,
+                    }}>{l}</div>
+                  ))}
+                </div>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                    {[...Array(5)].map((_, i) => <Star key={i} size={12} fill="#F59E0B" color="#F59E0B" />)}
+                  </div>
+                  <div style={{ color: '#9CA3AF', fontSize: 12 }}>10,000+ members trust PadiHub</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Right column — hidden on mobile via display:none, shown via media query above */}
+            <div className="hero-right" style={{ display: 'none', flexShrink: 0, boxSizing: 'border-box', minWidth: 0 }}>
+              {/* Gate on isMounted so the first client render matches the SSR output
+                  (both render HeroIllustration). After hydration, isMounted flips true
+                  and we swap to DashboardPreview if the user is logged in.
+                  Without this gate, React 19 detects a server/client DOM mismatch
+                  and throws hydration error #418. */}
+              {authUser.isMounted && authUser.isLoggedIn
+                ? <DashboardPreview name={authUser.name} trust={authUser.trust} />
+                : <HeroIllustration />
+              }
+            </div>
+          </div>
+        </div>
+
+        {/* Trust bar */}
+        <div style={{ width: '100%', borderTop: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.03)' }}>
+          <div style={{ maxWidth: '80rem', margin: '0 auto', padding: '1rem 1.25rem', display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'center', gap: '1rem 2rem' }}>
+            {[
+              { icon: Shield,      label: 'Trust Score™ System' },
+              { icon: Users,       label: 'Rotating Savings Groups' },
+              { icon: Globe,       label: 'UK & Nigeria' },
+              { icon: Zap,         label: 'Instant Contributions' },
+              { icon: CheckCircle, label: 'Secure Payouts' },
+            ].map(({ icon: Icon, label }) => (
+              <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#9CA3AF', fontSize: 13, whiteSpace: 'nowrap' }}>
+                <Icon size={14} style={{ color: '#2EAF6F', flexShrink: 0 }} />
+                <span>{label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── HOW IT WORKS ─────────────────────────────────────────────────── */}
+      <section style={{ padding: '5rem 0', background: '#fff' }}>
+        <style>{`
+          @media (min-width: 768px) {
+            .hiw-grid { grid-template-columns: repeat(3, 1fr) !important; }
+          }
+        `}</style>
+        <div style={{ maxWidth: '80rem', margin: '0 auto', padding: '0 1.25rem' }}>
+          <div style={{ textAlign: 'center', marginBottom: '4rem' }}>
+            <p style={{ fontSize: 13, fontWeight: 700, color: '#2EAF6F', marginBottom: 12 }}>How PadiHub works</p>
+            <h2 style={{ fontSize: 'clamp(1.75rem, 4vw, 2.25rem)', fontWeight: 800, color: '#111827', marginBottom: 16, fontFamily: 'Nunito, sans-serif' }}>Simple steps to saving together</h2>
+            <p style={{ color: '#6B7280', fontSize: 16, maxWidth: 480, margin: '0 auto' }}>Register, join a group, contribute monthly, and receive your payout when it's your turn.</p>
+          </div>
+
+          <div className="hiw-grid" style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1.5rem' }}>
+            {[
+              { step: '01', icon: Users,       title: 'Create or Join a Group', desc: 'Start your own rotating savings group or join an existing one. Set contribution amounts and group rules.', color: '#2EAF6F' },
+              { step: '02', icon: TrendingUp,  title: 'Contribute Monthly',     desc: 'Make your scheduled contribution each month. Every payment builds your Trust Score™ and keeps the group on track.', color: '#F59E0B' },
+              { step: '03', icon: CheckCircle, title: 'Receive Your Payout',    desc: "When it's your turn in the rotation, receive the full group payout directly to your account.", color: '#2eafaf' },
+            ].map((s, i) => (
+              <div key={i} style={{ borderRadius: 24, padding: '2rem', textAlign: 'center', background: '#F9FAFB', border: '1px solid #E5E7EB', boxSizing: 'border-box' }}>
+                <div style={{ width: 56, height: 56, borderRadius: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1rem', background: `${s.color}20`, flexShrink: 0 }}>
+                  <s.icon size={24} style={{ color: s.color }} />
+                </div>
+                <div style={{ fontSize: 48, fontWeight: 900, color: s.color, fontFamily: 'Nunito, sans-serif', opacity: 0.12, lineHeight: 1, marginBottom: 12 }}>{s.step}</div>
+                <h3 style={{ fontSize: 18, fontWeight: 700, color: '#111827', marginBottom: 12, fontFamily: 'Nunito, sans-serif' }}>{s.title}</h3>
+                <p style={{ color: '#6B7280', fontSize: 14, lineHeight: 1.6 }}>{s.desc}</p>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ textAlign: 'center', marginTop: '3rem' }}>
+            <Button asChild size="lg" style={{ borderRadius: 999, padding: '0 2rem', fontWeight: 700, background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', color: '#fff' }}>
+              <Link to="/how-it-works" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>See the full guide <ArrowRight size={16} /></Link>
+            </Button>
+          </div>
+        </div>
+      </section>
+
+      {/* ── FEATURES ─────────────────────────────────────────────────── */}
+      <section style={{ padding: '5rem 0', background: '#F0FDF4' }}>
+        <style>{`
+          @media (min-width: 768px) {
+            .feat-grid { grid-template-columns: repeat(3, 1fr) !important; }
+            .feat-wide  { grid-column: span 2 !important; }
+          }
+        `}</style>
+        <div style={{ maxWidth: '80rem', margin: '0 auto', padding: '0 1.25rem' }}>
+          <div style={{ textAlign: 'center', marginBottom: '4rem' }}>
+            <p style={{ fontSize: 13, fontWeight: 700, color: '#2EAF6F', marginBottom: 12 }}>Everything you need</p>
+            <h2 style={{ fontSize: 'clamp(1.75rem, 4vw, 2.25rem)', fontWeight: 800, color: '#111827', fontFamily: 'Nunito, sans-serif' }}>Built for groups. Designed for trust.</h2>
+          </div>
+
+          <div className="feat-grid" style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1.5rem' }}>
+
+            {/* Trust Score — wide card */}
+            <div className="feat-wide" style={{ borderRadius: 24, padding: '2rem', position: 'relative', overflow: 'hidden', background: 'linear-gradient(135deg, #0F172A, #1A1A2E)', boxSizing: 'border-box' }}>
+              <div style={{ position: 'absolute', top: 0, right: 0, width: 200, height: 200, borderRadius: '50%', filter: 'blur(60px)', opacity: 0.2, background: '#2EAF6F', pointerEvents: 'none' }} />
+              <div style={{ position: 'relative' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+                  <div style={{ width: 48, height: 48, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(46,175,111,0.2)', flexShrink: 0 }}>
+                    <Shield size={22} style={{ color: '#2EAF6F' }} />
+                  </div>
+                  <div>
+                    <h3 style={{ color: '#fff', fontWeight: 700, fontSize: 18, fontFamily: 'Nunito, sans-serif' }}>Trust Score™</h3>
+                    <p style={{ color: '#9CA3AF', fontSize: 13 }}>Your savings reputation</p>
+                  </div>
+                </div>
+                <p style={{ color: '#D1D5DB', lineHeight: 1.6, marginBottom: 24, fontSize: 14 }}>
+                  Every on-time contribution builds your Trust Score™. Members with higher scores are more likely to be accepted into new groups — your reliability travels with you.
+                </p>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{ flex: 1, height: 8, borderRadius: 999, background: 'rgba(255,255,255,0.1)' }}>
+                    <div style={{ width: '84%', height: 8, borderRadius: 999, background: 'linear-gradient(90deg, #2EAF6F, #F59E0B)' }} />
+                  </div>
+                  <span style={{ color: '#fff', fontWeight: 700, fontSize: 13, whiteSpace: 'nowrap' }}>847 / 1000</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Savings Groups */}
+            <div style={{ borderRadius: 24, padding: '2rem', background: 'linear-gradient(135deg, rgba(46,175,111,0.12), rgba(46,175,111,0.06))', border: '1px solid rgba(46,175,111,0.2)', boxSizing: 'border-box' }}>
+              <div style={{ width: 48, height: 48, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(46,175,111,0.15)', marginBottom: 16, flexShrink: 0 }}>
+                <Users size={22} style={{ color: '#2EAF6F' }} />
+              </div>
+              <h3 style={{ color: '#111827', fontWeight: 700, fontSize: 18, marginBottom: 8, fontFamily: 'Nunito, sans-serif' }}>Savings Groups</h3>
+              <p style={{ color: '#6B7280', fontSize: 14, lineHeight: 1.6, marginBottom: 16 }}>
+                Create or join rotating savings groups. Set contribution amounts, group size, and payout order. Track every payment in real time.
+              </p>
+              {[{ name: 'House Fund', pct: 72 }, { name: 'Holiday 2026', pct: 45 }].map(g => (
+                <div key={g.name} style={{ marginBottom: 8 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#6B7280', marginBottom: 4 }}>
+                    <span>{g.name}</span><span>{g.pct}%</span>
+                  </div>
+                  <div style={{ height: 6, borderRadius: 999, background: '#E5E7EB' }}>
+                    <div style={{ width: `${g.pct}%`, height: 6, borderRadius: 999, background: '#2EAF6F' }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Secure Payments */}
+            <div style={{ borderRadius: 24, padding: '2rem', background: 'linear-gradient(135deg, rgba(245,158,11,0.12), rgba(245,158,11,0.06))', border: '1px solid rgba(245,158,11,0.2)', boxSizing: 'border-box' }}>
+              <div style={{ width: 48, height: 48, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(245,158,11,0.15)', marginBottom: 16, flexShrink: 0 }}>
+                <Zap size={22} style={{ color: '#F59E0B' }} />
+              </div>
+              <h3 style={{ color: '#111827', fontWeight: 700, fontSize: 18, marginBottom: 8, fontFamily: 'Nunito, sans-serif' }}>Secure Payments</h3>
+              <p style={{ color: '#6B7280', fontSize: 14, lineHeight: 1.6 }}>
+                UK members pay via Stripe. Nigerian members pay via Flutterwave. Payouts are processed automatically when all contributions are received.
+              </p>
+            </div>
+
+            {/* Rotation Tracking */}
+            <div style={{ borderRadius: 24, padding: '2rem', background: 'linear-gradient(135deg, rgba(46,175,175,0.12), rgba(46,175,175,0.06))', border: '1px solid rgba(46,175,175,0.2)', boxSizing: 'border-box' }}>
+              <div style={{ width: 48, height: 48, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(46,175,175,0.15)', marginBottom: 16, flexShrink: 0 }}>
+                <TrendingUp size={22} style={{ color: '#2eafaf' }} />
+              </div>
+              <h3 style={{ color: '#111827', fontWeight: 700, fontSize: 18, marginBottom: 8, fontFamily: 'Nunito, sans-serif' }}>Rotation Tracking</h3>
+              <p style={{ color: '#6B7280', fontSize: 14, lineHeight: 1.6 }}>
+                Always know whose turn it is. View the full rotation schedule, upcoming payouts, and completed cycles at a glance.
+              </p>
+            </div>
+
+            {/* Payment Reminders */}
+            <div style={{ borderRadius: 24, padding: '2rem', background: 'linear-gradient(135deg, rgba(139,92,246,0.12), rgba(139,92,246,0.06))', border: '1px solid rgba(139,92,246,0.2)', boxSizing: 'border-box' }}>
+              <div style={{ width: 48, height: 48, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(139,92,246,0.15)', marginBottom: 16, flexShrink: 0 }}>
+                <Star size={22} style={{ color: '#8B5CF6' }} />
+              </div>
+              <h3 style={{ color: '#111827', fontWeight: 700, fontSize: 18, marginBottom: 8, fontFamily: 'Nunito, sans-serif' }}>Payment Reminders</h3>
+              <p style={{ color: '#6B7280', fontSize: 14, lineHeight: 1.6 }}>
+                Never miss a contribution. Receive timely reminders before each payment is due and stay on top of your group commitments.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── FOUR PILLARS ─────────────────────────────────────────────────── */}
+      <section style={{ padding: '5rem 0', background: '#fff' }}>
+        <style>{`
+          @media (min-width: 640px)  { .pillars-grid { grid-template-columns: repeat(2, 1fr) !important; } }
+          @media (min-width: 1024px) { .pillars-grid { grid-template-columns: repeat(4, 1fr) !important; } }
+        `}</style>
+        <div style={{ maxWidth: '80rem', margin: '0 auto', padding: '0 1.25rem' }}>
+          <div style={{ textAlign: 'center', marginBottom: '4rem' }}>
+            <p style={{ fontSize: 13, fontWeight: 700, color: '#2EAF6F', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 12 }}>Our four pillars</p>
+            <h2 style={{ fontSize: 'clamp(1.75rem, 4vw, 2.25rem)', fontWeight: 800, color: '#111827', fontFamily: 'Nunito, sans-serif' }}>Trust · Transparency · Community · Progress</h2>
+          </div>
+
+          <div className="pillars-grid" style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1.5rem' }}>
+            {[
+              { icon: Shield,      title: 'Trust',        desc: 'Every member earns their reputation. Trust Score™ is transparent, fair and always growing with each payment.', color: '#2EAF6F' },
+              { icon: CheckCircle, title: 'Transparency', desc: 'Full visibility into contributions, rotation order and group activity. No surprises, no hidden fees.', color: '#2eafaf' },
+              { icon: Heart,       title: 'Community',    desc: 'You are never alone. Every goal is shared, every milestone celebrated together as a group.', color: '#EF4444' },
+              { icon: TrendingUp,  title: 'Progress',     desc: 'Every contribution moves you forward. Track your savings journey and build a record of reliable participation.', color: '#F59E0B' },
+            ].map((pill, i) => (
+              <div key={i} style={{ borderRadius: 24, padding: '1.75rem', textAlign: 'center', background: '#F9FAFB', border: '1px solid #E5E7EB', boxSizing: 'border-box' }}>
+                <div style={{ width: 52, height: 52, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.25rem', background: `${pill.color}15`, flexShrink: 0 }}>
+                  <pill.icon size={24} style={{ color: pill.color }} />
+                </div>
+                <h3 style={{ color: '#111827', fontWeight: 700, fontSize: 17, marginBottom: 8, fontFamily: 'Nunito, sans-serif' }}>{pill.title}</h3>
+                <p style={{ color: '#6B7280', fontSize: 13, lineHeight: 1.6 }}>{pill.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── PRICING TEASER ───────────────────────────────────────────────── */}
+      <section style={{ padding: '5rem 0', background: '#fff' }}>
+        <style>{`
+          @media (min-width: 768px) {
+            .pricing-grid-both { grid-template-columns: repeat(2, 1fr) !important; }
+          }
+        `}</style>
+        <div style={{ maxWidth: '64rem', margin: '0 auto', padding: '0 1.25rem' }}>
+          <div style={{ textAlign: 'center', marginBottom: '4rem' }}>
+            <p style={{ fontSize: 13, fontWeight: 700, color: '#2EAF6F', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 12 }}>Simple pricing</p>
+            <h2 style={{ fontSize: 'clamp(1.75rem, 4vw, 2.25rem)', fontWeight: 800, color: '#111827', marginBottom: 12, fontFamily: 'Nunito, sans-serif' }}>Join the community today</h2>
+            <p style={{ color: '#6B7280', fontSize: 16 }}>Available in the UK and Nigeria. Cancel anytime.</p>
+          </div>
+
+          <div className={pricingRegion === 'BOTH' ? 'pricing-grid-both' : ''} style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '2rem', maxWidth: pricingRegion === 'BOTH' ? undefined : '32rem', margin: pricingRegion === 'BOTH' ? undefined : '0 auto' }}>
+            {[
+              { region: '🇬🇧 United Kingdom', monthly: '£4.99', annual: '£49.99', save: 'Save £9.89/yr', color: '#2EAF6F', show: pricingRegion !== 'NG' },
+              { region: '🇳🇬 Nigeria',         monthly: '₦3,500', annual: '₦35,000', save: 'Save ₦7,000/yr', color: '#F59E0B', show: pricingRegion !== 'UK' },
+            ].filter(p => p.show).map(plan => (
+              <div key={plan.region} style={{ borderRadius: 24, padding: '2rem', position: 'relative', overflow: 'hidden', border: `2px solid ${plan.color}40`, background: `${plan.color}08`, boxSizing: 'border-box' }}>
+                <div style={{ position: 'absolute', top: 0, right: 0, width: 128, height: 128, borderRadius: '50%', filter: 'blur(40px)', opacity: 0.1, background: plan.color, pointerEvents: 'none' }} />
+                <p style={{ fontSize: 16, fontWeight: 700, color: '#374151', marginBottom: 16 }}>{plan.region}</p>
+                <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, marginBottom: 4 }}>
+                  <span style={{ fontSize: 44, fontWeight: 900, color: plan.color, fontFamily: 'Nunito, sans-serif', lineHeight: 1 }}>{plan.monthly}</span>
+                  <span style={{ color: '#9CA3AF', fontSize: 13, marginBottom: 4 }}>/month</span>
+                </div>
+                <p style={{ fontSize: 13, color: '#6B7280', marginBottom: 24 }}>or <strong>{plan.annual}/year</strong> — <span style={{ color: plan.color }}>{plan.save}</span></p>
+                <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 2rem', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {['Unlimited Savings Groups', 'Trust Score™ System', 'Secure Payments (Stripe / Flutterwave)', 'Rotation Tracking', 'Payment Reminders', 'Group Management Tools'].map(f => (
+                    <li key={f} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, color: '#374151' }}>
+                      <CheckCircle size={15} style={{ color: plan.color, flexShrink: 0 }} /> {f}
+                    </li>
+                  ))}
+                </ul>
+                <Button asChild style={{ width: '100%', borderRadius: 999, fontWeight: 700, background: plan.color, color: '#fff' }}>
+                  <Link to="/get-started">Get started free</Link>
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── FINAL CTA ────────────────────────────────────────────────────── */}
+      <section style={{ padding: '5rem 0', position: 'relative', overflow: 'hidden', background: 'linear-gradient(135deg, #0F172A 0%, #0D2818 50%, #1A1A2E 100%)' }}>
+        <div style={{ position: 'absolute', top: 40, left: 80, width: 256, height: 256, borderRadius: '50%', filter: 'blur(60px)', opacity: 0.2, background: '#2EAF6F', pointerEvents: 'none' }} />
+        <div style={{ position: 'absolute', bottom: 40, right: 80, width: 256, height: 256, borderRadius: '50%', filter: 'blur(60px)', opacity: 0.15, background: '#F59E0B', pointerEvents: 'none' }} />
+        <div style={{ position: 'relative', maxWidth: '56rem', margin: '0 auto', padding: '0 1.25rem', textAlign: 'center' }}>
+          <div style={{ fontSize: 56, marginBottom: 24 }}>🚀</div>
+          <h2 style={{ fontSize: 'clamp(1.75rem, 5vw, 3rem)', fontWeight: 800, color: '#fff', marginBottom: 24, fontFamily: 'Nunito, sans-serif', lineHeight: 1.2 }}>
+            Your group is{' '}
+            <span style={{ background: 'linear-gradient(135deg, #2EAF6F, #F59E0B)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+              waiting for you.
+            </span>
+          </h2>
+          <p style={{ color: '#D1D5DB', fontSize: 'clamp(0.95rem, 2vw, 1.125rem)', marginBottom: 40, lineHeight: 1.7 }}>
+            Join PadiHub today. Register, create or join a savings group, and start building your financial future together.
+          </p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, justifyContent: 'center' }}>
+            <Button asChild size="lg" style={{ borderRadius: 999, padding: '0 2.5rem', fontWeight: 700, fontSize: 16, background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', color: '#fff', boxShadow: '0 0 40px rgba(46,175,111,0.5)' }}>
+              <Link to="/get-started" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>Start saving together <ArrowRight size={20} /></Link>
+            </Button>
+            <Button asChild variant="outline" size="lg" style={{ borderRadius: 999, padding: '0 2.5rem', fontWeight: 700, fontSize: 16, borderColor: 'rgba(255,255,255,0.2)', color: '#fff', background: 'transparent' }}>
+              <Link to="/how-it-works" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>Learn more <ChevronRight size={20} /></Link>
+            </Button>
+          </div>
+          <p style={{ color: '#6B7280', fontSize: 13, marginTop: 24 }}>No credit card required · Cancel anytime · UK &amp; Nigeria</p>
+        </div>
+      </section>
+    </>
+  );
+}

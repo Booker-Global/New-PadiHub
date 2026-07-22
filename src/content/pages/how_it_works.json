@@ -1,0 +1,76 @@
+{
+  "steps": [
+    {
+      "step": "01",
+      "title": "Register",
+      "desc": "Sign up in minutes. Enter your name, email, country and create a password.",
+      "color": "#2EAF6F",
+      "details": [
+        "Verify your email address",
+        "Set up your profile",
+        "Choose your country (UK or Nigeria)"
+      ],
+      "id": "OIGPMBejPG9hoCkP5YjVD"
+    },
+    {
+      "step": "02",
+      "title": "Subscribe",
+      "desc": "Choose a monthly or annual plan. UK members pay via Stripe, Nigerian members via Flutterwave.",
+      "color": "#2eafaf",
+      "details": [
+        "Select monthly or annual plan",
+        "Secure payment via Stripe or Flutterwave",
+        "Cancel anytime"
+      ],
+      "id": "zoh6jrnaW_oVjVm7puF6k"
+    },
+    {
+      "step": "03",
+      "title": "Create or Join a Group",
+      "desc": "Start your own rotating savings group or join an existing one. Set contribution amounts, group size and payout order.",
+      "color": "#8B5CF6",
+      "details": [
+        "Create a group with custom rules",
+        "Or join an existing group via invite link",
+        "Set contribution amount and frequency"
+      ],
+      "id": "EB6-uQdSkpN6rjFGePgXh"
+    },
+    {
+      "step": "04",
+      "title": "Contribute Monthly",
+      "desc": "Make your scheduled contribution each month. Every on-time payment builds your Trust Score™.",
+      "color": "#F59E0B",
+      "details": [
+        "Receive payment reminders before each due date",
+        "Pay securely via Stripe or Flutterwave",
+        "Contributions tracked in real time"
+      ],
+      "id": "r3dbsYPYNqyEsNptSXVes"
+    },
+    {
+      "step": "05",
+      "title": "Track Progress",
+      "desc": "See the full rotation schedule, upcoming payouts and your group's payment history at a glance.",
+      "color": "#EF4444",
+      "details": [
+        "View rotation order and upcoming payouts",
+        "Track each member's payment status",
+        "Monitor your Trust Score™ growth"
+      ],
+      "id": "CKi8wq-p57vLHic3eeL3R"
+    },
+    {
+      "step": "06",
+      "title": "Receive Your Payout",
+      "desc": "When it's your turn in the rotation, receive the full group payout directly to your bank account.",
+      "color": "#2EAF6F",
+      "details": [
+        "Automatic payout when all contributions received",
+        "Paid directly to your registered bank account",
+        "Payout confirmation sent by email"
+      ],
+      "id": "E3Q42GL6Ckt5ox-xbwAQk"
+    }
+  ]
+}
