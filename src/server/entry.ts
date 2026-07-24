@@ -1,7 +1,7 @@
 import express, { type NextFunction, type Request, type Response } from "express";
 import { fileURLToPath } from "node:url";
-import { dirname, extname, join } from "node:path";
-import { readFileSync, existsSync } from "node:fs";
+import { dirname, extname, join, isAbsolute } from "node:path";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 
 // <api-imports>
 import geo_get_0 from "./api/geo/GET";
@@ -321,6 +321,42 @@ app.get("/sitemap.xml", (req, res) => {
 
 if (import.meta.env.PROD) {
 	const __dirname = dirname(fileURLToPath(import.meta.url));
+	// Allow an explicit override from environment (useful on Render/Heroku/etc.)
+	const envClientDir = process.env.CLIENT_DIR;
+	if (envClientDir) {
+		// Resolve relative paths against the server bundle directory
+		const resolved = isAbsolute(envClientDir) ? envClientDir : join(__dirname, envClientDir);
+		if (existsSync(join(resolved, 'index.html'))) {
+			console.info('ssr.clientDir.env', { CLIENT_DIR: envClientDir, resolved });
+			// Use the provided client dir immediately
+			const clientDir = resolved;
+			// Log a short sample of files for debugging
+			try {
+				const sample = readdirSync(clientDir, { withFileTypes: true })
+					.slice(0, 10)
+					.map((d) => ({ name: d.name, type: d.isDirectory() ? 'dir' : 'file' }));
+				console.info('ssr.clientDir.sampleFiles', { clientDir, sample });
+			} catch (err) {
+				console.warn('ssr.clientDir.sample-list-failed', { clientDir: resolved, error: err instanceof Error ? err.message : String(err) });
+			}
+			app.use(
+				express.static(clientDir, {
+					index: false,
+					setHeaders(res, filePath) {
+						res.set(
+							"Cache-Control",
+							filePath.includes("/assets/")
+								? "public, max-age=31536000, immutable"
+								: "no-cache",
+						);
+					},
+				}),
+			);
+		} else {
+			console.warn('ssr.clientDir.env-not-found', { CLIENT_DIR: envClientDir, resolved });
+		}
+	}
+
 	// Resolve likely locations for the client build so static asset serving works
 	// regardless of whether the server bundle lives in dist/ or dist/server/.
 	const candidateClientDirs = [
@@ -332,19 +368,31 @@ if (import.meta.env.PROD) {
 		join(__dirname, "..", "public"),
 	];
 
-	let clientDir: string | null = null;
+	let pickedClientDir: string | null = null;
 	for (const c of candidateClientDirs) {
 		if (existsSync(join(c, "index.html"))) {
-			clientDir = c;
+			pickedClientDir = c;
 			break;
 		}
 	}
 
-	if (!clientDir) {
+	if (!pickedClientDir) {
 		// Fallback to join(__dirname, 'client') so error message is informative
-		clientDir = join(__dirname, "client");
-		console.error("ssr.clientDir.not-found", { tried: candidateClientDirs, picked: clientDir });
+		pickedClientDir = join(__dirname, "client");
+		console.error("ssr.clientDir.not-found", { tried: candidateClientDirs, picked: pickedClientDir });
+	} else {
+		// Log a short sample of files for debugging to help operators see what's present
+		try {
+			const sample = readdirSync(pickedClientDir, { withFileTypes: true })
+				.slice(0, 10)
+				.map((d) => ({ name: d.name, type: d.isDirectory() ? 'dir' : 'file' }));
+			console.info('ssr.clientDir.sampleFiles', { clientDir: pickedClientDir, sample });
+		} catch (err) {
+			console.warn('ssr.clientDir.sample-list-failed', { clientDir: pickedClientDir, error: err instanceof Error ? err.message : String(err) });
+		}
 	}
+
+	const clientDir = pickedClientDir;
 
 	app.use(
 		express.static(clientDir, {
@@ -384,7 +432,7 @@ if (import.meta.env.PROD) {
 		// SEO-invisible pages indefinitely.
 		console.error("ssr.template.markers-missing", {
 			hasHead: template.includes("<!--app-head-->"),
-			hasHtml: template.includes("<!--app-html-->") ,
+			hasHtml: template.includes("<!--app-html-->"),
 		});
 		process.exit(1);
 	}
@@ -476,8 +524,8 @@ if (import.meta.env.PROD) {
 			// hosts get a self-canonical link so search engines treat them
 			// as authoritative for the rendered content.
 			const seoHead = isSystemHost(req)
-				? `<meta name="robots" content="noindex,nofollow">`
-				: `<link rel="canonical" href="${escapeXml(`${req.protocol}://${req.hostname}${req.path}`)}">`;
+				? `<meta name=\"robots\" content=\"noindex,nofollow\">`
+				: `<link rel=\"canonical\" href=\"${escapeXml(`${req.protocol}://${req.hostname}${req.path}`)}\">`;
 			// Function replacements disable String.replace's $-special sequences
 			// ($&, $', $`, $$) so user-authored titles / JSON-LD like
 			// "Save $& today" insert literally instead of being interpolated.
