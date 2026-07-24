@@ -1,4 +1,5 @@
 import express, { type NextFunction, type Request, type Response } from "express";
+import path from 'path';
 import { fileURLToPath } from "node:url";
 import { dirname, extname, join } from "node:path";
 import { readFileSync, existsSync } from "node:fs";
@@ -81,6 +82,17 @@ const app = express();
 // satisfies express-rate-limit's ERR_ERL_PERMISSIVE_TRUST_PROXY validation —
 // `true` allows unlimited proxy hops which rate-limit flags as a bypass risk.
 app.set("trust proxy", 1);
+
+// Serve static CSS, JS, and media assets directly from dist/client
+const clientDir = process.env.CLIENT_DIR 
+  ? path.resolve(process.cwd(), process.env.CLIENT_DIR)
+  : path.resolve(process.cwd(), 'dist/client');
+
+app.use('/assets', express.static(path.join(clientDir, 'assets'), {
+  maxAge: '1y',
+  immutable: true,
+}));
+app.use(express.static(clientDir));
 
 // ── Webhook routes — raw body required, registered BEFORE express.json() ─────
 // Stripe requires the raw buffer to verify the webhook signature.
