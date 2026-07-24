@@ -1,7 +1,7 @@
 import express, { type NextFunction, type Request, type Response } from "express";
 import { fileURLToPath } from "node:url";
 import { dirname, extname, join } from "node:path";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 
 // <api-imports>
 import geo_get_0 from "./api/geo/GET";
@@ -127,13 +127,13 @@ app.get("/api/geo", geo_get_0);
 app.get("/api/health", health_get_1);
 // </api-registrations>
 
-// ── Rate limiting ─────────────────────────────────────────────────────────────
+// ── Rate limiting ─────────────────────────────────────────────────────────[...]
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false });
 const apiLimiter  = rateLimit({ windowMs: 15 * 60 * 1000, max: 200, standardHeaders: true, legacyHeaders: false });
 app.use('/api/auth', authLimiter);
 app.use('/api',      apiLimiter);
 
-// ── Auth ──────────────────────────────────────────────────────────────────────
+// ── Auth ────────────────────────────────────────────────────────────[...]
 app.post('/api/auth/register',        ...authController.register);
 app.post('/api/auth/login',           ...authController.login);
 app.post('/api/auth/logout',          authenticate, authController.logout);
@@ -145,18 +145,18 @@ app.get( '/api/auth/me',              authenticate, authController.getMe);
 app.post('/api/auth/change-password', authenticate, ...authController.changePassword);
 app.post('/api/auth/refresh',         authenticate, authController.refresh);
 
-// ── Contact ───────────────────────────────────────────────────────────────────
+// ── Contact ───────────────────────────────────────────────────────────[...]
 import contactPost from './api/contact/POST.js';
 app.post('/api/contact', contactPost);
 
-// ── Users ─────────────────────────────────────────────────────────────────────
+// ── Users ───────────────────────────────────────────────────────────��[...]
 app.get(   '/api/users/profile',       authenticate, userController.getProfile);
 app.put(   '/api/users/profile',       authenticate, ...userController.updateProfile);
 app.delete('/api/users/profile',       authenticate, userController.deleteProfile);
 app.get(   '/api/users/notifications', authenticate, userController.getNotifications);
 app.put(   '/api/users/preferences',   authenticate, ...userController.updatePreferences);
 
-// ── Groups ────────────────────────────────────────────────────────────────────
+// ── Groups ───────────────────────────────────────────────────────────�[...]
 app.get(   '/api/groups',                    authenticate, groupController.list);
 app.get(   '/api/groups/:id',                authenticate, groupController.getOne);
 app.post(  '/api/groups',                    authenticate, ...groupController.create);
@@ -164,55 +164,55 @@ app.put(   '/api/groups/:id',                authenticate, ...groupController.up
 app.delete('/api/groups/:id',                authenticate, groupController.close);
 app.post(  '/api/groups/:id/invitations',    authenticate, ...groupController.createInvitation);
 
-// ── Memberships ───────────────────────────────────────────────────────────────
+// ── Memberships ─────────────────────────────────────────────────────────��[...]
 app.get(   '/api/memberships',     authenticate, membershipController.list);
 app.post(  '/api/memberships',     authenticate, ...membershipController.join);
 app.delete('/api/memberships/:id', authenticate, membershipController.leave);
 app.post(  '/api/memberships/remove', authenticate, ...membershipController.remove);
 
-// ── Contributions ─────────────────────────────────────────────────────────────
+// ── Contributions ─────────────────────────────────────────────────────────[...]
 app.get( '/api/contributions',                  authenticate, contributionController.list);
 app.post('/api/contributions/generate-schedule', authenticate, ...contributionController.generateSchedule);
 app.put( '/api/contributions/:id',              authenticate, ...contributionController.update);
 
-// ── Rotations ─────────────────────────────────────────────────────────────────
+// ── Rotations ──────────────────────────────────────────────────────────�[...]
 app.get('/api/rotations',                authenticate, rotationController.list);
 app.get('/api/rotations/:id/current',    authenticate, rotationController.getCurrent);
 app.get('/api/rotations/:id/next',       authenticate, rotationController.getNext);
 app.get('/api/rotations/:id/previous',   authenticate, rotationController.getPrevious);
 app.put('/api/rotations/:id/advance',    authenticate, rotationController.advance);
 
-// ── Votes ─────────────────────────────────────────────────────────────────────
+// ── Votes ───────────────────────────────────────────────────────────��[...]
 app.get('/api/votes',            authenticate, voteController.list);
 app.post('/api/votes',           authenticate, ...voteController.create);
 app.put('/api/votes/:id',        authenticate, ...voteController.cast);
 app.put('/api/votes/:id/close',  authenticate, voteController.close);
 
-// ── Notifications ─────────────────────────────────────────────────────────────
+// ── Notifications ─────────────────────────────────────────────────────────[...]
 app.get(   '/api/notifications',              authenticate, notificationController.list);
 app.get(   '/api/notifications/count',        authenticate, notificationController.count);
 app.put(   '/api/notifications/read-all',     authenticate, notificationController.markAllRead);
 app.put(   '/api/notifications/:id/read',     authenticate, notificationController.markRead);
 app.delete('/api/notifications/:id',          authenticate, notificationController.delete);
 
-// ── Subscriptions ─────────────────────────────────────────────────────────────
+// ── Subscriptions ─────────────────────────────────────────────────────────[...]
 app.get( '/api/subscriptions',            authenticate, subscriptionController.get);
 app.get( '/api/subscriptions/status',     authenticate, subscriptionController.get);
 app.post('/api/subscriptions/cancel',     authenticate, subscriptionController.cancel);
 app.post('/api/subscriptions/reactivate', authenticate, subscriptionController.reactivate);
 
-// ── Payments ──────────────────────────────────────────────────────────────────
+// ── Payments ──────────────────────────────────────────────────────────��[...]
 app.post('/api/payments/setup-intent',       authenticate, paymentController.setupIntent);
 app.post('/api/payments/connect-onboard',    authenticate, requireRole('group_leader', 'admin'), paymentController.connectOnboard);
 app.post('/api/payments/charge-contribution', authenticate, paymentController.chargeContribution);
 
-// ── Support ───────────────────────────────────────────────────────────────────
+// ── Support ───────────────────────────────────────────────────────────[...]
 app.get( '/api/support',     authenticate, supportController.list);
 app.get( '/api/support/:id', authenticate, supportController.getOne);
 app.post('/api/support',     authenticate, ...supportController.create);
 app.put( '/api/support/:id', authenticate, ...supportController.update);
 
-// ── Admin ─────────────────────────────────────────────────────────────────────
+// ── Admin ───────────────────────────────────────────────────────────��[...]
 app.get(   '/api/admin/dashboard',                authenticate, requireRole('admin'), adminController.dashboard);
 app.get(   '/api/admin/users',                    authenticate, requireRole('admin'), adminController.listUsers);
 app.get(   '/api/admin/users/:id',                authenticate, requireRole('admin'), adminController.getUserDetail);
@@ -240,16 +240,16 @@ app.get( '/api/identity/status',       authenticate, getIdentityStatus);
 app.post('/api/identity/bvn/verify',   authenticate, initiateBvn);
 app.post('/api/identity/bvn/confirm',  authenticate, confirmBvn);
 
-// ── Legal ─────────────────────────────────────────────────────────────────────
+// ── Legal ───────────────────────────────────────────────────────────��[...]
 app.get('/api/legal/terms',   legalController.terms);
 app.get('/api/legal/privacy', legalController.privacy);
 
-// ── Monitoring ────────────────────────────────────────────────────────────────
+// ── Monitoring ──────────────────────────────────────────────────────────[...]
 app.get('/api/system/health', monitoringController.health);
 app.get('/api/system/errors', authenticate, requireRole('admin'), monitoringController.errors);
 app.get('/api/system/jobs',   authenticate, requireRole('admin'), monitoringController.jobs);
 
-// ── API Documentation ─────────────────────────────────────────────────────────
+// ── API Documentation ───────────────────────────────────────────────────────��[...]
 registerSwagger(app);
 
 // ── Central error handler (must be last) ─────────────────────────────────────
@@ -321,7 +321,30 @@ app.get("/sitemap.xml", (req, res) => {
 
 if (import.meta.env.PROD) {
 	const __dirname = dirname(fileURLToPath(import.meta.url));
-	const clientDir = join(__dirname, "client");
+	// Resolve likely locations for the client build so static asset serving works
+	// regardless of whether the server bundle lives in dist/ or dist/server/.
+	const candidateClientDirs = [
+		join(__dirname, "client"),           // dist/client when server bundle in dist/
+		join(__dirname, "..", "client"),  // dist/client when server bundle in dist/server/
+		join(__dirname, "dist", "client"),
+		join(__dirname, "..", "dist", "client"),
+		join(__dirname, "public"),
+		join(__dirname, "..", "public"),
+	];
+
+	let clientDir: string | null = null;
+	for (const c of candidateClientDirs) {
+		if (existsSync(join(c, "index.html"))) {
+			clientDir = c;
+			break;
+		}
+	}
+
+	if (!clientDir) {
+		// Fallback to join(__dirname, 'client') so error message is informative
+		clientDir = join(__dirname, "client");
+		console.error("ssr.clientDir.not-found", { tried: candidateClientDirs, picked: clientDir });
+	}
 
 	app.use(
 		express.static(clientDir, {
@@ -361,7 +384,7 @@ if (import.meta.env.PROD) {
 		// SEO-invisible pages indefinitely.
 		console.error("ssr.template.markers-missing", {
 			hasHead: template.includes("<!--app-head-->"),
-			hasHtml: template.includes("<!--app-html-->"),
+			hasHtml: template.includes("<!--app-html-->") ,
 		});
 		process.exit(1);
 	}
