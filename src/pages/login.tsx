@@ -87,6 +87,7 @@ export default function LoginPage() {
                 onChange={e => setEmail(e.target.value)}
                 placeholder="you@example.com"
                 autoComplete="email"
+                data-testid="login-email"
                 style={{ width: '100%', paddingLeft: 44, paddingRight: 16, paddingTop: 14, paddingBottom: 14, borderRadius: 16, border: '1px solid #E5E7EB', fontSize: 14, outline: 'none', boxSizing: 'border-box', fontFamily: 'inherit' }}
               />
             </div>
@@ -107,6 +108,7 @@ export default function LoginPage() {
                 onChange={e => setPassword(e.target.value)}
                 placeholder="Enter your password"
                 autoComplete="current-password"
+                data-testid="login-password"
                 style={{ width: '100%', paddingLeft: 44, paddingRight: 48, paddingTop: 14, paddingBottom: 14, borderRadius: 16, border: '1px solid #E5E7EB', fontSize: 14, outline: 'none', boxSizing: 'border-box', fontFamily: 'inherit' }}
               />
               <button type="button" onClick={() => setShowPassword(!showPassword)}
@@ -117,6 +119,7 @@ export default function LoginPage() {
           </div>
 
           <Button type="submit" disabled={loading}
+            data-testid="login-submit"
             style={{ width: '100%', borderRadius: 16, padding: '14px 24px', fontWeight: 700, fontSize: 16, background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', color: '#fff', boxShadow: '0 4px 20px rgba(46,175,111,0.3)', border: 'none', cursor: loading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 8, boxSizing: 'border-box' }}>
             {loading ? (
               <>
