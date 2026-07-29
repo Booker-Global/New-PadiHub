@@ -11,8 +11,8 @@ test("homepage loads with no console errors", async ({ page }) => {
 
   await page.goto("/");
 
-  // Verify the page loaded successfully
-  await expect(page).toHaveTitle(/.*/);
+  // Verify the page loaded successfully (non-empty title or body content)
+  await expect(page.locator("body")).toBeVisible();
 
   // Assert no console errors occurred
   expect(consoleErrors).toEqual([]);
