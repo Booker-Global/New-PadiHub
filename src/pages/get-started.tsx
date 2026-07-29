@@ -119,6 +119,7 @@ export default function GetStartedPage() {
             <div style={{ position: 'relative' }}>
               <User size={16} style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: '#9CA3AF', pointerEvents: 'none' }} />
               <input type="text" value={form.name} onChange={set('name')} placeholder="Your full name"
+                data-testid="signup-name"
                 style={{ width: '100%', paddingLeft: 44, paddingRight: 16, paddingTop: 14, paddingBottom: 14, borderRadius: 16, border: '1px solid #E5E7EB', fontSize: 14, outline: 'none', boxSizing: 'border-box', fontFamily: 'inherit' }} />
             </div>
           </div>
@@ -128,6 +129,7 @@ export default function GetStartedPage() {
             <div style={{ position: 'relative' }}>
               <Mail size={16} style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: '#9CA3AF', pointerEvents: 'none' }} />
               <input type="email" value={form.email} onChange={set('email')} placeholder="you@example.com"
+                data-testid="signup-email"
                 style={{ width: '100%', paddingLeft: 44, paddingRight: 16, paddingTop: 14, paddingBottom: 14, borderRadius: 16, border: '1px solid #E5E7EB', fontSize: 14, outline: 'none', boxSizing: 'border-box', fontFamily: 'inherit' }} />
             </div>
           </div>
@@ -135,6 +137,7 @@ export default function GetStartedPage() {
           <div>
             <label style={{ display: 'block', fontSize: 14, fontWeight: 600, color: '#374151', marginBottom: 8 }}>Country</label>
             <select value={form.country} onChange={set('country')}
+              data-testid="signup-country"
               style={{ width: '100%', padding: '14px 16px', borderRadius: 16, border: '1px solid #E5E7EB', fontSize: 14, outline: 'none', background: '#fff', boxSizing: 'border-box', fontFamily: 'inherit', appearance: 'auto' }}>
               <option value="GB">🇬🇧 United Kingdom</option>
               <option value="NG">🇳🇬 Nigeria</option>
@@ -146,6 +149,7 @@ export default function GetStartedPage() {
             <div style={{ position: 'relative' }}>
               <Lock size={16} style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: '#9CA3AF', pointerEvents: 'none' }} />
               <input type={showPassword ? 'text' : 'password'} value={form.password} onChange={set('password')} placeholder="Create a strong password"
+                data-testid="signup-password"
                 style={{ width: '100%', paddingLeft: 44, paddingRight: 48, paddingTop: 14, paddingBottom: 14, borderRadius: 16, border: '1px solid #E5E7EB', fontSize: 14, outline: 'none', boxSizing: 'border-box', fontFamily: 'inherit' }} />
               <button type="button" onClick={() => setShowPassword(!showPassword)}
                 style={{ position: 'absolute', right: 16, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#9CA3AF', padding: 0, display: 'flex', alignItems: 'center' }}>
@@ -166,6 +170,7 @@ export default function GetStartedPage() {
 
           <label style={{ display: 'flex', alignItems: 'flex-start', gap: 12, cursor: 'pointer' }}>
             <input type="checkbox" checked={agreed} onChange={e => setAgreed(e.target.checked)}
+              data-testid="signup-agree"
               style={{ marginTop: 2, width: 16, height: 16, flexShrink: 0, accentColor: '#2EAF6F' }} />
             <span style={{ fontSize: 12, color: '#6B7280', lineHeight: 1.6 }}>
               I agree to PadiHub's{' '}
@@ -176,6 +181,7 @@ export default function GetStartedPage() {
           </label>
 
           <Button type="submit" disabled={loading}
+            data-testid="signup-submit"
             style={{ width: '100%', borderRadius: 16, padding: '14px 24px', fontWeight: 700, fontSize: 16, background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', color: '#fff', boxShadow: '0 4px 20px rgba(46,175,111,0.3)', border: 'none', cursor: loading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 8, boxSizing: 'border-box' }}>
             {loading ? (
               <>

@@ -169,6 +169,7 @@ export default function Header() {
                   </div>
                   <span style={{ fontSize: 'clamp(0.8125rem, 0.75rem + 0.25vw, 0.875rem)', fontWeight: 600, color: '#D1D5DB' }}>{authUser.name.split(' ')[0]}</span>
                   <button onClick={handleLogout}
+                    data-testid="logout-button"
                     style={{ marginLeft: 4, padding: 6, borderRadius: 8, background: 'none', border: 'none', cursor: 'pointer', color: '#6B7280' }}
                     title="Log out">
                     <LogOut size={14} />
