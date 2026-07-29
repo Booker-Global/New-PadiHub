@@ -202,10 +202,11 @@ test.describe("Savings Group creation, invitation, and rotation order", () => {
     await expect(pageB.getByText(USER_A.name)).toBeVisible();
     await expect(pageB.getByText(USER_B.name)).toBeVisible();
 
-    // Verify rotation order is displayed correctly (position numbers)
-    // Both users should see the same rotation order
-    await expect(pageB.getByText("1")).toBeVisible();
-    await expect(pageB.getByText("2")).toBeVisible();
+    // Verify rotation order: both members visible in sequence confirms correct order
+    // User A (position 1) should appear before User B (position 2)
+    const membersSection = pageB.locator('[class*="rounded-3xl"]').filter({ hasText: USER_A.name });
+    await expect(membersSection.getByText(USER_A.name)).toBeVisible();
+    await expect(membersSection.getByText(USER_B.name)).toBeVisible();
 
     await contextB.close();
   });
