@@ -29,41 +29,76 @@ export const authService = {
     email: string; password: string; phone_number?: string; country: string;
   }, ipAddress?: string) {
     
-    const existing = await db.select().from(schema.users)
-      .where(eq(schema.users.email, data.email.toLowerCase())).limit(1);
+    let existing: typeof schema.users.$inferSelect[];
+    try {
+      existing = await db.select().from(schema.users)
+        .where(eq(schema.users.email, data.email.toLowerCase())).limit(1);
+    } catch (dbErr) {
+      console.error('[PadiHub] Database error checking existing user:', dbErr);
+      throw new AppError(
+        'Registration is temporarily unavailable. Please try again later.',
+        503,
+        'DB_UNAVAILABLE',
+      );
+    }
     if (existing.length) throw new AppError('Email already registered.', 409, 'EMAIL_EXISTS');
 
     const password_hash = await bcrypt.hash(data.password, BCRYPT_ROUNDS);
     const userId = uuidv4();
     const currency = assignCurrency(data.country);
 
-    await db.insert(schema.users).values({
-      id: userId,
-      first_name:          data.first_name,
-      last_name:           data.last_name,
-      display_name:        data.display_name || data.first_name,
-      email:               data.email.toLowerCase(),
-      password_hash,
-      phone_number:        data.phone_number,
-      country:             data.country,
-      currency,
-      trust_score:         TRUST_SCORE_INITIAL,
-      account_status:      'pending_verification',
-      subscription_status: 'free',
-      email_verified:      false,
-      active:              true,
-      role:                'member',
-    });
+    try {
+      await db.insert(schema.users).values({
+        id: userId,
+        first_name:          data.first_name,
+        last_name:           data.last_name,
+        display_name:        data.display_name || data.first_name,
+        email:               data.email.toLowerCase(),
+        password_hash,
+        phone_number:        data.phone_number,
+        country:             data.country,
+        currency,
+        trust_score:         TRUST_SCORE_INITIAL,
+        account_status:      'pending_verification',
+        subscription_status: 'free',
+        email_verified:      false,
+        active:              true,
+        role:                'member',
+      });
+    } catch (dbErr) {
+      console.error('[PadiHub] Database error inserting user:', dbErr);
+      // Check for duplicate key (race condition where another request registered the same email)
+      const msg = dbErr instanceof Error ? dbErr.message : '';
+      if (msg.includes('Duplicate') || msg.includes('ER_DUP_ENTRY')) {
+        throw new AppError('Email already registered.', 409, 'EMAIL_EXISTS');
+      }
+      throw new AppError(
+        'Registration is temporarily unavailable. Please try again later.',
+        503,
+        'DB_UNAVAILABLE',
+      );
+    }
 
     // Create email verification token
     const token = uuidv4();
-    await db.insert(schema.emailVerificationTokens).values({
-      id:         uuidv4(),
-      user_id:    userId,
-      token,
-      expires_at: new Date(Date.now() + EMAIL_VERIFY_TTL),
-      used:       false,
-    });
+    try {
+      await db.insert(schema.emailVerificationTokens).values({
+        id:         uuidv4(),
+        user_id:    userId,
+        token,
+        expires_at: new Date(Date.now() + EMAIL_VERIFY_TTL),
+        used:       false,
+      });
+    } catch (dbErr) {
+      console.error('[PadiHub] Database error inserting verification token:', dbErr);
+      // User was created but token insert failed — still surface a helpful error
+      // The user exists but can't verify; they can use "resend verification" later.
+      throw new AppError(
+        'Account created but verification email could not be sent. Please use "Resend verification" to get your link.',
+        201,
+        'TOKEN_INSERT_FAILED',
+      );
+    }
 
     await createAuditLog({ userId, action: 'USER_REGISTERED', entity: 'users', entityId: userId, ipAddress });
     // Send verification email (fire-and-forget — failure never blocks registration)
@@ -141,8 +176,18 @@ export const authService = {
 
   async login(email: string, password: string, ipAddress?: string) {
     
-    const rows = await db.select().from(schema.users)
-      .where(eq(schema.users.email, email.toLowerCase())).limit(1);
+    let rows: typeof schema.users.$inferSelect[];
+    try {
+      rows = await db.select().from(schema.users)
+        .where(eq(schema.users.email, email.toLowerCase())).limit(1);
+    } catch (dbErr) {
+      console.error('[PadiHub] Database error during login lookup:', dbErr);
+      throw new AppError(
+        'Login is temporarily unavailable. Please try again later.',
+        503,
+        'DB_UNAVAILABLE',
+      );
+    }
     if (!rows.length) throw new AppError('Invalid email or password.', 401, 'INVALID_CREDENTIALS');
     const user = rows[0];
 
