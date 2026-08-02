@@ -114,6 +114,7 @@ app.use(helmet({
   contentSecurityPolicy: false, // managed separately for SSR pages
   crossOriginEmbedderPolicy: false,
 }));
+
 // Build the CORS origin allowlist from the environment.
 // ALLOWED_ORIGINS accepts a comma-separated list of extra origins that should
 // be permitted in addition to the built-in defaults (e.g. the Render preview
