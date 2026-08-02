@@ -1,0 +1,29 @@
+name: Push Database Schema
+
+# Manually triggered — run this to create/update tables on the Railway MySQL DB.
+# Uses drizzle-kit push to sync the Drizzle schema to the live database.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  db-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Push schema to database
+        run: npx drizzle-kit push --force
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
