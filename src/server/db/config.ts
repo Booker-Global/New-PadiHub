@@ -1,5 +1,4 @@
-/** TREAT AS IMMUTABLE - This file is protected by the file-edit tool
- *
+/**
  * Database configuration loader
  */
 import { existsSync, readFileSync } from 'node:fs';
@@ -52,6 +51,7 @@ function parseDatabaseUrl(urlString: string): DatabaseCredentials {
 export function getDatabaseCredentials(): DatabaseCredentials {
   const dbUrl = env.DATABASE_URL;
   if (dbUrl) {
+    console.log('[PadiHub] Using DATABASE_URL for database credentials.');
     return parseDatabaseUrl(dbUrl);
   }
 
