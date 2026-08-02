@@ -607,12 +607,18 @@ if (import.meta.env.PROD) {
 		// issues are immediately visible in logs rather than surfacing as
 		// cryptic "unexpected error" responses at request time.
 		try {
-			const { testConnection } = await import('./db/client.js');
+			const { testConnection, getConnectionTarget } = await import('./db/client.js');
+			console.log(`[PadiHub] Checking database connectivity to ${getConnectionTarget()}...`);
 			const connected = await testConnection();
 			if (connected) {
 				console.log('[PadiHub] ✓ Database connection verified.');
 			} else {
-				console.error('[PadiHub] ✗ Database connection FAILED. Auth and data operations will not work.');
+				console.error(
+					`[PadiHub] ✗ Database connection FAILED after all retries. ` +
+					`Target: ${getConnectionTarget()}. ` +
+					`Auth and data operations will not work. ` +
+					`Verify that the DATABASE_URL is correct and that the database allows inbound connections from this host.`
+				);
 			}
 		} catch (dbErr) {
 			console.error('[PadiHub] ✗ Database health check error:', dbErr instanceof Error ? dbErr.message : dbErr);
