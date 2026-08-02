@@ -165,7 +165,8 @@ const corsOptions: CorsOptions = {
 
 // Handle OPTIONS preflight requests before all API routes so auth-flow
 // preflights succeed immediately without passing through other middleware.
-app.options('*', cors(corsOptions));
+// Express 5 requires named wildcard parameters — bare '*' is not valid.
+app.options('{*path}', cors(corsOptions));
 app.use(cors(corsOptions));
 
 // <api-registrations>
