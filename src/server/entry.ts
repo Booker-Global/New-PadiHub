@@ -10,7 +10,7 @@ import health_get_1 from "./api/health/GET";
 // </api-imports>
 
 // PadiHub backend imports
-import cors from 'cors';
+import cors, { type CorsOptions } from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { authenticate, requireRole } from './middleware/auth.js';
@@ -114,25 +114,59 @@ app.use(helmet({
   contentSecurityPolicy: false, // managed separately for SSR pages
   crossOriginEmbedderPolicy: false,
 }));
-app.use(cors({
+
+// Build the CORS origin allowlist from the environment.
+// ALLOWED_ORIGINS accepts a comma-separated list of extra origins that should
+// be permitted in addition to the built-in defaults (e.g. the Render preview
+// URL for the frontend).  Example:
+//   ALLOWED_ORIGINS=https://padihub.onrender.com,https://app.padihub.com
+const extraAllowedOrigins: Set<string> = new Set(
+  (process.env.ALLOWED_ORIGINS ?? '')
+    .split(',')
+    .map(o => o.trim())
+    .filter(Boolean),
+);
+
+const corsOptions: CorsOptions = {
   origin: (origin, cb) => {
-    // Allow same-origin requests (no origin header), the custom domain,
-    // any *.airoapp.ai preview, and localhost dev
+    // Allow same-origin / server-to-server requests (no Origin header).
+    if (!origin) return cb(null, true);
+
+    // Built-in allowlist:
+    //   • any *.airoapp.ai preview deploy
+    //   • any localhost / 127.0.0.1 port for local dev
+    //   • any *.onrender.com subdomain (covers both frontend and API on Render)
+    //   • production custom domain
     if (
-      !origin ||
       /\.airoapp\.ai$/.test(origin) ||
-      /localhost/.test(origin) ||
+      /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) ||
+      /\.onrender\.com$/.test(origin) ||
       origin === 'https://padihub.com' ||
-      origin === 'http://padihub.com'
+      origin === 'http://padihub.com' ||
+      origin === 'https://www.padihub.com' ||
+      origin === 'http://www.padihub.com' ||
+      extraAllowedOrigins.has(origin)
     ) {
       return cb(null, true);
     }
+
+    // Log the rejected origin so future incidents are easy to diagnose.
+    // The origin value is not user-controlled beyond what the browser sends,
+    // but we use a safe bounded-length slice to avoid log-injection via
+    // an unusually long header value.
+    const safeOrigin = origin.slice(0, 200);
+    console.warn(`[PadiHub CORS] Rejected request from origin: ${safeOrigin}`);
     cb(new Error('Not allowed by CORS'));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
-}));
+};
+
+// Handle OPTIONS preflight requests before all API routes so auth-flow
+// preflights succeed immediately without passing through other middleware.
+app.options('*', cors(corsOptions));
+app.use(cors(corsOptions));
 
 // <api-registrations>
 app.get("/api/geo", geo_get_0);
