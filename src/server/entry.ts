@@ -143,6 +143,8 @@ const corsOptions: CorsOptions = {
       /\.onrender\.com$/.test(origin) ||
       origin === 'https://padihub.com' ||
       origin === 'http://padihub.com' ||
+      origin === 'https://www.padihub.com' ||
+      origin === 'http://www.padihub.com' ||
       extraAllowedOrigins.has(origin)
     ) {
       return cb(null, true);
