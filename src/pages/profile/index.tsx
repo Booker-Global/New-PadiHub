@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { MotionDiv } from '@/lib/motion-safe';
 import { Link } from 'react-router-dom';
@@ -89,6 +89,23 @@ const achievements = [
 export default function ProfilePage() {
   const [twoFactor, setTwoFactor] = useState(true);
   const [publicPassport, setPublicPassport] = useState(true);
+  const [profileUser, setProfileUser] = useState({ name: '', initial: '', trust: 0, email: '' });
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('padihub_user') || sessionStorage.getItem('padihub_session');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        const name = parsed?.name || '';
+        setProfileUser({
+          name,
+          initial: name.charAt(0).toUpperCase() || '?',
+          trust: parsed?.trust ?? 0,
+          email: parsed?.email || '',
+        });
+      }
+    } catch { /* ignore */ }
+  }, []);
 
   return (
     <DashboardLayout>
@@ -131,7 +148,7 @@ export default function ProfilePage() {
               <div className="relative flex-shrink-0">
                 <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl flex items-center justify-center font-black text-2xl sm:text-3xl text-white"
                   style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', boxShadow: '0 0 30px rgba(46,175,111,0.4)' }}>
-                  A
+                  {profileUser.initial}
                 </div>
                 <Link to="/profile/edit"
                   className="absolute -bottom-1 -right-1 w-7 h-7 rounded-full flex items-center justify-center"
@@ -141,8 +158,8 @@ export default function ProfilePage() {
               </div>
 
               <div className="flex-1 min-w-0">
-                <h2 className="text-lg sm:text-xl font-extrabold text-white mb-0.5 truncate" style={{ fontFamily: 'Nunito, sans-serif' }}>Amara Okonkwo</h2>
-                <p className="text-xs sm:text-sm mb-2 truncate" style={{ color: 'rgba(255,255,255,0.4)' }}>@amara.okonkwo · PP-2026-AO-8472</p>
+                <h2 className="text-lg sm:text-xl font-extrabold text-white mb-0.5 truncate" style={{ fontFamily: 'Nunito, sans-serif' }}>{profileUser.name || 'Your Profile'}</h2>
+                <p className="text-xs sm:text-sm mb-2 truncate" style={{ color: 'rgba(255,255,255,0.4)' }}>{profileUser.email}</p>
                 <div className="flex flex-wrap gap-1.5">
                   <span className="text-xs font-bold px-2 py-0.5 rounded-full whitespace-nowrap" style={{ background: 'rgba(46,175,111,0.2)', color: '#2EAF6F' }}>
                     ✓ Verified
@@ -160,9 +177,9 @@ export default function ProfilePage() {
             {/* Stats */}
             <div className="relative grid grid-cols-3 gap-3 mt-5">
               {[
-                { label: 'Trust Score™',     value: '847',   color: '#2EAF6F' },
-                { label: 'Community Karma™', value: '1,240', color: '#F59E0B' },
-                { label: 'Communities',      value: '4',     color: '#8B5CF6' },
+                { label: 'Trust Score™',     value: String(profileUser.trust),   color: '#2EAF6F' },
+                { label: 'Community Karma™', value: '0', color: '#F59E0B' },
+                { label: 'Communities',      value: '0',     color: '#8B5CF6' },
               ].map(s => (
                 <div key={s.label} className="rounded-2xl p-3 text-center"
                   style={{ background: 'rgba(255,255,255,0.05)' }}>

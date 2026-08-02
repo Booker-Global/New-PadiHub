@@ -7,6 +7,28 @@ import {
   HelpCircle, UserPlus, LayoutGrid
 } from 'lucide-react';
 
+// ─── Session hook ────────────────────────────────────────────────────────────
+function useDashboardUser() {
+  const [user, setUser] = useState<{ name: string; trust: number; initial: string }>({
+    name: '', trust: 0, initial: '',
+  });
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('padihub_user') || sessionStorage.getItem('padihub_session');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        const name = parsed?.name || '';
+        setUser({
+          name,
+          trust: parsed?.trust ?? 0,
+          initial: name.charAt(0).toUpperCase() || '?',
+        });
+      }
+    } catch { /* ignore */ }
+  }, []);
+  return user;
+}
+
 // ─── Nav config ──────────────────────────────────────────────────────────────
 
 const mainNav = [
@@ -71,9 +93,12 @@ function NavLink({ item, pathname, onNavigate }: NavLinkProps) {
 interface SidebarProps {
   pathname: string;
   onNavigate: () => void;
+  userName: string;
+  userInitial: string;
+  userTrust: number;
 }
 
-function Sidebar({ pathname, onNavigate }: SidebarProps) {
+function Sidebar({ pathname, onNavigate, userName, userInitial, userTrust }: SidebarProps) {
   return (
     <aside className="flex flex-col h-full"
       style={{ background: 'linear-gradient(180deg, #0F172A 0%, #1A1A2E 100%)', borderRight: '1px solid rgba(255,255,255,0.07)' }}>
@@ -96,10 +121,10 @@ function Sidebar({ pathname, onNavigate }: SidebarProps) {
           className="rounded-2xl p-3 flex items-center gap-3 transition-all hover:bg-white/5"
           style={{ background: 'rgba(46,175,111,0.08)', border: '1px solid rgba(46,175,111,0.18)' }}>
           <div className="w-9 h-9 rounded-full flex items-center justify-center text-sm font-black text-white flex-shrink-0"
-            style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}>A</div>
+            style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}>{userInitial}</div>
           <div className="flex-1 min-w-0">
-            <p className="text-white text-xs font-bold truncate">Amara Okafor</p>
-            <p className="text-xs font-semibold" style={{ color: '#2EAF6F' }}>Trust Score™ 847</p>
+            <p className="text-white text-xs font-bold truncate">{userName}</p>
+            <p className="text-xs font-semibold" style={{ color: '#2EAF6F' }}>Trust Score™ {userTrust}</p>
           </div>
           <Shield size={13} style={{ color: '#2EAF6F', flexShrink: 0 }} />
         </Link>
@@ -139,6 +164,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const [quickOpen, setQuickOpen]       = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const quickRef  = useRef<HTMLDivElement>(null);
+  const dashUser = useDashboardUser();
 
   // Close quick actions on outside click
   useEffect(() => {
@@ -168,14 +194,14 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       {/* Desktop sidebar — hidden below lg (1024px), flex above.
           Always in DOM so SSR and first client render are identical — no hydration mismatch. */}
       <div className="hidden lg:flex flex-col flex-shrink-0" style={{ width: 256 }}>
-        <Sidebar pathname={location.pathname} onNavigate={closeSidebar} />
+        <Sidebar pathname={location.pathname} onNavigate={closeSidebar} userName={dashUser.name} userInitial={dashUser.initial} userTrust={dashUser.trust} />
       </div>
 
       {/* Mobile sidebar overlay */}
       {sidebarOpen && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex' }}>
           <div style={{ width: 288, flexShrink: 0, display: 'flex', flexDirection: 'column', boxShadow: '0 25px 50px rgba(0,0,0,0.5)' }}>
-            <Sidebar pathname={location.pathname} onNavigate={closeSidebar} />
+            <Sidebar pathname={location.pathname} onNavigate={closeSidebar} userName={dashUser.name} userInitial={dashUser.initial} userTrust={dashUser.trust} />
           </div>
           <div style={{ flex: 1, background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)' }} onClick={closeSidebar} />
         </div>
@@ -273,7 +299,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
             <Link to="/profile" className="w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold text-white flex-shrink-0"
               style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}
               aria-label="Profile">
-              A
+              {dashUser.initial}
             </Link>
           </div>
         </header>

@@ -18,9 +18,22 @@ const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.07 } }
 /* ── Page ─────────────────────────────────────────────────────────────── */
 export default function DashboardPage() {
   const [greeting, setGreeting] = useState('Welcome back');
+  const [firstName, setFirstName] = useState('');
+  const [trustScore, setTrustScore] = useState(0);
+
   useEffect(() => {
     const hour = new Date().getHours();
     setGreeting(hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening');
+    try {
+      const raw = localStorage.getItem('padihub_user') || sessionStorage.getItem('padihub_session');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        const name = parsed?.name || '';
+        // Use first word of name as first name for greeting
+        setFirstName(name.split(' ')[0] || '');
+        setTrustScore(parsed?.trust ?? 0);
+      }
+    } catch { /* ignore */ }
   }, []);
 
   return (
@@ -46,7 +59,7 @@ export default function DashboardPage() {
             <div>
               <p className="text-gray-500 text-sm font-medium">{greeting},</p>
               <h1 className="text-3xl font-extrabold text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>
-                Amara 👋
+                {firstName || 'there'} 👋
               </h1>
               <p className="text-gray-400 text-sm mt-1">Here's what's happening with your groups today.</p>
             </div>
@@ -57,7 +70,7 @@ export default function DashboardPage() {
               </Link>
               <div className="hidden sm:flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold"
                 style={{ background: 'rgba(46,175,111,0.1)', color: '#2EAF6F', border: '1px solid rgba(46,175,111,0.2)' }}>
-                <Shield size={14} /> <span>Trust Score™ 847</span>
+                <Shield size={14} /> <span>Trust Score™ {trustScore}</span>
               </div>
             </div>
           </MotionDiv>
