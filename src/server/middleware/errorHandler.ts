@@ -13,7 +13,7 @@ export class AppError extends Error {
 
 export function errorHandler(
   err: Error,
-  _req: Request,
+  req: Request,
   res: Response,
   _next: NextFunction,
 ) {
@@ -25,7 +25,12 @@ export function errorHandler(
     });
   }
 
-  console.error('[PadiHub Error]', err);
+  // Log the full error with request context for easier debugging
+  console.error('[PadiHub Error]', {
+    method: req.method,
+    path:   req.path,
+    error:  err.stack || err.message || err,
+  });
   return res.status(500).json({
     success: false,
     message: 'An unexpected error occurred.',

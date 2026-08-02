@@ -601,8 +601,22 @@ if (import.meta.env.PROD) {
 		process.exit(1);
 	}
 	const host = process.env.HOST || "0.0.0.0";
-	const server = app.listen(port, host, () => {
+	const server = app.listen(port, host, async () => {
 		console.log(`Server listening on http://${host}:${port}`);
+		// Verify database connectivity and table existence on startup so
+		// issues are immediately visible in logs rather than surfacing as
+		// cryptic "unexpected error" responses at request time.
+		try {
+			const { testConnection } = await import('./db/client.js');
+			const connected = await testConnection();
+			if (connected) {
+				console.log('[PadiHub] ✓ Database connection verified.');
+			} else {
+				console.error('[PadiHub] ✗ Database connection FAILED. Auth and data operations will not work.');
+			}
+		} catch (dbErr) {
+			console.error('[PadiHub] ✗ Database health check error:', dbErr instanceof Error ? dbErr.message : dbErr);
+		}
 	});
 	server.on("error", (err: NodeJS.ErrnoException) => {
 		console.error("ssr.server.listen-failed", {
