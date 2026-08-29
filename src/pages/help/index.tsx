@@ -4,7 +4,7 @@ import { MotionDiv } from '@/lib/motion-safe';
 import { Link } from 'react-router-dom';
 import {
   HelpCircle, Search, ChevronDown, ChevronRight, MessageSquare,
-  Mail, BookOpen, Video, Shield, Users, PiggyBank, Award,
+  Mail, BookOpen, Video, Shield, Users, PiggyBank,
   Globe, Vote, Zap, CheckCircle, ArrowUpRight, FileText
 } from 'lucide-react';
 import DashboardLayout from '@/components/DashboardLayout';
@@ -18,7 +18,6 @@ const categories = [
   { icon: Users,     label: 'Communities',    count: 12, color: '#2EAF6F', slug: 'communities' },
   { icon: PiggyBank, label: 'Savings Groups', count: 9,  color: '#2eafaf', slug: 'savings-groups' },
   { icon: Shield,    label: 'Trust Score™',   count: 8,  color: '#8B5CF6', slug: 'trust-score' },
-  { icon: Award,     label: 'Karma™',         count: 6,  color: '#F59E0B', slug: 'karma' },
   { icon: Globe,     label: 'Passport™',      count: 5,  color: '#EF4444', slug: 'passport' },
   { icon: Vote,      label: 'Governance',     count: 7,  color: '#2EAF6F', slug: 'governance' },
   { icon: Zap,       label: 'Subscription',   count: 4,  color: '#F59E0B', slug: 'subscription' },
@@ -27,7 +26,6 @@ const categories = [
 
 const popularArticles = [
   { title: 'How does Trust Score™ work?',                  slug: 'how-trust-score-works',       category: 'Trust Score™',   reads: 2840 },
-  { title: 'What is Community Karma™?',                    slug: 'what-is-community-karma',      category: 'Karma™',         reads: 2210 },
   { title: 'How to create a savings group',                slug: 'create-savings-group',         category: 'Savings Groups', reads: 1980 },
   { title: 'Understanding your PadiHub Passport™',         slug: 'understanding-passport',       category: 'Passport™',      reads: 1750 },
   { title: 'How to invite members to your community',      slug: 'invite-members',               category: 'Communities',    reads: 1540 },
@@ -36,9 +34,8 @@ const popularArticles = [
 
 const faqs = [
   { q: 'How does Trust Score™ work?', a: 'Your Trust Score™ is a living reputation score built from your contribution reliability, governance participation, community engagement and peer vouching. It ranges from 0–1000 and updates in real time.' },
-  { q: 'What is Community Karma™?', a: 'Community Karma™ is PadiHub\'s achievement and recognition system. You earn Karma points by contributing on time, participating in governance, welcoming new members and completing community milestones.' },
   { q: 'How do savings groups work?', a: 'Savings groups are collective pools where members contribute regularly. Each group has a schedule, target and rules set by the community leader. Contributions are tracked transparently and your Trust Score™ reflects your reliability.' },
-  { q: 'What is the PadiHub Passport™?', a: 'Your PadiHub Passport™ is your verified community identity — a portable record of your Trust Score™, Karma™, communities, achievements and leadership roles. You can share it publicly or keep it private.' },
+  { q: 'What is the PadiHub Passport™?', a: 'Your PadiHub Passport™ is your verified community identity — a portable record of your Trust Score™, communities, achievements and leadership roles. You can share it publicly or keep it private.' },
   { q: 'Is PadiHub a bank?', a: 'No. PadiHub is a Community Operating System — not a bank, wallet or financial institution. We help communities organise, track and celebrate their savings journey together. We do not hold funds.' },
   { q: 'How do I cancel my subscription?', a: 'You can cancel your subscription at any time from Settings → Subscription → Cancel. Your access continues until the end of your billing period. Your data and community memberships are preserved.' },
 ];

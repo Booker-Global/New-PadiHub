@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { ReactNode } from 'react';
-import { Shield, Users, Award, TrendingUp } from 'lucide-react';
+import { Shield, Users, TrendingUp } from 'lucide-react';
 
 interface AuthLayoutProps {
   children: ReactNode;
@@ -13,7 +13,6 @@ interface AuthLayoutProps {
 const pillars = [
   { icon: Shield, label: 'Trust Score™', desc: 'Build your community reputation' },
   { icon: Users, label: 'Savings Groups', desc: 'Save together, grow together' },
-  { icon: Award, label: 'Community Karma™', desc: 'Earn recognition for every action' },
   { icon: TrendingUp, label: 'Progress Tracking', desc: 'Celebrate every milestone' },
 ];
 
@@ -125,7 +124,7 @@ export default function AuthLayout({ children, title, subtitle, step, totalSteps
               Belong.
             </h2>
             <p style={{ color: '#9CA3AF', fontSize: 15, lineHeight: 1.6, marginBottom: 40, maxWidth: 360 }}>
-              Join 10,000+ members building trust, saving smarter and celebrating every milestone together.
+              Join a community built on transparency — save smarter and celebrate every milestone together.
             </p>
 
             <div className="auth-pillars-grid">

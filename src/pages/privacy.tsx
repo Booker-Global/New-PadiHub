@@ -22,7 +22,7 @@ const sections = [
       },
       {
         subtitle: 'Community Activity',
-        text: 'We collect data about your participation in communities and savings groups, including contribution records, governance votes, and community interactions. This data forms the basis of your Trust Score™ and Community Karma™.',
+        text: 'We collect data about your participation in communities and savings groups, including contribution records, governance votes, and community interactions. This data forms the basis of your Trust Score™.',
       },
       {
         subtitle: 'Device & Usage Data',
@@ -41,8 +41,8 @@ const sections = [
         text: 'We use your information to operate PadiHub, process your membership, manage your communities and savings groups, and deliver the features described in our platform.',
       },
       {
-        subtitle: 'Trust Score™ & Community Karma™',
-        text: 'Your activity data is used to calculate and display your Trust Score™ and Community Karma™. These are core features of the platform and are visible to community members you interact with.',
+        subtitle: 'Trust Score™',
+        text: 'Your activity data is used to calculate and display your Trust Score™. This is a core feature of the platform and is visible to community members you interact with.',
       },
       {
         subtitle: 'Communications',
@@ -62,11 +62,11 @@ const sections = [
     content: [
       {
         subtitle: 'Within Communities',
-        text: 'When you join a community, your profile information, Trust Score™, Community Karma™, and contribution history are visible to other members of that community. Community leaders have additional visibility into member activity.',
+        text: 'When you join a community, your profile information, Trust Score™, and contribution history are visible to other members of that community. Community leaders have additional visibility into member activity.',
       },
       {
         subtitle: 'PadiHub Passport™',
-        text: 'If you choose to share your PadiHub Passport™, the information it contains (Trust Score™, Karma™, communities, achievements) will be accessible to anyone with the share link.',
+        text: 'If you choose to share your PadiHub Passport™, the information it contains (Trust Score™, communities, achievements) will be accessible to anyone with the share link.',
       },
       {
         subtitle: 'Service Providers',
@@ -264,7 +264,7 @@ export default function PrivacyPage() {
                   {[
                     'We collect only what we need to provide the PadiHub service.',
                     'We never sell your personal data to third parties.',
-                    'Your Trust Score™ and Karma™ data is visible within your communities.',
+                    'Your Trust Score™ data is visible within your communities.',
                     'You can export or delete your data at any time.',
                     'We use industry-standard security to protect your information.',
                   ].map((item, i) => (

@@ -3,19 +3,44 @@ import { Helmet } from '@dr.pogodin/react-helmet';
 import { useEffect, useState } from 'react';
 import {
   ArrowRight, Shield, Users, TrendingUp, Star, CheckCircle,
-  Zap, Globe, ChevronRight, Play, Heart, Sparkles, PiggyBank, Bell
+  Zap, Globe, ChevronRight, Play, Heart, Sparkles, PiggyBank, Bell, Plus
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { getValidSession } from '@/lib/session';
 
 const _jsonLd = "{\"@context\":\"https://schema.org\",\"@graph\":[{\"@type\":\"WebSite\",\"@id\":\"https://padihub.com/#website\",\"name\":\"PadiHub\",\"url\":\"https://padihub.com/\"},{\"@type\":\"Organization\",\"@id\":\"https://padihub.com/#organization\",\"name\":\"PadiHub\",\"url\":\"https://padihub.com/\",\"logo\":\"https://padihub.com/airo-assets/images/logo/primary\"},{\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/#webpage\",\"url\":\"https://padihub.com/\",\"name\":\"PadiHub — Save Together. Grow Together. Belong.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"},\"datePublished\":\"2026-07-16\",\"dateModified\":\"2026-07-16\"},{\"@type\":\"SoftwareApplication\",\"name\":\"PadiHub\",\"applicationCategory\":\"FinanceApplication\",\"operatingSystem\":\"Web\",\"offers\":{\"@type\":\"Offer\",\"price\":\"4.99\",\"priceCurrency\":\"GBP\"}}]}";
 
 type Region = 'UK' | 'NG' | 'BOTH';
 
+const regionCopy: Record<Region, { hero: string; illustration: string; trustBar: string; pricing: string; finalCta: string; }> = {
+  UK: {
+    hero: 'Built for members saving together in the United Kingdom.',
+    illustration: 'Built for members in the United Kingdom',
+    trustBar: 'United Kingdom pricing',
+    pricing: 'Showing membership options for the United Kingdom. Cancel anytime.',
+    finalCta: 'No credit card required · Cancel anytime · United Kingdom pricing shown',
+  },
+  NG: {
+    hero: 'Built for members saving together in Nigeria.',
+    illustration: 'Built for members in Nigeria',
+    trustBar: 'Nigeria pricing',
+    pricing: 'Showing membership options for Nigeria. Cancel anytime.',
+    finalCta: 'No credit card required · Cancel anytime · Nigeria pricing shown',
+  },
+  BOTH: {
+    hero: 'Built for members saving together in community circles of all kinds.',
+    illustration: 'Built for community savings groups',
+    trustBar: 'Region-aware pricing',
+    pricing: 'Choose the membership option that fits your region. Cancel anytime.',
+    finalCta: 'No credit card required · Cancel anytime · Choose the region that fits your group',
+  },
+};
+
 function usePricingRegion(): Region {
   const [region, setRegion] = useState<Region>('BOTH');
   useEffect(() => {
     // Only fetch geo after hydration — never during SSR or first client render
-    fetch('/api/geo')
+    window.fetch('/api/geo')
       .then(r => r.json())
       .then(data => { if (data?.region) setRegion(data.region); })
       .catch(() => setRegion('BOTH'));
@@ -30,30 +55,20 @@ function usePricingRegion(): Region {
 // useEffect. This guarantees the first client render is identical to the SSR
 // output (both see isLoggedIn=false / isMounted=false), preventing hydration
 // error #418 which fires when the server and client produce different DOM trees.
-function useAuthUser(): { isMounted: boolean; isLoggedIn: boolean; name: string; trust: number } {
-  const [state, setState] = useState<{ isMounted: boolean; isLoggedIn: boolean; name: string; trust: number }>({
-    isMounted: false, isLoggedIn: false, name: '', trust: 0,
+//
+// Uses getValidSession() (src/lib/session.ts) — the single source of truth for
+// session/JWT-expiry — rather than re-parsing localStorage/sessionStorage here,
+// so an expired token is treated as logged-out just like on /dashboard.
+function useAuthUser(): { isMounted: boolean; isLoggedIn: boolean; name: string; trust: number; token: string } {
+  const [state, setState] = useState<{ isMounted: boolean; isLoggedIn: boolean; name: string; trust: number; token: string }>({
+    isMounted: false, isLoggedIn: false, name: '', trust: 0, token: '',
   });
   useEffect(() => {
     // This effect runs only in the browser, after hydration is complete.
-    // Reading localStorage here is safe — it never runs on the server.
-    try {
-      const raw = localStorage.getItem('padihub_user');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed?.name) {
-          setState({ isMounted: true, isLoggedIn: true, name: parsed.name, trust: parsed.trust ?? 0 });
-          return;
-        }
-      }
-      const sessionFlag = sessionStorage.getItem('padihub_session');
-      if (sessionFlag) {
-        const parsed = JSON.parse(sessionFlag);
-        setState({ isMounted: true, isLoggedIn: true, name: parsed.name ?? 'Member', trust: parsed.trust ?? 0 });
-        return;
-      }
-    } catch {
-      // storage unavailable or malformed — fall through to mounted-but-not-logged-in
+    const session = getValidSession();
+    if (session?.token) {
+      setState({ isMounted: true, isLoggedIn: true, name: session.name || 'Member', trust: session.trust ?? 0, token: session.token });
+      return;
     }
     setState(s => ({ ...s, isMounted: true }));
   }, []);
@@ -61,14 +76,85 @@ function useAuthUser(): { isMounted: boolean; isLoggedIn: boolean; name: string;
 }
 
 // ── Mini Dashboard Card (logged-in only) ─────────────────────────────────────
-function DashboardPreview({ name, trust }: { name: string; trust: number }) {
+// Pulls the same real data as /dashboard (same API endpoints) instead of the
+// previous hardcoded "Lagos Savers Circle" demo group — a logged-in member
+// with no groups/contributions must see that here too, not a fake preview.
+interface PreviewGroup {
+  id: string;
+  name: string;
+  currency: string;
+  contribution_amount: string | number;
+  contribution_frequency: string;
+}
+
+interface PreviewContribution {
+  group_id: string;
+  amount_due: string | number;
+  due_date: string;
+  payment_status: string;
+}
+
+function formatPreviewCurrency(amount: string | number, currency: string) {
+  const value = typeof amount === 'string' ? Number.parseFloat(amount) : amount;
+  const symbol = currency === 'NGN' ? '₦' : currency === 'GBP' ? '£' : '';
+  if (!Number.isFinite(value)) return `${symbol}0`;
+  return `${symbol}${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+}
+
+function formatPreviewDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+}
+
+function DashboardPreview({ name, trust, token }: { name: string; trust: number; token: string }) {
   // Default to neutral greeting for SSR/first render — avoids hydration mismatch
   // when server clock and visitor's local time disagree on morning/afternoon/evening.
   const [greeting, setGreeting] = useState('Welcome back');
+  const [loading, setLoading] = useState(true);
+  const [trustScore, setTrustScore] = useState(trust);
+  const [groups, setGroups] = useState<PreviewGroup[]>([]);
+  const [dueContribution, setDueContribution] = useState<PreviewContribution | null>(null);
+
   useEffect(() => {
     const hour = new Date().getHours();
     setGreeting(hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening');
   }, []);
+
+  useEffect(() => {
+    if (!token) {
+      setLoading(false);
+      return;
+    }
+    let active = true;
+    const headers = { Authorization: 'Bearer ' + token };
+
+    void Promise.all([
+      window.fetch('/api/users/stats', { headers }).then(r => (r.ok ? r.json() : null)).catch(() => null),
+      window.fetch('/api/groups', { headers }).then(r => (r.ok ? r.json() : null)).catch(() => null),
+      window.fetch('/api/contributions', { headers }).then(r => (r.ok ? r.json() : null)).catch(() => null),
+    ]).then(([statsJson, groupsJson, contribJson]) => {
+      if (!active) return;
+      if (typeof statsJson?.data?.trust_score === 'number') setTrustScore(statsJson.data.trust_score);
+
+      const nextGroups: PreviewGroup[] = Array.isArray(groupsJson?.data) ? groupsJson.data : [];
+      setGroups(nextGroups);
+
+      const contributions: PreviewContribution[] = Array.isArray(contribJson?.data) ? contribJson.data : [];
+      const due = contributions
+        .filter(c => c.payment_status === 'due' || c.payment_status === 'overdue')
+        .sort((a, b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime())[0];
+      setDueContribution(due ?? null);
+    }).finally(() => {
+      if (active) setLoading(false);
+    });
+
+    return () => { active = false; };
+  }, [token]);
+
+  const firstGroup = groups[0];
+  const dueGroup = dueContribution ? groups.find(g => g.id === dueContribution.group_id) : undefined;
+
   return (
     <div className="relative w-full max-w-md mx-auto">
       <div className="absolute inset-0 rounded-3xl blur-3xl opacity-30" style={{ background: 'linear-gradient(135deg, #2EAF6F, #F59E0B)' }} />
@@ -82,7 +168,7 @@ function DashboardPreview({ name, trust }: { name: string; trust: number }) {
           </div>
           <div className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-bold"
             style={{ background: 'rgba(46,175,111,0.2)', color: '#2EAF6F', border: '1px solid rgba(46,175,111,0.3)' }}>
-            <Shield size={12} /> Trust: {trust}
+            <Shield size={12} /> Trust: {trustScore}
           </div>
         </div>
         {/* Quick actions */}
@@ -99,41 +185,59 @@ function DashboardPreview({ name, trust }: { name: string; trust: number }) {
             </Link>
           ))}
         </div>
-        {/* Savings group */}
-        <div className="rounded-2xl p-4 mb-3" style={{ background: 'rgba(46,175,111,0.1)', border: '1px solid rgba(46,175,111,0.2)' }}>
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-white font-semibold text-sm">Lagos Savers Circle</span>
-            <span className="text-xs font-bold" style={{ color: '#2EAF6F' }}>78% funded</span>
+        {/* Savings group — real data, or a real empty state if the member has none yet */}
+        {!loading && !firstGroup ? (
+          <Link to="/savings-groups/create" className="flex items-center gap-3 rounded-2xl p-4 mb-3 transition-all hover:opacity-90"
+            style={{ background: 'rgba(46,175,111,0.1)', border: '1px dashed rgba(46,175,111,0.3)' }}>
+            <div className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: 'rgba(46,175,111,0.2)' }}>
+              <Plus size={15} style={{ color: '#2EAF6F' }} />
+            </div>
+            <div>
+              <p className="text-white text-xs font-bold">Create your first savings group</p>
+              <p className="text-gray-400 text-xs">You haven't joined or created any groups yet.</p>
+            </div>
+          </Link>
+        ) : firstGroup ? (
+          <div className="rounded-2xl p-4 mb-3" style={{ background: 'rgba(46,175,111,0.1)', border: '1px solid rgba(46,175,111,0.2)' }}>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-white font-semibold text-sm truncate">{firstGroup.name}</span>
+              {groups.length > 1 && (
+                <span className="text-xs font-bold flex-shrink-0" style={{ color: '#2EAF6F' }}>+{groups.length - 1} more</span>
+              )}
+            </div>
+            <div className="flex items-center justify-between mt-2">
+              <span className="text-gray-400 text-xs">
+                {formatPreviewCurrency(firstGroup.contribution_amount, firstGroup.currency)} · {firstGroup.contribution_frequency}
+              </span>
+            </div>
           </div>
-          <div className="w-full h-2 rounded-full bg-white/10">
-            <div className="h-2 rounded-full" style={{ width: '78%', background: 'linear-gradient(90deg, #2EAF6F, #F59E0B)' }} />
+        ) : null}
+        {/* Notification — only a real, due contribution reminder, never fabricated */}
+        {dueContribution && (
+          <div className="flex items-center gap-3 rounded-2xl p-3" style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.2)' }}>
+            <div className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: 'rgba(245,158,11,0.2)' }}>
+              <Bell size={15} style={{ color: '#F59E0B' }} />
+            </div>
+            <div>
+              <p className="text-white text-xs font-bold">Payment reminder</p>
+              <p className="text-gray-400 text-xs">
+                {formatPreviewCurrency(dueContribution.amount_due, dueGroup?.currency ?? 'GBP')} due {formatPreviewDate(dueContribution.due_date)}
+                {dueGroup?.name ? ` · ${dueGroup.name}` : ''}
+              </p>
+            </div>
           </div>
-          <div className="flex items-center justify-between mt-2">
-            <span className="text-gray-400 text-xs">12 of 15 members contributed</span>
-            <span className="text-gray-400 text-xs">3 days left</span>
-          </div>
-        </div>
-        {/* Notification */}
-        <div className="flex items-center gap-3 rounded-2xl p-3" style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.2)' }}>
-          <div className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: 'rgba(245,158,11,0.2)' }}>
-            <Bell size={15} style={{ color: '#F59E0B' }} />
-          </div>
-          <div>
-            <p className="text-white text-xs font-bold">Payment reminder</p>
-            <p className="text-gray-400 text-xs">Your next contribution is due in 3 days</p>
-          </div>
-        </div>
+        )}
       </div>
     </div>
   );
 }
 
 // ── Hero illustration (logged-out — purely visual, no fake user data) ─────────
-function HeroIllustration() {
+function HeroIllustration({ region }: { region: Region }) {
   const features = [
     { icon: Shield,     label: 'Trust Score™',        sub: 'Built on payment history',   color: '#2EAF6F' },
     { icon: Users,      label: 'Savings Groups',       sub: 'Ajo, Esusu & more',          color: '#F59E0B' },
-    { icon: CheckCircle,label: 'Secure Payouts',       sub: 'Stripe & Flutterwave',       color: '#2eafaf' },
+    { icon: CheckCircle,label: 'Secure Payouts',       sub: 'Secure processing',          color: '#2eafaf' },
     { icon: TrendingUp, label: 'Full Transparency',    sub: 'Every contribution tracked', color: '#8B5CF6' },
   ];
   return (
@@ -183,8 +287,8 @@ function HeroIllustration() {
             ))}
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-white text-xs font-bold">Join thousands saving together</p>
-            <p className="text-gray-400 text-xs">UK &amp; Nigeria</p>
+            <p className="text-white text-xs font-bold">Create your first group</p>
+            <p className="text-gray-400 text-xs">{regionCopy[region].illustration}</p>
           </div>
           <ArrowRight size={14} style={{ color: '#2EAF6F' }} className="shrink-0" />
         </div>
@@ -197,14 +301,15 @@ function HeroIllustration() {
 export default function HomePage() {
   const pricingRegion = usePricingRegion();
   const authUser = useAuthUser();
+  const regionalCopy = regionCopy[pricingRegion];
   return (
     <>
       <Helmet>
         <title>PadiHub — Save Together. Grow Together. Belong.</title>
-        <meta name="description" content="PadiHub is a Community Operating System for savings. Build trust, join savings groups, earn Community Karma™ and reach your goals together." />
+        <meta name="description" content="PadiHub is a Community Operating System for savings. Build trust, join savings groups and reach your goals together." />
         <link rel="canonical" href="https://padihub.com/" />
         <meta property="og:title" content="PadiHub — Save Together. Grow Together. Belong." />
-        <meta property="og:description" content="The world's most trusted community savings platform. Join 10,000+ members saving smarter together." />
+        <meta property="og:description" content="PadiHub helps savings groups track contributions, manage rotations, and build trust together." />
         <meta property="og:type" content="website" />
         <meta property="og:url" content="https://padihub.com/" />
         <meta name="twitter:card" content="summary_large_image" />
@@ -261,22 +366,25 @@ export default function HomePage() {
 
               {/* Subheading */}
               <div style={{ fontSize: 'clamp(0.9rem, 2.5vw, 1.1rem)', color: '#D1D5DB', lineHeight: 1.7, marginBottom: 32, wordBreak: 'break-word', overflowWrap: 'break-word' }}>
-                PadiHub is a trusted digital platform for rotating savings groups — Ajo, Esusu, Contribution Groups. Save together, track every contribution, and receive your payout when it's your turn.
+                <p style={{ margin: 0 }}>
+                  PadiHub is a digital platform for rotating savings groups — Ajo, Esusu, contribution groups, and other community savings circles. Set clear rules, track every contribution, and keep payouts transparent from the first collection to the next turn.
+                </p>
+                <p style={{ color: '#FFFFFF', margin: '12px 0 0', fontWeight: 600 }}>{regionalCopy.hero}</p>
               </div>
 
-              {/* Stat */}
+              {/* Value proposition */}
               <div style={{ marginBottom: 32 }}>
-                <div style={{ fontSize: 'clamp(2.5rem, 8vw, 4.5rem)', fontWeight: 900, fontFamily: 'Nunito, sans-serif', background: 'linear-gradient(135deg, #2EAF6F, #F59E0B)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', lineHeight: 1 }}>
-                  £2.4M+
+                <div style={{ fontSize: 'clamp(1.75rem, 5vw, 2.5rem)', fontWeight: 900, fontFamily: 'Nunito, sans-serif', background: 'linear-gradient(135deg, #2EAF6F, #F59E0B)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', lineHeight: 1.15 }}>
+                  Clear rules. Visible contributions.
                 </div>
-                <div style={{ color: '#9CA3AF', fontSize: 14, marginTop: 4 }}>saved by our community and counting</div>
+                <div style={{ color: '#9CA3AF', fontSize: 14, marginTop: 8, lineHeight: 1.6 }}>Bring your group together with transparent records, structured rotations, and a shared view of what happens next.</div>
               </div>
 
               {/* CTA buttons */}
               <div className="hero-cta" style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 40 }}>
                 <Button asChild size="lg" style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', color: '#fff', boxShadow: '0 0 30px rgba(46,175,111,0.5)', borderRadius: 999, fontWeight: 700, width: '100%' }}>
                   <Link to="/get-started" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-                    Start saving together <ArrowRight size={18} />
+                    Get started free <ArrowRight size={18} />
                   </Link>
                 </Button>
                 <Button asChild variant="outline" size="lg" style={{ borderRadius: 999, fontWeight: 700, width: '100%', borderColor: 'rgba(255,255,255,0.2)', color: '#fff', background: 'transparent' }}>
@@ -286,25 +394,14 @@ export default function HomePage() {
                 </Button>
               </div>
 
-              {/* Social proof */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                <div style={{ display: 'flex', flexDirection: 'row', flexShrink: 0 }}>
-                  {['A', 'K', 'O', 'M', 'T'].map((l, i) => (
-                    <div key={i} style={{
-                      width: 36, height: 36, borderRadius: '50%',
-                      border: '2px solid #1F2937',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      fontSize: 12, fontWeight: 700, color: '#fff', flexShrink: 0,
-                      background: ['#2EAF6F','#F59E0B','#2eafaf','#8B5CF6','#EF4444'][i],
-                      marginLeft: i === 0 ? 0 : -10,
-                    }}>{l}</div>
-                  ))}
+              {/* Trust message */}
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, maxWidth: '32rem' }}>
+                <div style={{ width: 40, height: 40, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, background: 'rgba(46,175,111,0.16)', border: '1px solid rgba(46,175,111,0.25)' }}>
+                  <Shield size={16} style={{ color: '#2EAF6F' }} />
                 </div>
                 <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                    {[...Array(5)].map((_, i) => <Star key={i} size={12} fill="#F59E0B" color="#F59E0B" />)}
-                  </div>
-                  <div style={{ color: '#9CA3AF', fontSize: 12 }}>10,000+ members trust PadiHub</div>
+                  <div style={{ color: '#fff', fontSize: 14, fontWeight: 700, marginBottom: 4 }}>Built for transparent rotating savings</div>
+                  <div style={{ color: '#9CA3AF', fontSize: 12, lineHeight: 1.6 }}>Keep contributions visible, follow the rotation, and build trust with every on-time payment.</div>
                 </div>
               </div>
             </div>
@@ -317,8 +414,8 @@ export default function HomePage() {
                   Without this gate, React 19 detects a server/client DOM mismatch
                   and throws hydration error #418. */}
               {authUser.isMounted && authUser.isLoggedIn
-                ? <DashboardPreview name={authUser.name} trust={authUser.trust} />
-                : <HeroIllustration />
+                ? <DashboardPreview name={authUser.name} trust={authUser.trust} token={authUser.token} />
+                : <HeroIllustration region={pricingRegion} />
               }
             </div>
           </div>
@@ -330,7 +427,7 @@ export default function HomePage() {
             {[
               { icon: Shield,      label: 'Trust Score™ System' },
               { icon: Users,       label: 'Rotating Savings Groups' },
-              { icon: Globe,       label: 'UK & Nigeria' },
+              { icon: Globe,       label: regionalCopy.trustBar },
               { icon: Zap,         label: 'Instant Contributions' },
               { icon: CheckCircle, label: 'Secure Payouts' },
             ].map(({ icon: Icon, label }) => (
@@ -414,11 +511,12 @@ export default function HomePage() {
                 <p style={{ color: '#D1D5DB', lineHeight: 1.6, marginBottom: 24, fontSize: 14 }}>
                   Every on-time contribution builds your Trust Score™. Members with higher scores are more likely to be accepted into new groups — your reliability travels with you.
                 </p>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <div style={{ flex: 1, height: 8, borderRadius: 999, background: 'rgba(255,255,255,0.1)' }}>
-                    <div style={{ width: '84%', height: 8, borderRadius: 999, background: 'linear-gradient(90deg, #2EAF6F, #F59E0B)' }} />
-                  </div>
-                  <span style={{ color: '#fff', fontWeight: 700, fontSize: 13, whiteSpace: 'nowrap' }}>847 / 1000</span>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {['Built on payment history', 'Visible to group leaders', 'Reputation that moves with you'].map(item => (
+                    <span key={item} style={{ padding: '6px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600, color: '#D1D5DB', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)' }}>
+                      {item}
+                    </span>
+                  ))}
                 </div>
               </div>
             </div>
@@ -432,16 +530,14 @@ export default function HomePage() {
               <p style={{ color: '#6B7280', fontSize: 14, lineHeight: 1.6, marginBottom: 16 }}>
                 Create or join rotating savings groups. Set contribution amounts, group size, and payout order. Track every payment in real time.
               </p>
-              {[{ name: 'House Fund', pct: 72 }, { name: 'Holiday 2026', pct: 45 }].map(g => (
-                <div key={g.name} style={{ marginBottom: 8 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#6B7280', marginBottom: 4 }}>
-                    <span>{g.name}</span><span>{g.pct}%</span>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {['Set contribution amounts together', 'Choose a rotation order that fits the group', 'See the full payment and payout history in one place'].map(item => (
+                  <div key={item} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 13, color: '#4B5563' }}>
+                    <CheckCircle size={15} style={{ color: '#2EAF6F', flexShrink: 0, marginTop: 1 }} />
+                    <span>{item}</span>
                   </div>
-                  <div style={{ height: 6, borderRadius: 999, background: '#E5E7EB' }}>
-                    <div style={{ width: `${g.pct}%`, height: 6, borderRadius: 999, background: '#2EAF6F' }} />
-                  </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
 
             {/* Secure Payments */}
@@ -451,7 +547,7 @@ export default function HomePage() {
               </div>
               <h3 style={{ color: '#111827', fontWeight: 700, fontSize: 18, marginBottom: 8, fontFamily: 'Nunito, sans-serif' }}>Secure Payments</h3>
               <p style={{ color: '#6B7280', fontSize: 14, lineHeight: 1.6 }}>
-                UK members pay via Stripe. Nigerian members pay via Flutterwave. Payouts are processed automatically when all contributions are received.
+                Members pay through secure, region-appropriate payment flows. Payouts are processed automatically when all contributions are received.
               </p>
             </div>
 
@@ -522,7 +618,7 @@ export default function HomePage() {
           <div style={{ textAlign: 'center', marginBottom: '4rem' }}>
             <p style={{ fontSize: 13, fontWeight: 700, color: '#2EAF6F', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 12 }}>Simple pricing</p>
             <h2 style={{ fontSize: 'clamp(1.75rem, 4vw, 2.25rem)', fontWeight: 800, color: '#111827', marginBottom: 12, fontFamily: 'Nunito, sans-serif' }}>Join the community today</h2>
-            <p style={{ color: '#6B7280', fontSize: 16 }}>Available in the UK and Nigeria. Cancel anytime.</p>
+            <p style={{ color: '#6B7280', fontSize: 16 }}>{regionalCopy.pricing}</p>
           </div>
 
           <div className={pricingRegion === 'BOTH' ? 'pricing-grid-both' : ''} style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '2rem', maxWidth: pricingRegion === 'BOTH' ? undefined : '32rem', margin: pricingRegion === 'BOTH' ? undefined : '0 auto' }}>
@@ -539,7 +635,7 @@ export default function HomePage() {
                 </div>
                 <p style={{ fontSize: 13, color: '#6B7280', marginBottom: 24 }}>or <strong>{plan.annual}/year</strong> — <span style={{ color: plan.color }}>{plan.save}</span></p>
                 <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 2rem', display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {['Unlimited Savings Groups', 'Trust Score™ System', 'Secure Payments (Stripe / Flutterwave)', 'Rotation Tracking', 'Payment Reminders', 'Group Management Tools'].map(f => (
+                  {['Unlimited Savings Groups', 'Trust Score™ System', 'Secure payment processing', 'Rotation Tracking', 'Payment Reminders', 'Group Management Tools'].map(f => (
                     <li key={f} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, color: '#374151' }}>
                       <CheckCircle size={15} style={{ color: plan.color, flexShrink: 0 }} /> {f}
                     </li>
@@ -571,13 +667,13 @@ export default function HomePage() {
           </p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, justifyContent: 'center' }}>
             <Button asChild size="lg" style={{ borderRadius: 999, padding: '0 2.5rem', fontWeight: 700, fontSize: 16, background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', color: '#fff', boxShadow: '0 0 40px rgba(46,175,111,0.5)' }}>
-              <Link to="/get-started" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>Start saving together <ArrowRight size={20} /></Link>
+              <Link to="/get-started" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>Get started free <ArrowRight size={20} /></Link>
             </Button>
             <Button asChild variant="outline" size="lg" style={{ borderRadius: 999, padding: '0 2.5rem', fontWeight: 700, fontSize: 16, borderColor: 'rgba(255,255,255,0.2)', color: '#fff', background: 'transparent' }}>
               <Link to="/how-it-works" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>Learn more <ChevronRight size={20} /></Link>
             </Button>
           </div>
-          <p style={{ color: '#6B7280', fontSize: 13, marginTop: 24 }}>No credit card required · Cancel anytime · UK &amp; Nigeria</p>
+          <p style={{ color: '#6B7280', fontSize: 13, marginTop: 24 }}>{regionalCopy.finalCta}</p>
         </div>
       </section>
     </>

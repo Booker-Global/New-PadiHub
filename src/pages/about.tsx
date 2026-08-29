@@ -1,15 +1,15 @@
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { Link } from 'react-router-dom';
-import { Shield, Users, TrendingUp, Heart, ArrowRight, Globe, Award, Zap, CheckCircle } from 'lucide-react';
+import { Shield, Users, TrendingUp, Heart, ArrowRight, Globe, Zap, CheckCircle } from 'lucide-react';
 
 const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/about#webpage\",\"name\":\"About PadiHub — Our Mission & Story\",\"url\":\"https://padihub.com/about\",\"description\":\"PadiHub was built to make community savings accessible, transparent and rewarding for everyone. Learn about our mission, values and the team behind it.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"}}";
 
 
 const stats = [
-  { value: '£2.4M+', label: 'Community savings coordinated', color: '#2EAF6F' },
-  { value: '1,200+', label: 'Verified communities',          color: '#F59E0B' },
-  { value: '18,000+', label: 'Active members',               color: '#2eafaf' },
-  { value: '96%',    label: 'Contribution completion rate',  color: '#8B5CF6' },
+  { value: 'Transparent groups', label: 'Track contributions, payouts and shared records in one place.', color: '#2EAF6F' },
+  { value: 'Portable trust', label: 'Trust Score helps members carry their reputation between groups.', color: '#F59E0B' },
+  { value: 'Shared governance', label: 'Set rules together and keep decisions visible to the full group.', color: '#2eafaf' },
+  { value: 'Structured rotations', label: 'Keep every member aligned on the saving order and next steps.', color: '#8B5CF6' },
 ];
 
 const values = [
@@ -43,12 +43,6 @@ const values = [
     desc: 'Loneliness is a global crisis. PadiHub creates genuine belonging — communities where people know each other, trust each other and grow together.',
     color: '#EF4444',
   },
-  {
-    icon: Award,
-    title: 'Achievement Recognised',
-    desc: 'Positive participation deserves recognition. Community Karma™ and our badge system ensure that every contribution, vote and act of community leadership is celebrated.',
-    color: '#F59E0B',
-  },
 ];
 
 const team = [
@@ -61,11 +55,11 @@ const team = [
 ];
 
 const milestones = [
-  { year: '2022', title: 'The idea',          desc: 'PadiHub was conceived after our founders experienced the pain of disorganised community savings first-hand.' },
-  { year: '2023', title: 'Building in public', desc: 'We spent a year talking to 500+ community leaders across the UK and Nigeria to understand their real needs.' },
-  { year: '2024', title: 'Beta launch',        desc: 'PadiHub launched in private beta with 50 communities. Trust Score™ and Community Karma™ were born.' },
-  { year: '2025', title: 'Scale',              desc: 'We grew to 1,200+ communities across the UK and Nigeria. £2.4M+ in community savings coordinated.' },
-  { year: '2026', title: 'The future',         desc: 'PadiHub Passport™ and Community DNA™ launch. We\'re building the world\'s most trusted community infrastructure.' },
+  { year: '2022', title: 'The idea', desc: 'PadiHub was conceived after our founders experienced the pain of disorganised community savings first-hand.' },
+  { year: '2023', title: 'Listening first', desc: 'We spent time learning how community organisers and members keep savings groups running, and where trust can break down.' },
+  { year: '2024', title: 'Designing the platform', desc: 'We shaped the early product around contribution tracking, shared rules, and transparent payouts.' },
+  { year: '2025', title: 'Preparing for launch', desc: 'We refined the core experience so groups can start with clear expectations and better visibility.' },
+  { year: '2026', title: 'The future', desc: 'PadiHub Passport™ and Community DNA™ continue to guide how we build trusted community infrastructure.' },
 ];
 
 export default function AboutPage() {
@@ -135,7 +129,7 @@ export default function AboutPage() {
                 Making community savings accessible to everyone
               </h2>
               <p style={{ color: '#4B5563', lineHeight: 1.7, marginBottom: 16 }}>
-                Across the UK and Nigeria, millions of people participate in informal community savings — known as ajo, esusu, susu, tontines, or rotating savings groups. These traditions are powerful, but they often lack the tools to operate transparently and at scale.
+                Community savings traditions — including ajo, esusu, susu, tontines, and rotating savings groups — help people save together through shared discipline and trust. These traditions are powerful, but they often lack the tools to operate transparently at scale.
               </p>
               <p style={{ color: '#4B5563', lineHeight: 1.7, marginBottom: 24 }}>
                 PadiHub provides the digital infrastructure that makes these communities more organised, more trustworthy, and more rewarding for every member. We are not replacing tradition — we are empowering it.
@@ -157,7 +151,6 @@ export default function AboutPage() {
             <div className="r-grid-2">
               {[
                 { icon: Shield, label: 'Trust Score™',    desc: 'Reputation that travels with you',     color: '#2EAF6F' },
-                { icon: Award,  label: 'Karma™',          desc: 'Recognition for positive participation', color: '#F59E0B' },
                 { icon: Globe,  label: 'Passport™',       desc: 'Your portable community identity',     color: '#2eafaf' },
                 { icon: Zap,    label: 'Governance',      desc: 'Democratic community decisions',       color: '#8B5CF6' },
               ].map((f, i) => (
@@ -273,7 +266,7 @@ export default function AboutPage() {
         <div style={{ position: 'absolute', top: 0, right: 0, width: 320, height: 320, borderRadius: '50%', filter: 'blur(60px)', opacity: 0.15, background: '#2EAF6F', pointerEvents: 'none' }} />
         <div style={{ maxWidth: '48rem', margin: '0 auto', padding: '0 1.25rem', textAlign: 'center', position: 'relative' }}>
           <h2 style={{ fontSize: 'clamp(1.5rem, 4vw, 2.5rem)', fontWeight: 800, color: '#fff', marginBottom: 16, fontFamily: 'Nunito, sans-serif' }}>Ready to build trust together?</h2>
-          <p style={{ color: '#D1D5DB', fontSize: 17, marginBottom: 32 }}>Join 18,000+ members across the UK and Nigeria who are saving smarter, together.</p>
+          <p style={{ color: '#D1D5DB', fontSize: 17, marginBottom: 32 }}>Bring your group together with transparent records, secure payment flows, and tools designed for trust.</p>
           <div className="r-flex-center">
             <Link to="/get-started" style={{ padding: '14px 32px', borderRadius: 16, fontWeight: 700, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, textDecoration: 'none', background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', boxShadow: '0 4px 20px rgba(46,175,111,0.4)' }}>
               Get started free <ArrowRight size={18} />

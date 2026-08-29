@@ -4,7 +4,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import {
   Bell, Camera, CheckCircle, ChevronRight, Edit,
   Eye, Globe, Lock, LogOut, Palette, Settings,
-  Shield, Trash2, TrendingUp, User, Users,
+  Shield, Trash2, TrendingUp, User, Users, CreditCard,
 } from 'lucide-react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { MotionDiv } from '@/lib/motion-safe';
@@ -19,6 +19,7 @@ const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.06 } }
 const quickActions = [
   { label: 'Edit Profile', icon: Edit, color: '#2EAF6F', link: '/profile/edit' },
   { label: 'Trust Score™', icon: Shield, color: '#8B5CF6', link: '/trust' },
+  { label: 'Payments', icon: CreditCard, color: '#EF4444', link: '/payments/methods' },
   { label: 'Notifications', icon: Bell, color: '#2eafaf', link: '/notifications' },
   { label: 'Settings', icon: Settings, color: '#F59E0B', link: '/settings' },
 ];

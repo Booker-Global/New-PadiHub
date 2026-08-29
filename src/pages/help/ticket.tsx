@@ -4,7 +4,7 @@ import { MotionDiv } from '@/lib/motion-safe';
 import { Link } from 'react-router-dom';
 import {
   MessageSquare, ArrowLeft, CheckCircle,
-  Clock, Shield, Users, PiggyBank, Vote, Award, Globe, Zap
+  Clock, Shield, Users, PiggyBank, Vote, Globe, Zap
 } from 'lucide-react';
 import DashboardLayout from '@/components/DashboardLayout';
 
@@ -13,7 +13,6 @@ const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.07 } }
 
 const categories = [
   { label: 'Trust Score™',   icon: Shield,    color: '#8B5CF6' },
-  { label: 'Karma™',         icon: Award,     color: '#F59E0B' },
   { label: 'Savings Groups', icon: PiggyBank, color: '#2EAF6F' },
   { label: 'Communities',    icon: Users,     color: '#2eafaf' },
   { label: 'Passport™',      icon: Globe,     color: '#EF4444' },

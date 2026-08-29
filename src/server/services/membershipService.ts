@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -7,8 +7,11 @@ import { createAuditLog } from '../middleware/auditLogger.js';
 import { notificationService } from './notificationService.js';
 import { trustScoreService } from './trustScoreService.js';
 import { groupService } from './groupService.js';
+import { assertPaymentSetupComplete } from './paymentEligibilityService.js';
+import { TRUST_SCORE_DELTA_MEMBER_SUSPENDED } from '../lib/constants.js';
 import {
   sendMemberRemovedEmail,
+  sendGroupMemberSuspendedNotificationEmail,
   sendInvitationAcceptedEmail,
 } from '../integrations/email/emailService.js';
 
@@ -33,6 +36,11 @@ export const membershipService = {
     // Check not already a member
     const existing = members.find(m => m.user_id === userId && m.status === 'active');
     if (existing) throw new AppError('Already a member of this group.', 409);
+
+    // Every member eventually receives a payout when it's their turn, so a
+    // verified payment method (to contribute) and a verified payout
+    // destination (to be paid out) are both required before joining.
+    await assertPaymentSetupComplete(userId);
 
     // Check identity verification — joining is allowed but a warning is returned if unverified
     const userRows = await db.select({ identity_verified: schema.users.identity_verified })
@@ -107,10 +115,37 @@ export const membershipService = {
       message: `You have been removed from "${group.name}".`,
     });
 
-    // Email the removed member
-    const userRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, memberId)).limit(1);
+    // Email the removed member, and notify every other active member — a
+    // removal affects the whole rotation, not just the person removed.
+    const userRow = await db.select({
+      email: schema.users.email, first_name: schema.users.first_name, last_name: schema.users.last_name,
+    }).from(schema.users).where(eq(schema.users.id, memberId)).limit(1);
     if (userRow.length) {
       await sendMemberRemovedEmail(userRow[0].email, group.name, 'Removed by group leader.');
+
+      const removedName = `${userRow[0].first_name} ${userRow[0].last_name}`;
+      const otherMembers = await db.select().from(schema.memberships)
+        .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')));
+      const otherMemberIds = otherMembers.map(other => other.user_id).filter(id => id !== memberId);
+      const otherUserEmailsById = new Map(
+        otherMemberIds.length
+          ? (await db.select({ id: schema.users.id, email: schema.users.email })
+              .from(schema.users).where(inArray(schema.users.id, otherMemberIds)))
+              .map(row => [row.id, row.email] as const)
+          : [],
+      );
+      for (const other of otherMembers) {
+        if (other.user_id === memberId) continue;
+        const otherEmail = otherUserEmailsById.get(other.user_id);
+        if (otherEmail) {
+          await sendGroupMemberSuspendedNotificationEmail(otherEmail, group.name, removedName);
+        }
+        await notificationService.create({
+          userId: other.user_id, type: 'group_member_suspended',
+          title: 'Group Membership Update',
+          message: `${removedName} has been removed from "${group.name}" by the group leader.`,
+        });
+      }
     }
     return true;
   },
@@ -144,7 +179,7 @@ export const membershipService = {
         .set({ status: 'suspended' })
         .where(eq(schema.memberships.id, membership.id));
 
-      await trustScoreService.decrease(userId, 10, 'MEMBER_SUSPENDED');
+      await trustScoreService.decrease(userId, TRUST_SCORE_DELTA_MEMBER_SUSPENDED, 'MEMBER_SUSPENDED');
       await createAuditLog({
         userId, action: 'MEMBER_SUSPENDED', entity: 'memberships',
         entityId: membership.id, ipAddress,
@@ -155,6 +190,43 @@ export const membershipService = {
         title: 'Membership Suspended',
         message: `Your membership in "${group.name}" has been suspended due to repeated missed contributions.`,
       });
+
+      // Email the suspended member, and notify every other active member —
+      // a suspension affects the whole rotation, not just the person removed.
+      const suspendedUserRow = await db.select({
+        email: schema.users.email, first_name: schema.users.first_name, last_name: schema.users.last_name,
+      }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
+      if (suspendedUserRow.length) {
+        await sendMemberRemovedEmail(
+          suspendedUserRow[0].email, group.name,
+          'Suspended after repeated missed contributions.',
+        );
+
+        const suspendedName = `${suspendedUserRow[0].first_name} ${suspendedUserRow[0].last_name}`;
+        const otherMembers = await db.select().from(schema.memberships)
+          .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')));
+        const otherMemberIds = otherMembers.map(other => other.user_id).filter(id => id !== userId);
+        const otherUserEmailsById = new Map(
+          otherMemberIds.length
+            ? (await db.select({ id: schema.users.id, email: schema.users.email })
+                .from(schema.users).where(inArray(schema.users.id, otherMemberIds)))
+                .map(row => [row.id, row.email] as const)
+            : [],
+        );
+        for (const other of otherMembers) {
+          if (other.user_id === userId) continue;
+          const otherEmail = otherUserEmailsById.get(other.user_id);
+          if (otherEmail) {
+            await sendGroupMemberSuspendedNotificationEmail(otherEmail, group.name, suspendedName);
+          }
+          await notificationService.create({
+            userId: other.user_id, type: 'group_member_suspended',
+            title: 'Group Membership Update',
+            message: `${suspendedName} has been suspended from "${group.name}" after repeated missed contributions.`,
+          });
+        }
+      }
+
       return { action: 'suspended' as const, newStrikeCount };
     }
 

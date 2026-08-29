@@ -9,7 +9,7 @@ const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@i
 const features = [
   'Unlimited Savings Groups',
   'Trust Score™',
-  'Secure Payments (Stripe / Flutterwave)',
+  'Secure payment processing',
   'Rotation Tracking',
   'Payment Reminders',
   'Group Management Tools',
@@ -209,7 +209,7 @@ export default function PricingPage() {
           <div className="trust-grid">
             {[
               { icon: Shield, title: 'Secure & trusted',  desc: 'Your data and community are always protected.',    color: '#2EAF6F' },
-              { icon: Star,   title: '4.9★ satisfaction', desc: '18,000+ members trust PadiHub every day.',         color: '#F59E0B' },
+              { icon: Star,   title: 'Clear pricing',     desc: 'See the published monthly and annual membership options before you subscribe.', color: '#F59E0B' },
               { icon: Zap,    title: 'Cancel anytime',    desc: 'No lock-in. No penalties. Your choice, always.',   color: '#8B5CF6' },
             ].map((t, i) => (
               <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>

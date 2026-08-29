@@ -16,7 +16,7 @@ const planDetails: Record<string, { name: string; price: string; period: string;
 
 const features = [
   'Unlimited Communities & Savings Groups',
-  'Trust Score™ & Community Karma™',
+  'Trust Score™',
   'PadiHub Passport™ & Community DNA™',
   'Analytics, Governance & Voting',
   'Priority Support & AI Onboarding',
@@ -138,7 +138,7 @@ export default function SubscriptionConfirmPage() {
                         <option>MTN Mobile Money</option>
                         <option>Airtel Money</option>
                         <option>Opay</option>
-                        <option>Flutterwave</option>
+                        <option>Other mobile money provider</option>
                       </select>
                     </div>
                   </div>

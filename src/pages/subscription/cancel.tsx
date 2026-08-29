@@ -5,7 +5,7 @@ import { MotionDiv } from '@/lib/motion-safe';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   ChevronLeft, AlertCircle, CheckCircle, Shield, Users,
-  Award, TrendingUp, ArrowRight, Heart
+  TrendingUp, ArrowRight, Heart
 } from 'lucide-react';
 import DashboardLayout from '@/components/DashboardLayout';
 
@@ -13,10 +13,9 @@ const fadeUp = { hidden: { opacity: 0, y: 16 }, visible: { opacity: 1, y: 0, tra
 const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.07 } } };
 
 const lossItems = [
-  { icon: Users,     label: 'Access to 4 communities',           color: '#2EAF6F' },
-  { icon: Shield,    label: 'Trust Score™ of 847',               color: '#2eafaf' },
-  { icon: Award,     label: '1,240 Community Karma™ points',     color: '#F59E0B' },
-  { icon: TrendingUp,label: '3 active savings groups',           color: '#8B5CF6' },
+  { icon: Users,     label: 'Access to your savings communities', color: '#2EAF6F' },
+  { icon: Shield,    label: 'Your Trust Score™ progress',        color: '#2eafaf' },
+  { icon: TrendingUp,label: 'Your active savings groups',        color: '#8B5CF6' },
 ];
 
 const reasons = [

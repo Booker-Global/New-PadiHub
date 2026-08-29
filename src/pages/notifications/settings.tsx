@@ -57,12 +57,10 @@ const groups = [
     ],
   },
   {
-    title: 'Trust & Karma', icon: Shield, color: '#F59E0B',
+    title: 'Trust Score', icon: Shield, color: '#F59E0B',
     settings: [
       { key: 'trust_change',    label: 'Trust Score™ Changes',       desc: 'When your Trust Score™ changes',             default: true },
       { key: 'trust_tier',      label: 'Trust Tier Updates',         desc: 'When you reach a new Trust Tier',            default: true },
-      { key: 'karma_earned',    label: 'Karma Earned',               desc: 'When you earn Community Karma™',             default: false },
-      { key: 'karma_milestone', label: 'Karma Milestones',           desc: 'When you reach Karma milestones',            default: true },
     ],
   },
   {

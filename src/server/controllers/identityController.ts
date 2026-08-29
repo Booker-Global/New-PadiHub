@@ -18,6 +18,7 @@ import {
   sendVerificationFeeChargedEmail,
 } from '../integrations/email/emailService.js';
 import { ip } from '../lib/reqHelpers.js';
+import { TRUST_SCORE_DELTA_IDENTITY_VERIFIED } from '../lib/constants.js';
 
 const stripeIdentity      = new StripeIdentityProvider();
 const flutterwaveIdentity = new FlutterwaveIdentityProvider();
@@ -77,7 +78,7 @@ export async function stripeIdentityWebhook(req: Request, res: Response, next: N
       // Add £1.50 verification fee as pending invoice item
       await stripeIdentity.addVerificationFeeToFirstInvoice(userId);
 
-      await trustScoreService.increase(userId, 50, 'IDENTITY_VERIFIED');
+      await trustScoreService.increase(userId, TRUST_SCORE_DELTA_IDENTITY_VERIFIED, 'IDENTITY_VERIFIED');
       await notificationService.create({
         userId, type: 'identity_verified',
         title: 'Identity Verified',
@@ -137,7 +138,7 @@ export async function confirmBvn(req: Request, res: Response, next: NextFunction
     const result = await flutterwaveIdentity.confirmBvnOtp(userId, otp);
 
     if (result.verified) {
-      await trustScoreService.increase(userId, 50, 'IDENTITY_VERIFIED');
+      await trustScoreService.increase(userId, TRUST_SCORE_DELTA_IDENTITY_VERIFIED, 'IDENTITY_VERIFIED');
       await notificationService.create({
         userId, type: 'identity_verified',
         title: 'BVN Verified',

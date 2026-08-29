@@ -7,6 +7,7 @@ import { createAuditLog } from '../middleware/auditLogger.js';
 import { notificationService } from './notificationService.js';
 import { trustScoreService } from './trustScoreService.js';
 import { membershipService } from './membershipService.js';
+import { TRUST_SCORE_DELTA_CONTRIBUTION_PAID, TRUST_SCORE_DELTA_CONTRIBUTION_MISSED } from '../lib/constants.js';
 import {
   sendContributionSuccessEmail,
   sendContributionFailedEmail,
@@ -45,16 +46,22 @@ export const contributionService = {
     return id;
   },
 
-  async markPaid(contributionId: string, providerReference: string, ipAddress?: string) {
+  async markPaid(contributionId: string, providerReference: string, ipAddress?: string, feeAmount?: string) {
     
     const rows = await db.select().from(schema.contributions)
       .where(eq(schema.contributions.id, contributionId)).limit(1);
     if (!rows.length) throw new AppError('Contribution not found.', 404);
     const c = rows[0];
 
+    // Idempotent: a contribution may be charged and marked paid synchronously
+    // (e.g. by the auto-charge job) and again later by the provider webhook —
+    // skip re-processing so trust score / notifications / emails aren't duplicated.
+    if (c.payment_status === 'paid') return true;
+
     await db.update(schema.contributions).set({
       payment_status:     'paid',
       amount_paid:        c.amount_due,
+      fee_amount:          feeAmount ?? c.fee_amount,
       paid_date:          new Date(),
       provider_reference: providerReference,
     }).where(eq(schema.contributions.id, contributionId));
@@ -65,7 +72,7 @@ export const contributionService = {
       title: 'Contribution Recorded',
       message: `Your contribution for cycle ${c.cycle_number} has been recorded.`,
     });
-    await trustScoreService.increase(c.member_id, 2, 'CONTRIBUTION_PAID');
+    await trustScoreService.increase(c.member_id, TRUST_SCORE_DELTA_CONTRIBUTION_PAID, 'CONTRIBUTION_PAID');
 
     // Email — look up user email and group name
     const userRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, c.member_id)).limit(1);
@@ -84,6 +91,10 @@ export const contributionService = {
       .where(eq(schema.contributions.id, contributionId)).limit(1);
     if (!rows.length) throw new AppError('Contribution not found.', 404);
     const c = rows[0];
+
+    // Idempotent — don't downgrade an already-paid contribution, and don't
+    // re-notify if it was already marked failed by an earlier attempt.
+    if (c.payment_status === 'paid' || c.payment_status === 'failed') return true;
 
     await db.update(schema.contributions)
       .set({ payment_status: 'failed' })
@@ -125,7 +136,7 @@ export const contributionService = {
       title: 'Missed Contribution',
       message: `You missed your contribution for cycle ${c.cycle_number}. This affects your Trust Score.`,
     });
-    await trustScoreService.decrease(c.member_id, 5, 'CONTRIBUTION_MISSED');
+    await trustScoreService.decrease(c.member_id, TRUST_SCORE_DELTA_CONTRIBUTION_MISSED, 'CONTRIBUTION_MISSED');
 
     const userRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, c.member_id)).limit(1);
     const groupRow = await db.select({ name: schema.savingsGroups.name, currency: schema.savingsGroups.currency }).from(schema.savingsGroups).where(eq(schema.savingsGroups.id, c.group_id)).limit(1);

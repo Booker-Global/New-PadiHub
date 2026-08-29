@@ -41,8 +41,8 @@ const sections = [
         text: 'PadiHub does not hold, process, or transfer funds on behalf of members or communities. PadiHub does not provide financial advice, investment recommendations, or regulated financial services. All financial transactions between community members are conducted independently of PadiHub.',
       },
       {
-        subtitle: 'Trust Score™ & Community Karma™',
-        text: 'Trust Score™ and Community Karma™ are reputation metrics calculated from your activity on PadiHub. They are informational tools for community use and do not constitute credit scores, financial assessments, or regulated ratings.',
+        subtitle: 'Trust Score™',
+        text: 'Trust Score™ is a reputation metric calculated from your activity on PadiHub. It is an informational tool for community use and does not constitute a credit score, financial assessment, or regulated rating.',
       },
     ],
   },
@@ -82,7 +82,7 @@ const sections = [
       },
       {
         subtitle: 'Honest Representation',
-        text: 'You must represent yourself honestly on PadiHub. Creating fake accounts, misrepresenting your identity, or manipulating your Trust Score™ or Community Karma™ through dishonest means is prohibited.',
+        text: 'You must represent yourself honestly on PadiHub. Creating fake accounts, misrepresenting your identity, or manipulating your Trust Score™ through dishonest means is prohibited.',
       },
       {
         subtitle: 'Community Governance',
@@ -102,7 +102,7 @@ const sections = [
     content: [
       {
         subtitle: 'PadiHub IP',
-        text: 'PadiHub™, Trust Score™, Community Karma™, PadiHub Passport™, and Community DNA™ are trademarks of PadiHub. The platform, its design, and all original content are protected by copyright and other intellectual property laws.',
+        text: 'PadiHub™, Trust Score™, PadiHub Passport™, and Community DNA™ are trademarks of PadiHub. The platform, its design, and all original content are protected by copyright and other intellectual property laws.',
       },
       {
         subtitle: 'Your Content',
@@ -215,8 +215,28 @@ const sections = [
     ],
   },
   {
+    id: 'contribution-processing-fees',
+    title: '11. Contribution Payment Processing Fees',
+    icon: AlertTriangle,
+    color: '#F59E0B',
+    content: [
+      {
+        subtitle: 'Fee Added to Each Contribution Charge',
+        text: 'When you save a payment method for your recurring group contributions, PadiHub\'s payment processors (Stripe for UK card charges, Flutterwave for Nigerian card charges) charge a processing fee on every contribution payment. This fee is added on top of your contribution amount and charged to you at the same time — it is never deducted from the group pot, so every member still receives their full contribution amount when it is their turn to be paid out.',
+      },
+      {
+        subtitle: 'Indicative Rates',
+        text: 'Stripe (UK card charges): approximately 1.5% + £0.20 per charge. Flutterwave (Nigerian card charges): approximately 1.4% per charge, capped at ₦2,000. These rates are indicative and may be updated to reflect PadiHub\'s final confirmed processor pricing; the current rate is always shown before you confirm a contribution charge.',
+      },
+      {
+        subtitle: 'Consent',
+        text: 'By ticking the payment authorization checkbox when saving a payment method, you explicitly consent to this processing fee being added to each of your recurring group contribution charges.',
+      },
+    ],
+  },
+  {
     id: 'contact',
-    title: '11. Contact',
+    title: '12. Contact',
     icon: FileText,
     color: '#2EAF6F',
     content: [

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { MotionDiv } from '@/lib/motion-safe';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { CheckCircle, ChevronLeft, ArrowRight, Shield, Zap, Star } from 'lucide-react';
+import { CheckCircle, ChevronLeft, ArrowRight, Shield, Zap } from 'lucide-react';
 import DashboardLayout from '@/components/DashboardLayout';
 
 const fadeUp = { hidden: { opacity: 0, y: 16 }, visible: { opacity: 1, y: 0, transition: { duration: 0.4, ease: 'easeOut' as const } } };
@@ -53,7 +53,7 @@ const plans = [
 
 const features = [
   'Unlimited Communities & Savings Groups',
-  'Trust Score™ & Community Karma™',
+  'Trust Score™',
   'PadiHub Passport™ & Community DNA™',
   'Analytics, Governance & Voting',
   'Priority Support & AI Onboarding',
@@ -192,8 +192,8 @@ export default function RenewMembershipPage() {
           <MotionDiv variants={fadeUp} className="mt-6 grid grid-cols-3 gap-4 text-center">
             {[
               { icon: Shield, label: 'Secure payment',  color: '#2EAF6F' },
-              { icon: Star,   label: '4.9★ rated',      color: '#F59E0B' },
               { icon: Zap,    label: 'Cancel anytime',  color: '#8B5CF6' },
+              { icon: CheckCircle, label: 'No hidden fees', color: '#2eafaf' },
             ].map((t, i) => (
               <div key={i} className="flex flex-col items-center gap-1.5">
                 <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: `${t.color}12` }}>

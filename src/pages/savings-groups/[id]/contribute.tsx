@@ -240,7 +240,7 @@ export default function ContributionConfirmPage() {
   useEffect(() => {
     if (!needsStripePaymentMethod || !cardMountRef.current) return;
     if (!STRIPE_PUBLISHABLE_KEY) {
-      setActionError('Stripe is not configured for this environment. Add VITE_STRIPE_PUBLISHABLE_KEY and try again.');
+      setActionError('Card payments are not configured for this environment. Please try again later.');
       return;
     }
 
@@ -252,7 +252,7 @@ export default function ContributionConfirmPage() {
         const stripe = await loadStripe(STRIPE_PUBLISHABLE_KEY);
         if (!stripe || !cardMountRef.current || !isMounted) {
           if (!stripe && isMounted) {
-            setActionError('Stripe could not be loaded. Please refresh and try again.');
+            setActionError('The card payment form could not be loaded. Please refresh and try again.');
           }
           return;
         }
@@ -275,7 +275,7 @@ export default function ContributionConfirmPage() {
         cardElementRef.current = mountedCard;
       } catch (mountError) {
         if (!isMounted) return;
-        setActionError(mountError instanceof Error ? mountError.message : 'Could not load Stripe card entry.');
+        setActionError(mountError instanceof Error ? mountError.message : 'Could not load the card entry form.');
       }
     };
 
@@ -301,9 +301,9 @@ export default function ContributionConfirmPage() {
 
     if (!transactionId || !txRef) {
       if (checkoutStatus && checkoutStatus !== 'successful') {
-        setActionError('Flutterwave checkout did not complete. Try again to save your card.');
+        setActionError('The secure checkout did not complete. Try again to save your card.');
       } else {
-        setActionError('Flutterwave did not return the transaction details needed to save your card. Please try again.');
+        setActionError('The secure checkout did not return the details needed to save your card. Please try again.');
       }
       return;
     }
@@ -319,7 +319,7 @@ export default function ContributionConfirmPage() {
 
       setSetupLoading(true);
       setActionError('');
-      setActionNotice('Verifying your Flutterwave payment method…');
+      setActionNotice('Verifying your payment method…');
 
       try {
         const response = await window.fetch('/api/payments/save-flutterwave-token', {
@@ -332,7 +332,7 @@ export default function ContributionConfirmPage() {
         });
         const json = await response.json().catch(() => null) as ApiResponse<null> | null;
         if (!response.ok) {
-          throw new Error(getErrorMessage(json, 'Could not save your Flutterwave card token.'));
+          throw new Error(getErrorMessage(json, 'Could not save your card.'));
         }
 
         if (cancelled) return;
@@ -341,7 +341,7 @@ export default function ContributionConfirmPage() {
       } catch (saveError) {
         if (cancelled) return;
         setActionNotice('');
-        setActionError(saveError instanceof Error ? saveError.message : 'Could not save your Flutterwave card token.');
+        setActionError(saveError instanceof Error ? saveError.message : 'Could not save your card.');
       } finally {
         if (!cancelled) setSetupLoading(false);
       }
@@ -366,7 +366,7 @@ export default function ContributionConfirmPage() {
     const stripe = stripeRef.current;
     const cardElement = cardElementRef.current;
     if (!stripe || !cardElement) {
-      setActionError('The Stripe card form is still loading. Please wait a moment and try again.');
+      setActionError('The card form is still loading. Please wait a moment and try again.');
       return;
     }
 
@@ -384,12 +384,12 @@ export default function ContributionConfirmPage() {
       });
       const setupJson = await setupResponse.json().catch(() => null) as ApiResponse<StripeSetupIntentResponse> | null;
       if (!setupResponse.ok) {
-        throw new Error(getErrorMessage(setupJson, 'Could not start Stripe payment method setup.'));
+        throw new Error(getErrorMessage(setupJson, 'Could not start payment method setup.'));
       }
 
       const clientSecret = setupJson?.data?.clientSecret;
       if (!clientSecret) {
-        throw new Error('Stripe did not return a setup client secret.');
+        throw new Error('The payment service did not return the setup details.');
       }
 
       const confirmation = await stripe.confirmCardSetup(clientSecret, {
@@ -402,13 +402,13 @@ export default function ContributionConfirmPage() {
       });
 
       if (confirmation.error) {
-        throw new Error(confirmation.error.message || 'Stripe could not save your card.');
+        throw new Error(confirmation.error.message || 'Could not save your card.');
       }
 
       const paymentMethod = confirmation.setupIntent?.payment_method;
       const paymentMethodId = typeof paymentMethod === 'string' ? paymentMethod : paymentMethod?.id;
       if (!paymentMethodId) {
-        throw new Error('Stripe did not return a payment method ID.');
+        throw new Error('The payment service did not return a payment method ID.');
       }
 
       const saveResponse = await window.fetch('/api/payments/confirm-setup-intent', {
@@ -421,7 +421,7 @@ export default function ContributionConfirmPage() {
       });
       const saveJson = await saveResponse.json().catch(() => null) as ApiResponse<null> | null;
       if (!saveResponse.ok) {
-        throw new Error(getErrorMessage(saveJson, 'Could not save your Stripe payment method.'));
+        throw new Error(getErrorMessage(saveJson, 'Could not save your payment method.'));
       }
 
       setActionNotice('Payment method saved. You can now confirm this contribution.');
@@ -457,17 +457,17 @@ export default function ContributionConfirmPage() {
       });
       const json = await response.json().catch(() => null) as ApiResponse<FlutterwavePaymentLinkResponse> | null;
       if (!response.ok) {
-        throw new Error(getErrorMessage(json, 'Could not start Flutterwave checkout.'));
+        throw new Error(getErrorMessage(json, 'Could not start secure checkout.'));
       }
 
       const link = json?.data?.link;
       if (!link) {
-        throw new Error('Flutterwave did not return a checkout link.');
+        throw new Error('The payment service did not return a checkout link.');
       }
 
       window.location.assign(link);
     } catch (setupError) {
-      setActionError(setupError instanceof Error ? setupError.message : 'Could not start Flutterwave checkout.');
+      setActionError(setupError instanceof Error ? setupError.message : 'Could not start secure checkout.');
       setSetupLoading(false);
     }
   };
@@ -603,7 +603,7 @@ export default function ContributionConfirmPage() {
                     <div>
                       <p className="font-extrabold text-white" style={{ fontFamily: 'Nunito, sans-serif' }}>{group.name}</p>
                       <p className="text-xs" style={{ color: 'rgba(255,255,255,0.5)' }}>
-                        {titleCase(group.contribution_frequency)} contribution · {group.payment_provider === 'flutterwave' ? 'Flutterwave' : 'Stripe'}
+                        {titleCase(group.contribution_frequency)} contribution · Card payment
                       </p>
                     </div>
                   </div>
@@ -641,7 +641,7 @@ export default function ContributionConfirmPage() {
                 <div className="grid sm:grid-cols-2 gap-3 mb-4">
                   <div className="rounded-2xl p-4" style={{ background: '#F9FAFB' }}>
                     <p className="text-xs text-gray-500 mb-1">Payment provider</p>
-                    <p className="font-bold text-gray-900">{group.payment_provider === 'flutterwave' ? 'Flutterwave (NG)' : 'Stripe (GB)'}</p>
+                    <p className="font-bold text-gray-900">{group.payment_provider === 'flutterwave' ? 'Card payment (Nigeria)' : 'Card payment (UK)'}</p>
                   </div>
                   <div className="rounded-2xl p-4" style={{ background: '#F9FAFB' }}>
                     <p className="text-xs text-gray-500 mb-1">Saved payment method</p>
@@ -657,8 +657,8 @@ export default function ContributionConfirmPage() {
                         <p className="font-bold text-gray-900">Add a payment method first</p>
                         <p className="text-sm text-gray-600 mt-1">
                           {group.payment_provider === 'flutterwave'
-                            ? 'We need a verified Flutterwave card token before we can charge this contribution.'
-                            : 'Save a card with Stripe before we can charge this contribution.'}
+                            ? 'We need a verified saved card before we can charge this contribution.'
+                            : 'Save a card before we can charge this contribution.'}
                         </p>
                       </div>
                     </div>
@@ -674,13 +674,13 @@ export default function ContributionConfirmPage() {
                           className="w-full py-3 rounded-2xl font-bold text-white transition-all disabled:cursor-not-allowed disabled:opacity-60"
                           style={{ background: 'linear-gradient(135deg, #2eafaf, #1f8f8f)' }}
                         >
-                          {setupLoading ? 'Saving card…' : 'Save card with Stripe'}
+                          {setupLoading ? 'Saving card…' : 'Save card'}
                         </button>
                       </div>
                     ) : (
                       <div className="space-y-4">
                         <div className="rounded-2xl p-3 bg-white text-sm text-gray-600" style={{ border: '1px solid #E5E7EB' }}>
-                          Flutterwave will open a secure hosted checkout to verify and tokenise your card for future contribution charges.
+                          A secure hosted checkout will open to verify and tokenise your card for future contribution charges.
                         </div>
                         <button
                           onClick={() => void handleFlutterwaveSetup()}
@@ -700,8 +700,8 @@ export default function ContributionConfirmPage() {
                       <Shield size={16} style={{ color: '#2EAF6F', flexShrink: 0, marginTop: 2 }} />
                       <p className="text-sm text-gray-700">
                         {group.payment_provider === 'flutterwave'
-                          ? 'Your Flutterwave card token is saved and ready for this contribution charge.'
-                          : 'Your Stripe payment method is saved and ready for this contribution charge.'}
+                          ? 'Your saved card is ready for this contribution charge.'
+                          : 'Your saved card is ready for this contribution charge.'}
                       </p>
                     </div>
                     <button

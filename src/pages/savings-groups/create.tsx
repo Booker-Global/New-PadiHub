@@ -33,7 +33,8 @@ interface GroupData {
   description: string;
   amount: string;
   currency: 'GBP' | 'NGN';
-  frequency: 'monthly' | 'weekly';
+  frequency: 'monthly' | 'weekly' | 'daily';
+  payoutDay: number | null;
   memberCount: number;
   rotationOrder: 'random' | 'manual' | 'fcfs';
   maxMissed: number;
@@ -62,6 +63,7 @@ const defaultData: GroupData = {
   amount: '',
   currency: 'GBP',
   frequency: 'monthly',
+  payoutDay: 1,
   memberCount: 6,
   rotationOrder: 'random',
   maxMissed: 2,
@@ -70,6 +72,16 @@ const defaultData: GroupData = {
   allowSwaps: true,
   inviteEmails: '',
 };
+
+const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+function describeCreatePayoutSchedule(frequency: GroupData['frequency'], payoutDay: number | null): string {
+  if (frequency === 'daily') return 'Every day';
+  if (frequency === 'weekly') return `Every ${WEEKDAY_NAMES[payoutDay ?? 1] ?? WEEKDAY_NAMES[1]}`;
+  const day = payoutDay ?? 1;
+  const suffix = day % 10 === 1 && day !== 11 ? 'st' : day % 10 === 2 && day !== 12 ? 'nd' : day % 10 === 3 && day !== 13 ? 'rd' : 'th';
+  return `Monthly on the ${day}${suffix}`;
+}
 
 function getErrorMessage<T>(json: ApiResponse<T> | null, fallback: string) {
   const firstFieldError = json?.errors
@@ -131,6 +143,7 @@ export default function CreateGroupWizard() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [needsVerification, setNeedsVerification] = useState(false);
+  const [needsPaymentSetup, setNeedsPaymentSetup] = useState(false);
   const [bypassing, setBypassing] = useState(false);
   const [createdGroup, setCreatedGroup] = useState<SavingsGroup | null>(null);
 
@@ -142,6 +155,7 @@ export default function CreateGroupWizard() {
   const set = <K extends keyof GroupData>(key: K, value: GroupData[K]) => {
     setSubmitError('');
     setNeedsVerification(false);
+    setNeedsPaymentSetup(false);
     setData(current => ({ ...current, [key]: value }));
   };
 
@@ -160,6 +174,7 @@ export default function CreateGroupWizard() {
     if (step > 0) {
       setSubmitError('');
       setNeedsVerification(false);
+      setNeedsPaymentSetup(false);
       setStep(current => current - 1);
     }
   };
@@ -179,6 +194,7 @@ export default function CreateGroupWizard() {
     setSubmitting(true);
     setSubmitError('');
     setNeedsVerification(false);
+    setNeedsPaymentSetup(false);
 
     try {
       const response = await window.fetch('/api/groups', {
@@ -194,6 +210,7 @@ export default function CreateGroupWizard() {
           currency: data.currency,
           contribution_amount: normalizedAmount,
           contribution_frequency: data.frequency,
+          payout_day: data.frequency === 'daily' ? undefined : (data.payoutDay ?? undefined),
           maximum_members: data.memberCount,
           rotation_method: data.rotationOrder === 'random' ? 'random' : 'manual', // "fcfs" has no backend equivalent yet.
           strike_threshold: data.maxMissed,
@@ -205,6 +222,7 @@ export default function CreateGroupWizard() {
       if (!response.ok) {
         setSubmitError(getErrorMessage(json, 'Could not create your group.'));
         setNeedsVerification(json.code === 'VERIFICATION_REQUIRED');
+        setNeedsPaymentSetup(json.code === 'PAYMENT_SETUP_REQUIRED');
         return;
       }
 
@@ -248,7 +266,9 @@ export default function CreateGroupWizard() {
 
   const rotationDuration = data.frequency === 'monthly'
     ? `${data.memberCount} months`
-    : `${data.memberCount} weeks`;
+    : data.frequency === 'weekly'
+      ? `${data.memberCount} weeks`
+      : `${data.memberCount} days`;
 
   const stepTitles = [
     'Group Details',
@@ -344,6 +364,12 @@ export default function CreateGroupWizard() {
                     {bypassing ? 'Bypassing verification…' : 'Bypass verification (test mode)'}
                   </button>
                 )}
+                {needsPaymentSetup && (
+                  <div className="flex gap-3 mt-3">
+                    <Link to="/payments/methods" style={{ fontSize: 13, fontWeight: 700, color: '#DC2626', textDecoration: 'underline' }}>Add payment method</Link>
+                    <Link to="/payments/payout" style={{ fontSize: 13, fontWeight: 700, color: '#DC2626', textDecoration: 'underline' }}>Connect payout destination</Link>
+                  </div>
+                )}
               </div>
             )}
 
@@ -403,15 +429,55 @@ export default function CreateGroupWizard() {
                     </div>
                     <div>
                       <label className="text-sm font-bold text-gray-700 block mb-2">Frequency</label>
-                      <div className="grid grid-cols-2 gap-3">
-                        {(['monthly', 'weekly'] as const).map(frequency => (
-                          <OptionCard key={frequency} selected={data.frequency === frequency} onClick={() => set('frequency', frequency)}>
+                      <div className="grid grid-cols-3 gap-3">
+                        {(['monthly', 'weekly', 'daily'] as const).map(frequency => (
+                          <OptionCard
+                            key={frequency}
+                            selected={data.frequency === frequency}
+                            onClick={() => {
+                              set('frequency', frequency);
+                              set('payoutDay', frequency === 'daily' ? null : frequency === 'weekly' ? 1 : 1);
+                            }}
+                          >
                             <p className="font-bold text-gray-900 capitalize">{frequency}</p>
-                            <p className="text-xs text-gray-400 mt-0.5">{frequency === 'monthly' ? 'Default — most common' : 'Every week'}</p>
+                            <p className="text-xs text-gray-400 mt-0.5">
+                              {frequency === 'monthly' ? 'Default — most common' : frequency === 'weekly' ? 'Every week' : 'Every day — useful for testing'}
+                            </p>
                           </OptionCard>
                         ))}
                       </div>
                     </div>
+
+                    {data.frequency === 'weekly' && (
+                      <div>
+                        <label className="text-sm font-bold text-gray-700 block mb-2">Payout day <span className="text-red-400">*</span></label>
+                        <p className="text-xs text-gray-500 mb-2">Which day of the week should contributions and payouts be collected?</p>
+                        <select
+                          value={data.payoutDay ?? 1}
+                          onChange={event => set('payoutDay', Number(event.target.value))}
+                          className="w-full px-4 py-3 rounded-2xl border border-gray-200 text-sm focus:outline-none focus:border-green-400 transition-colors bg-white"
+                        >
+                          {['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((day, index) => (
+                            <option key={day} value={index}>{day}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    {data.frequency === 'monthly' && (
+                      <div>
+                        <label className="text-sm font-bold text-gray-700 block mb-2">Payout day <span className="text-red-400">*</span></label>
+                        <p className="text-xs text-gray-500 mb-2">Which day of the month should contributions and payouts be collected? (Clamped to the last day for shorter months.)</p>
+                        <input
+                          type="number"
+                          min={1}
+                          max={31}
+                          value={data.payoutDay ?? 1}
+                          onChange={event => set('payoutDay', Math.min(31, Math.max(1, Number(event.target.value) || 1)))}
+                          className="w-full px-4 py-3 rounded-2xl border border-gray-200 text-sm focus:outline-none focus:border-green-400 transition-colors"
+                        />
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -558,6 +624,7 @@ export default function CreateGroupWizard() {
                       { icon: PiggyBank, label: 'Contribution', value: `${data.currency === 'GBP' ? '£' : '₦'}${normalizedAmount || data.amount || '—'} / ${data.frequency}` },
                       { icon: Users, label: 'Members', value: `${data.memberCount} members` },
                       { icon: Calendar, label: 'Rotation duration', value: rotationDuration },
+                      { icon: Calendar, label: 'Payout schedule', value: describeCreatePayoutSchedule(data.frequency, data.payoutDay) },
                       { icon: RotateCcw, label: 'Payout order', value: data.rotationOrder === 'random' ? 'Random' : data.rotationOrder === 'manual' ? 'Manual' : 'First come, first served' },
                       { icon: Shield, label: 'Max missed payments', value: `${data.maxMissed} missed` },
                       { icon: Eye, label: 'Grace period', value: `${data.gracePeriod} hours` },

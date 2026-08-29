@@ -1,8 +1,8 @@
 import { AnimatePresence } from 'motion/react';
 import { MotionDiv } from '@/lib/motion-safe';
-import { CheckCircle, X, Trophy, Star, Shield } from 'lucide-react';
+import { CheckCircle, X, Trophy, Shield } from 'lucide-react';
 
-export type SuccessType = 'default' | 'karma' | 'trust' | 'badge' | 'contribution' | 'joined';
+export type SuccessType = 'default' | 'trust' | 'badge' | 'contribution' | 'joined';
 
 interface SuccessToastProps {
   visible: boolean;
@@ -14,7 +14,6 @@ interface SuccessToastProps {
 
 const typeConfig: Record<SuccessType, { icon: typeof CheckCircle; color: string; bg: string }> = {
   default:      { icon: CheckCircle, color: '#2EAF6F', bg: 'rgba(46,175,111,0.1)' },
-  karma:        { icon: Star,        color: '#F59E0B', bg: 'rgba(245,158,11,0.1)' },
   trust:        { icon: Shield,      color: '#2EAF6F', bg: 'rgba(46,175,111,0.1)' },
   badge:        { icon: Trophy,      color: '#F59E0B', bg: 'rgba(245,158,11,0.1)' },
   contribution: { icon: CheckCircle, color: '#2EAF6F', bg: 'rgba(46,175,111,0.1)' },

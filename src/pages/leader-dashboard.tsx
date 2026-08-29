@@ -24,11 +24,11 @@ const pendingActions = [
 ];
 
 const members = [
-  { name: 'Amara Okafor',  trust: 920, karma: 2340, status: 'active',  contributions: '100%', avatar: 'A' },
-  { name: 'Tunde Bello',   trust: 880, karma: 1890, status: 'active',  contributions: '95%',  avatar: 'T' },
-  { name: 'Chidi Nwosu',   trust: 760, karma: 1240, status: 'warning', contributions: '78%',  avatar: 'C' },
-  { name: 'Fatima Aliyu',  trust: 910, karma: 2100, status: 'active',  contributions: '100%', avatar: 'F' },
-  { name: 'Emeka Obi',     trust: 840, karma: 1650, status: 'active',  contributions: '92%',  avatar: 'E' },
+  { name: 'Amara Okafor',  trust: 920, status: 'active',  contributions: '100%', avatar: 'A' },
+  { name: 'Tunde Bello',   trust: 880, status: 'active',  contributions: '95%',  avatar: 'T' },
+  { name: 'Chidi Nwosu',   trust: 760, status: 'warning', contributions: '78%',  avatar: 'C' },
+  { name: 'Fatima Aliyu',  trust: 910, status: 'active',  contributions: '100%', avatar: 'F' },
+  { name: 'Emeka Obi',     trust: 840, status: 'active',  contributions: '92%',  avatar: 'E' },
 ];
 
 const urgencyColor: Record<string, string> = { high: '#EF4444', medium: '#F59E0B', low: '#2EAF6F' };
@@ -167,7 +167,6 @@ export default function LeaderDashboardPage() {
                   <tr>
                     <th className="pb-3 text-left text-xs font-bold text-gray-400 uppercase tracking-wider">Member</th>
                     <th className="pb-3 text-right text-xs font-bold text-gray-400 uppercase tracking-wider">Trust</th>
-                    <th className="pb-3 text-right text-xs font-bold text-gray-400 uppercase tracking-wider">Karma</th>
                     <th className="pb-3 text-right text-xs font-bold text-gray-400 uppercase tracking-wider">Contributions</th>
                     <th className="pb-3 text-right text-xs font-bold text-gray-400 uppercase tracking-wider">Status</th>
                   </tr>
@@ -183,7 +182,6 @@ export default function LeaderDashboardPage() {
                         </div>
                       </td>
                       <td className="py-3 text-right font-bold" style={{ color: '#2EAF6F' }}>{m.trust}</td>
-                      <td className="py-3 text-right font-bold" style={{ color: '#F59E0B' }}>{m.karma.toLocaleString()}</td>
                       <td className="py-3 text-right font-semibold text-gray-700">{m.contributions}</td>
                       <td className="py-3 text-right">
                         {m.status === 'active' ? (

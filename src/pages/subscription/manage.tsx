@@ -13,7 +13,7 @@ const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.07 } }
 
 const planFeatures = [
   'Unlimited Communities & Savings Groups',
-  'Trust Score™ & Community Karma™',
+  'Trust Score™',
   'PadiHub Passport™ & Community DNA™',
   'Analytics, Governance & Voting',
   'Priority Support & AI Onboarding',

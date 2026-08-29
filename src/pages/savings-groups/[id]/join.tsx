@@ -15,7 +15,8 @@ interface SavingsGroup {
   country: 'GB' | 'NG';
   currency: 'GBP' | 'NGN';
   contribution_amount: string | number;
-  contribution_frequency: 'weekly' | 'monthly';
+  contribution_frequency: 'daily' | 'weekly' | 'monthly';
+  payout_day?: number | null;
   maximum_members: number;
   rotation_method: 'manual' | 'random';
   current_cycle: number;
@@ -32,6 +33,7 @@ interface ApiResponse<T> {
   success?: boolean;
   data?: T;
   message?: string;
+  code?: string;
   errors?: Record<string, string[] | undefined>;
 }
 
@@ -70,6 +72,21 @@ function getGroupColor(group: SavingsGroup) {
   return group.currency === 'NGN' ? '#2EAF6F' : '#2eafaf';
 }
 
+/** Mirrors src/server/lib/payoutSchedule.ts describePayoutSchedule() for client-side display. */
+function describePayoutSchedule(frequency: SavingsGroup['contribution_frequency'], payoutDay: number | null | undefined) {
+  if (frequency === 'daily') return 'Every day';
+  if (frequency === 'weekly') {
+    const names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const idx = payoutDay !== null && payoutDay !== undefined ? Math.min(6, Math.max(0, payoutDay)) : 0;
+    return `Every ${names[idx]}`;
+  }
+  const day = payoutDay !== null && payoutDay !== undefined ? Math.min(31, Math.max(1, payoutDay)) : 1;
+  const suffix = day % 10 === 1 && day !== 11 ? 'st'
+    : day % 10 === 2 && day !== 12 ? 'nd'
+    : day % 10 === 3 && day !== 13 ? 'rd' : 'th';
+  return `Monthly on the ${day}${suffix}`;
+}
+
 export default function JoinSavingsGroupPage() {
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
@@ -80,6 +97,7 @@ export default function JoinSavingsGroupPage() {
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState('');
+  const [needsPaymentSetup, setNeedsPaymentSetup] = useState(false);
   const [notFound, setNotFound] = useState(false);
 
   const inviteToken = useMemo(
@@ -153,6 +171,7 @@ export default function JoinSavingsGroupPage() {
 
     setSubmitting(true);
     setError('');
+    setNeedsPaymentSetup(false);
 
     try {
       const response = await window.fetch('/api/memberships', {
@@ -170,6 +189,7 @@ export default function JoinSavingsGroupPage() {
       const json = await response.json() as ApiResponse<null>;
       if (!response.ok) {
         setError(getErrorMessage(json, 'Could not join this group.'));
+        setNeedsPaymentSetup(json.code === 'PAYMENT_SETUP_REQUIRED');
         return;
       }
 
@@ -286,6 +306,7 @@ export default function JoinSavingsGroupPage() {
           <div className="grid grid-cols-2 gap-3">
             {[
               { label: 'Contribution', value: `${formatCurrency(group.contribution_amount, group.currency)} ${titleCase(group.contribution_frequency)}`, icon: PiggyBank, color: groupColor },
+              { label: 'Payout schedule', value: describePayoutSchedule(group.contribution_frequency, group.payout_day), icon: Calendar, color: '#F59E0B' },
               { label: 'Members', value: `${memberCount}/${group.maximum_members} active`, icon: Users, color: '#8B5CF6' },
               { label: 'Available spots', value: availableSpots.toString(), icon: Shield, color: '#2EAF6F' },
               { label: 'Current cycle', value: group.current_cycle.toString(), icon: Calendar, color: '#F59E0B' },
@@ -314,6 +335,19 @@ export default function JoinSavingsGroupPage() {
           </div>
         )}
 
+        {needsPaymentSetup && (
+          <div className="rounded-2xl p-4 mb-5" style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)' }}>
+            <p className="text-sm font-semibold" style={{ color: '#92400E' }}>Complete payment setup to join</p>
+            <p className="text-xs mt-1" style={{ color: '#92400E' }}>
+              You need a verified payment method (to contribute) and a verified payout destination (to receive your payout when it&apos;s your turn) before you can join a group.
+            </p>
+            <div className="flex gap-3 mt-3">
+              <Link to="/payments/methods" className="text-xs font-bold underline" style={{ color: '#92400E' }}>Add payment method</Link>
+              <Link to="/payments/payout" className="text-xs font-bold underline" style={{ color: '#92400E' }}>Connect payout destination</Link>
+            </div>
+          </div>
+        )}
+
         <label className="flex items-start gap-3 cursor-pointer mb-5">
           <div className="relative mt-0.5">
             <input type="checkbox" className="sr-only" checked={agreed} onChange={event => setAgreed(event.target.checked)} />
@@ -330,7 +364,7 @@ export default function JoinSavingsGroupPage() {
           <Link to="/savings-groups" className="px-5 py-3.5 rounded-2xl font-bold text-gray-600 hover:bg-gray-50 transition-colors" style={{ border: '1px solid #E5E7EB' }}>
             Cancel
           </Link>
-          <button onClick={() => void handleJoin()} disabled={!agreed || submitting} className="flex-1 py-3.5 rounded-2xl font-bold text-white flex items-center justify-center gap-2 transition-all" style={{ background: agreed ? `linear-gradient(135deg, ${groupColor}, ${groupColor}cc)` : '#D1D5DB', cursor: agreed ? 'pointer' : 'not-allowed' }}>
+          <button onClick={() => void handleJoin()} disabled={!agreed || submitting || needsPaymentSetup} className="flex-1 py-3.5 rounded-2xl font-bold text-white flex items-center justify-center gap-2 transition-all" style={{ background: agreed && !needsPaymentSetup ? `linear-gradient(135deg, ${groupColor}, ${groupColor}cc)` : '#D1D5DB', cursor: agreed && !needsPaymentSetup ? 'pointer' : 'not-allowed' }}>
             {submitting ? (
               <svg className="animate-spin" width="18" height="18" viewBox="0 0 24 24" fill="none">
                 <circle cx="12" cy="12" r="10" stroke="rgba(255,255,255,0.3)" strokeWidth="3" />

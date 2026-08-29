@@ -6,6 +6,8 @@ import { AppError } from '../middleware/errorHandler.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { notificationService } from './notificationService.js';
 import { trustScoreService } from './trustScoreService.js';
+import { TRUST_SCORE_DELTA_CYCLE_COMPLETED } from '../lib/constants.js';
+import { computeNextPayoutDate } from '../lib/payoutSchedule.js';
 import {
   sendUpcomingPayoutEmail,
   sendPayoutCompleteEmail,
@@ -116,7 +118,7 @@ export const rotationService = {
         title: 'Payout Completed',
         message: `Your payout for cycle ${current.cycle_number} has been completed.`,
       });
-      await trustScoreService.increase(current.recipient_id, 3, 'CYCLE_COMPLETED');
+      await trustScoreService.increase(current.recipient_id, TRUST_SCORE_DELTA_CYCLE_COMPLETED, 'CYCLE_COMPLETED');
 
       // Email payout complete
       const recipientRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, current.recipient_id)).limit(1);
@@ -143,8 +145,7 @@ export const rotationService = {
       current_cycle: nextCycle,
     }).where(eq(schema.savingsGroups.id, groupId));
 
-    const payoutDate = new Date();
-    payoutDate.setMonth(payoutDate.getMonth() + 1);
+    const payoutDate = computeNextPayoutDate(group.contribution_frequency, group.payout_day, new Date());
     await this.createForCycle(groupId, nextCycle, nextRecipient.user_id, payoutDate);
 
     await createAuditLog({ userId: actorId, action: 'ROTATION_ADVANCED', entity: 'savings_groups', entityId: groupId, ipAddress, metadata: { nextCycle, nextRecipient: nextRecipient.user_id } });

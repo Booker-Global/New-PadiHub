@@ -194,6 +194,22 @@ export async function sendMemberRemovedEmail(
   `));
 }
 
+/**
+ * Notify the OTHER active members of a group when one member is suspended
+ * (kicked out) for repeated missed contributions — every member has a stake
+ * in the rotation, so the whole group needs visibility into a change to it,
+ * not just the affected member.
+ */
+export async function sendGroupMemberSuspendedNotificationEmail(
+  to: string, groupName: string, suspendedMemberName: string,
+): Promise<void> {
+  await send(to, `A member of ${groupName} has been suspended`, wrap(`
+    ${h2('Group membership update')}
+    ${p(`<strong>${suspendedMemberName}</strong> has been suspended from <strong>${groupName}</strong> after repeated missed contributions.`)}
+    ${p('This may affect the group\'s rotation order and payout schedule. Check the group page for the latest details.')}
+  `));
+}
+
 export async function sendGroupClosedEmail(to: string, groupName: string): Promise<void> {
   await send(to, `${groupName} has been closed`, wrap(`
     ${h2('Your savings group has been closed')}

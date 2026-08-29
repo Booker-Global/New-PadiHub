@@ -131,12 +131,15 @@ export default function DashboardPage() {
         window.fetch('/api/notifications?limit=3', { headers }),
       ]);
 
+      // Each response is applied independently — one endpoint failing (e.g. a
+      // transient profile fetch error) must not discard data that other,
+      // successful endpoints already returned in this same Promise.all batch.
       const profileJson = await readJson<UserProfile>(profileRes);
-      if (!profileRes.ok) {
-        setError(getApiErrorMessage(profileJson, 'We could not load your dashboard right now.'));
-        return;
+      if (profileRes.ok) {
+        setProfile(profileJson?.data ?? null);
+      } else {
+        setError(getApiErrorMessage(profileJson, 'We could not load your full dashboard right now.'));
       }
-      setProfile(profileJson?.data ?? null);
 
       const statsJson = await readJson<UserStats>(statsRes);
       if (statsRes.ok) setStats(statsJson?.data ?? null);

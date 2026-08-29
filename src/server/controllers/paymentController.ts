@@ -11,6 +11,9 @@ import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { getStripeProvider, getFlutterwaveProvider } from '../integrations/payments/PaymentProviderFactory.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
+import { contributionService } from '../services/contributionService.js';
+import { getPaymentEligibility } from '../services/paymentEligibilityService.js';
+import { calculateProcessingFee } from '../lib/paymentFees.js';
 
 const FLUTTERWAVE_SETUP_TX_REF_PREFIX = 'padihub-flw-setup';
 const DEFAULT_FLUTTERWAVE_SETUP_AMOUNT = 50;
@@ -71,6 +74,76 @@ function getFlutterwaveSetupAmount() {
   return parsed;
 }
 
+/**
+ * Core contribution-charge logic, shared by the interactive
+ * POST /api/payments/charge-contribution endpoint and the automated daily
+ * scheduled job. Charges the member's saved payment method via the group's
+ * payment provider, then synchronously reconciles the contribution's status
+ * from the provider's immediate response (the Stripe/Flutterwave webhook
+ * handlers remain the source of truth and will no-op if this already marked
+ * the contribution paid/failed, since markPaid/markFailed are idempotent
+ * against contributions already in a terminal state).
+ */
+export async function chargeContributionForUser(userId: string, contributionId: string) {
+  const { contribution, user, group } = await getContributionContext(userId, contributionId);
+  if (contribution.payment_status === 'paid') {
+    throw new AppError('This contribution has already been paid.', 409, 'CONTRIBUTION_ALREADY_PAID');
+  }
+
+  const provider = group.payment_provider === 'flutterwave'
+    ? getFlutterwaveProvider()
+    : getStripeProvider();
+  const customerId = group.payment_provider === 'flutterwave'
+    ? user.email
+    : (user.stripe_customer_id ?? '');
+  const paymentMethodId = group.payment_provider === 'flutterwave'
+    ? (user.flutterwave_card_token ?? '')
+    : (user.stripe_payment_method_id ?? '');
+
+  if (!customerId || !paymentMethodId) {
+    throw new AppError('Add a payment method before contributing.', 400, 'NO_PAYMENT_METHOD');
+  }
+
+  const amountInSmallestUnit = Math.round(Number.parseFloat(contribution.amount_due) * 100);
+  if (!Number.isFinite(amountInSmallestUnit) || amountInSmallestUnit <= 0) {
+    throw new AppError('Contribution amount is invalid.', 400, 'INVALID_CONTRIBUTION_AMOUNT');
+  }
+
+  // The provider processing fee is added on top of the contribution amount
+  // (the member pays amount_due + fee) rather than deducted from the group
+  // pot — see paymentFees.ts. Members consent to this when accepting the
+  // payment terms & conditions while saving a payment method.
+  const feeInSmallestUnit = calculateProcessingFee(group.payment_provider, amountInSmallestUnit);
+  const totalChargeInSmallestUnit = amountInSmallestUnit + feeInSmallestUnit;
+
+  const result = await provider.chargeContribution({
+    customerId,
+    paymentMethodId,
+    amount:         totalChargeInSmallestUnit,
+    currency:       group.currency,
+    countryCode:    group.country,
+    contributionId,
+    description:    `PadiHub contribution — ${group.name} cycle ${contribution.cycle_number}`,
+  });
+
+  const feeAmount = (feeInSmallestUnit / 100).toFixed(2);
+  if (result.status === 'succeeded') {
+    await contributionService.markPaid(contributionId, result.providerReference, undefined, feeAmount);
+  } else if (result.status === 'failed') {
+    await contributionService.markFailed(contributionId);
+  }
+
+  await createAuditLog({
+    userId,
+    action: 'CONTRIBUTION_CHARGE_INITIATED',
+    entity: 'contributions',
+    entityId: contributionId,
+    metadata: { ...result, feeAmount } as unknown as Record<string, unknown>,
+  });
+
+  return result;
+}
+
 export const paymentController = {
   /** POST /api/payments/setup-intent — returns client_secret for Stripe.js */
   setupIntent: async (req: Request, res: Response, next: NextFunction) => {
@@ -113,8 +186,11 @@ export const paymentController = {
   confirmSetupIntent: async (req: Request, res: Response, next: NextFunction) => {
     try {
       const userId = req.user!.userId;
-      const { payment_method_id } = req.body as { payment_method_id?: string };
+      const { payment_method_id, terms_accepted } = req.body as { payment_method_id?: string; terms_accepted?: boolean };
       if (!payment_method_id) throw new AppError('payment_method_id is required.', 400);
+      if (terms_accepted !== true) {
+        throw new AppError('You must accept the payment terms & conditions to save a payment method.', 400, 'TERMS_NOT_ACCEPTED');
+      }
 
       const user = await getUserOrThrow(userId);
       if (!user.stripe_customer_id) {
@@ -144,7 +220,11 @@ export const paymentController = {
       });
 
       await db.update(schema.users)
-        .set({ stripe_payment_method_id: payment_method_id })
+        .set({
+          stripe_payment_method_id: payment_method_id,
+          payment_method_verified_at: new Date(),
+          payment_terms_accepted_at: new Date(),
+        })
         .where(eq(schema.users.id, userId));
 
       await createAuditLog({
@@ -166,32 +246,57 @@ export const paymentController = {
   createFlutterwavePaymentLink: async (req: Request, res: Response, next: NextFunction) => {
     try {
       const userId = req.user!.userId;
-      const { contribution_id } = req.body as { contribution_id?: string };
-      if (!contribution_id) throw new AppError('contribution_id is required.', 400);
+      const { contribution_id, terms_accepted } = req.body as { contribution_id?: string; terms_accepted?: boolean };
+      if (terms_accepted !== true) {
+        throw new AppError('You must accept the payment terms & conditions to save a payment method.', 400, 'TERMS_NOT_ACCEPTED');
+      }
 
-      const { contribution, user, group } = await getContributionContext(userId, contribution_id);
-      if (group.payment_provider !== 'flutterwave' || group.country !== 'NG' || group.currency !== 'NGN') {
-        throw new AppError('Flutterwave card setup is only available for Nigerian NGN groups.', 400);
+      let user: Awaited<ReturnType<typeof getUserOrThrow>>;
+      let currency: string;
+      let country: string;
+      let groupName: string | undefined;
+      let redirectUrl: URL;
+
+      if (contribution_id) {
+        const context = await getContributionContext(userId, contribution_id);
+        if (context.group.payment_provider !== 'flutterwave' || context.group.country !== 'NG' || context.group.currency !== 'NGN') {
+          throw new AppError('Flutterwave card setup is only available for Nigerian NGN groups.', 400);
+        }
+        user = context.user;
+        currency = context.group.currency;
+        country = context.group.country;
+        groupName = context.group.name;
+        redirectUrl = new URL(`/savings-groups/${context.group.id}/contribute`, getBaseAppUrl());
+        redirectUrl.searchParams.set('contribution_id', context.contribution.id);
+      } else {
+        // Standalone setup — not tied to any contribution/group. Every member
+        // needs a payment method to contribute, whether or not they've joined
+        // a group yet, so this is derived entirely from the user's own profile.
+        user = await getUserOrThrow(userId);
+        if (user.country !== 'NG' || user.currency !== 'NGN') {
+          throw new AppError('Flutterwave card setup is only available for Nigerian NGN users.', 400);
+        }
+        currency = user.currency;
+        country = user.country;
+        redirectUrl = new URL('/payments/methods', getBaseAppUrl());
       }
 
       const verificationAmount = getFlutterwaveSetupAmount();
-      const txRef = buildFlutterwaveSetupTxRef(userId, contribution.id);
-      const redirectUrl = new URL(`/savings-groups/${group.id}/contribute`, getBaseAppUrl());
+      const txRef = buildFlutterwaveSetupTxRef(userId, contribution_id ?? 'standalone');
       redirectUrl.searchParams.set('setup_provider', 'flutterwave');
-      redirectUrl.searchParams.set('contribution_id', contribution.id);
 
       const result = await getFlutterwaveProvider().createHostedPaymentLink({
         amount: verificationAmount,
-        currency: group.currency,
+        currency,
         email: user.email,
         name: `${user.first_name} ${user.last_name}`,
         txRef,
         redirectUrl: redirectUrl.toString(),
         title: 'Save card for future contributions',
-        description: `Save a card for ${group.name}`,
+        description: groupName ? `Save a card for ${groupName}` : 'Save a card for your PadiHub contributions',
         meta: {
           padihub_user_id: userId,
-          contribution_id: contribution.id,
+          contribution_id: contribution_id ?? null,
           purpose: 'payment_method_setup',
         },
       });
@@ -203,9 +308,10 @@ export const paymentController = {
         entityId: userId,
         metadata: {
           txRef,
-          contributionId: contribution.id,
+          contributionId: contribution_id ?? null,
           verificationAmount,
-          currency: group.currency,
+          currency,
+          country,
         },
       });
 
@@ -215,11 +321,12 @@ export const paymentController = {
           ...result,
           tx_ref: txRef,
           verification_amount: verificationAmount,
-          currency: group.currency,
+          currency,
         },
       });
     } catch (e) { next(e); }
   },
+
 
   /** POST /api/payments/save-flutterwave-token — verify hosted checkout result and persist card token */
   saveFlutterwaveToken: async (req: Request, res: Response, next: NextFunction) => {
@@ -258,6 +365,11 @@ export const paymentController = {
         .set({
           flutterwave_customer_id: user.flutterwave_customer_id ?? `flw_cust_${userId}`,
           flutterwave_card_token: result.cardToken,
+          payment_method_verified_at: new Date(),
+          // Reaching this point requires having initiated the hosted
+          // checkout via createFlutterwavePaymentLink, which already
+          // required terms_accepted === true — record the acceptance here.
+          payment_terms_accepted_at: new Date(),
         })
         .where(eq(schema.users.id, userId));
 
@@ -302,8 +414,11 @@ export const paymentController = {
           bankCode:       bank_code,
           accountNumber:  account_number,
         });
+        // Flutterwave subaccounts are usable immediately — there's no separate
+        // hosted onboarding step to wait on (unlike Stripe Express), so the
+        // payout destination is considered verified as soon as it's created.
         await db.update(schema.users)
-          .set({ flutterwave_subaccount_id: result.subaccountId })
+          .set({ flutterwave_subaccount_id: result.subaccountId, payout_verified_at: new Date() })
           .where(eq(schema.users.id, userId));
 
         await createAuditLog({ userId, action: 'FLW_SUBACCOUNT_CREATED', entity: 'users', entityId: userId });
@@ -323,6 +438,30 @@ export const paymentController = {
     } catch (e) { next(e); }
   },
 
+  /** POST /api/payments/verify-payout — force a live re-check of payout destination status */
+  verifyPayout: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = req.user!.userId;
+      const user = await getUserOrThrow(userId);
+
+      const hasDestination = user.country === 'NG'
+        ? Boolean(user.flutterwave_subaccount_id)
+        : Boolean(user.stripe_connected_account_id);
+      if (!hasDestination) {
+        throw new AppError('Connect a payout destination before verifying it.', 400, 'PAYOUT_NOT_CONNECTED');
+      }
+
+      const eligibility = await getPaymentEligibility(userId);
+      res.json({
+        success: true,
+        data: {
+          has_payout: eligibility.hasPayout,
+          payout_verified: eligibility.payoutVerified,
+        },
+      });
+    } catch (e) { next(e); }
+  },
+
   /** POST /api/payments/charge-contribution — manually trigger a contribution charge */
   chargeContribution: async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -330,47 +469,7 @@ export const paymentController = {
       const { contribution_id } = req.body as { contribution_id?: string };
       if (!contribution_id) throw new AppError('contribution_id is required.', 400);
 
-      const { contribution, user, group } = await getContributionContext(userId, contribution_id);
-      if (contribution.payment_status === 'paid') {
-        throw new AppError('This contribution has already been paid.', 409, 'CONTRIBUTION_ALREADY_PAID');
-      }
-
-      const provider = group.payment_provider === 'flutterwave'
-        ? getFlutterwaveProvider()
-        : getStripeProvider();
-      const customerId = group.payment_provider === 'flutterwave'
-        ? user.email
-        : (user.stripe_customer_id ?? '');
-      const paymentMethodId = group.payment_provider === 'flutterwave'
-        ? (user.flutterwave_card_token ?? '')
-        : (user.stripe_payment_method_id ?? '');
-
-      if (!customerId || !paymentMethodId) {
-        throw new AppError('Add a payment method before contributing.', 400, 'NO_PAYMENT_METHOD');
-      }
-
-      const amountInSmallestUnit = Math.round(Number.parseFloat(contribution.amount_due) * 100);
-      if (!Number.isFinite(amountInSmallestUnit) || amountInSmallestUnit <= 0) {
-        throw new AppError('Contribution amount is invalid.', 400, 'INVALID_CONTRIBUTION_AMOUNT');
-      }
-
-      const result = await provider.chargeContribution({
-        customerId,
-        paymentMethodId,
-        amount:         amountInSmallestUnit,
-        currency:       group.currency,
-        countryCode:    group.country,
-        contributionId: contribution_id,
-        description:    `PadiHub contribution — ${group.name} cycle ${contribution.cycle_number}`,
-      });
-
-      await createAuditLog({
-        userId,
-        action: 'CONTRIBUTION_CHARGE_INITIATED',
-        entity: 'contributions',
-        entityId: contribution_id,
-        metadata: result as unknown as Record<string, unknown>,
-      });
+      const result = await chargeContributionForUser(userId, contribution_id);
       res.json({ success: true, data: result });
     } catch (e) { next(e); }
   },
