@@ -1,388 +1,717 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { AnimatePresence } from 'motion/react';
-import { MotionDiv, MotionProgressBar } from '@/lib/motion-safe';
+import { MotionDiv } from '@/lib/motion-safe';
 import { Link, useParams } from 'react-router-dom';
 import {
-  ChevronLeft, PiggyBank, Users, Shield, Calendar, CheckCircle,
-  Clock, TrendingUp, Share2, UserPlus, LogOut, Star, AlertTriangle
+  ChevronLeft,
+  PiggyBank,
+  Users,
+  Shield,
+  Calendar,
+  CheckCircle,
+  Clock,
+  TrendingUp,
+  Share2,
+  UserPlus,
+  LogOut,
+  AlertTriangle,
+  Copy,
+  RefreshCw,
 } from 'lucide-react';
 import DashboardLayout from '@/components/DashboardLayout';
+import { Button } from '@/components/ui/button';
+import { SkeletonPage } from '@/components/ui/loading-skeleton';
+import { getValidSession } from '@/lib/session';
 
-const fadeUp = { hidden: { opacity: 0, y: 16 }, visible: { opacity: 1, y: 0, transition: { duration: 0.4, ease: 'easeOut' as const } } };
-const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.07 } } };
-
-const groupData: Record<string, {
-  id: string; name: string; description: string;
-  amount: string; freq: string; members: number; pct: number; nextDue: string;
-  leader: string; status: string; color: string; role: string;
-  startDate: string; rotation: string; stage: string; cycle: number; totalCycles: number;
-  nextPayout: string; nextPayoutMember: string;
-  maxMissed: number; gracePeriod: string; votingRequired: boolean; allowSwaps: boolean;
-}> = {
-  'monthly-ajo-pool': {
-    id: 'monthly-ajo-pool', name: 'Monthly Ajo Pool',
-    description: 'Monthly rotating savings pool. Each member receives the full pot once per cycle.',
-    amount: '₦5,000', freq: 'Monthly', members: 10, pct: 64, nextDue: 'Jun 21',
-    leader: 'Chidi N.', status: 'active', color: '#2EAF6F', role: 'Member',
-    startDate: 'Jan 2026', rotation: 'Random', stage: 'Cycle 7 of 10', cycle: 7, totalCycles: 10,
-    nextPayout: 'Jul 1', nextPayoutMember: 'Fatima H.',
-    maxMissed: 2, gracePeriod: '48 hours', votingRequired: false, allowSwaps: true,
-  },
-  'emergency-fund': {
-    id: 'emergency-fund', name: 'Emergency Fund',
-    description: 'Shared emergency fund accessible to members facing unexpected hardship.',
-    amount: '₦2,500', freq: 'Monthly', members: 8, pct: 90, nextDue: 'Jul 1',
-    leader: 'Amara O.', status: 'active', color: '#F59E0B', role: 'Contributor',
-    startDate: 'Feb 2026', rotation: 'Need-based', stage: 'Cycle 5 of 12', cycle: 5, totalCycles: 12,
-    nextPayout: 'Jul 15', nextPayoutMember: 'Ngozi E.',
-    maxMissed: 1, gracePeriod: '24 hours', votingRequired: true, allowSwaps: false,
-  },
-  'uk-deposit-fund': {
-    id: 'uk-deposit-fund', name: 'UK Deposit Fund',
-    description: 'Collective savings towards property deposits for first-time buyers.',
-    amount: '£150', freq: 'Monthly', members: 12, pct: 42, nextDue: 'Jun 28',
-    leader: 'Sarah K.', status: 'active', color: '#2eafaf', role: 'Member',
-    startDate: 'Mar 2026', rotation: 'First come, first served', stage: 'Cycle 4 of 12', cycle: 4, totalCycles: 12,
-    nextPayout: 'Jul 1', nextPayoutMember: 'James O.',
-    maxMissed: 2, gracePeriod: '72 hours', votingRequired: true, allowSwaps: true,
-  },
+const fadeUp = {
+  hidden: { opacity: 0, y: 16 },
+  visible: { opacity: 1, y: 0, transition: { duration: 0.4, ease: 'easeOut' as const } },
 };
-
-const defaultGroup = groupData['monthly-ajo-pool'];
-
-const members = [
-  { name: 'Chidi Nwosu',   initial: 'C', color: '#F59E0B', role: 'Leader',  trust: 92, paymentStatus: 'paid',    position: 1, verified: true },
-  { name: 'Amara Okonkwo', initial: 'A', color: '#2EAF6F', role: 'Member',  trust: 85, paymentStatus: 'paid',    position: 2, verified: true },
-  { name: 'Fatima Hassan', initial: 'F', color: '#2eafaf', role: 'Member',  trust: 88, paymentStatus: 'pending', position: 3, verified: true },
-  { name: 'Emeka Sule',    initial: 'E', color: '#8B5CF6', role: 'Member',  trust: 90, paymentStatus: 'paid',    position: 4, verified: true },
-  { name: 'Ngozi Adeyemi', initial: 'N', color: '#EF4444', role: 'Member',  trust: 76, paymentStatus: 'late',    position: 5, verified: false },
-];
-
-const activity = [
-  { text: 'Amara O. made contribution',       date: 'Jun 18', color: '#2EAF6F', icon: CheckCircle },
-  { text: 'Chidi N. made contribution',       date: 'Jun 17', color: '#2EAF6F', icon: CheckCircle },
-  { text: 'Cycle 7 started',                  date: 'Jun 1',  color: '#F59E0B', icon: Star },
-  { text: 'Fatima H. made contribution',      date: 'May 30', color: '#2EAF6F', icon: CheckCircle },
-  { text: 'Reminder sent to all members',     date: 'May 20', color: '#2eafaf', icon: Clock },
-];
+const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.07 } } };
 
 type Tab = 'overview' | 'members' | 'activity' | 'rules';
 
-function PaymentBadge({ status }: { status: string }) {
-  const map: Record<string, { bg: string; color: string; label: string }> = {
-    paid:    { bg: 'rgba(46,175,111,0.1)',  color: '#2EAF6F', label: 'Paid' },
-    pending: { bg: 'rgba(245,158,11,0.1)',  color: '#F59E0B', label: 'Pending' },
-    late:    { bg: 'rgba(239,68,68,0.1)',   color: '#EF4444', label: 'Late' },
-  };
-  const s = map[status] ?? map.pending;
-  return <span className="px-2 py-0.5 rounded-full text-xs font-bold" style={{ background: s.bg, color: s.color }}>{s.label}</span>;
+interface SavingsGroup {
+  id: string;
+  name: string;
+  description?: string | null;
+  leader_id: string;
+  country: 'GB' | 'NG';
+  currency: 'GBP' | 'NGN';
+  contribution_amount: string | number;
+  contribution_frequency: 'weekly' | 'monthly';
+  maximum_members: number;
+  rotation_method: 'manual' | 'random';
+  current_rotation_position: number;
+  current_cycle: number;
+  strike_threshold: number;
+  suspension_threshold: number;
+  voting_threshold: number;
+  allow_payout_swaps: boolean;
+  payment_provider: 'stripe' | 'flutterwave';
+  status: 'active' | 'closed' | 'suspended';
+  created_at: string;
+  updated_at: string;
+}
+
+interface Membership {
+  id: string;
+  user_id: string;
+  group_id: string;
+  role: 'member' | 'leader';
+  rotation_order?: number | null;
+  status: 'pending' | 'active' | 'suspended' | 'removed';
+  strike_count: number;
+  join_date: string;
+}
+
+interface Contribution {
+  id: string;
+  group_id: string;
+  member_id: string;
+  cycle_number: number;
+  amount_due: string | number;
+  amount_paid?: string | number | null;
+  due_date: string;
+  paid_date?: string | null;
+  payment_status: 'scheduled' | 'due' | 'paid' | 'failed' | 'missed';
+}
+
+interface InvitationResult {
+  token?: string;
+  inviteLink?: string;
+}
+
+interface ApiResponse<T> {
+  success?: boolean;
+  data?: T;
+  message?: string;
+  errors?: Record<string, string[] | undefined>;
+}
+
+function getErrorMessage<T>(json: ApiResponse<T> | null, fallback: string) {
+  const firstFieldError = json?.errors
+    ? Object.values(json.errors).flat().find((value): value is string => Boolean(value))
+    : undefined;
+  return firstFieldError || json?.message || fallback;
+}
+
+function formatCurrency(amount: string | number, currency: 'GBP' | 'NGN') {
+  const numericAmount = typeof amount === 'number' ? amount : Number.parseFloat(amount);
+  const locale = currency === 'GBP' ? 'en-GB' : 'en-NG';
+
+  return new Intl.NumberFormat(locale, {
+    style: 'currency',
+    currency,
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  }).format(Number.isFinite(numericAmount) ? numericAmount : 0);
+}
+
+function formatDate(date: string) {
+  const parsed = new Date(date);
+  if (Number.isNaN(parsed.getTime())) return 'Date unavailable';
+  return parsed.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function titleCase(value: string) {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function shortId(value: string) {
+  return `${value.slice(0, 8)}…`;
+}
+
+function getGroupColor(group: SavingsGroup) {
+  if (group.status === 'closed') return '#6B7280';
+  if (group.status === 'suspended') return '#F59E0B';
+  return group.currency === 'NGN' ? '#2EAF6F' : '#2eafaf';
+}
+
+function getContributionMeta(status: Contribution['payment_status']) {
+  switch (status) {
+    case 'paid':
+      return { color: '#2EAF6F', bg: 'rgba(46,175,111,0.1)', icon: CheckCircle, label: 'Paid' };
+    case 'failed':
+    case 'missed':
+      return { color: '#EF4444', bg: 'rgba(239,68,68,0.1)', icon: AlertTriangle, label: titleCase(status) };
+    case 'due':
+      return { color: '#F59E0B', bg: 'rgba(245,158,11,0.1)', icon: Clock, label: 'Due' };
+    default:
+      return { color: '#2eafaf', bg: 'rgba(46,175,175,0.1)', icon: Calendar, label: 'Scheduled' };
+  }
+}
+
+function getMembershipBadge(status: Membership['status']) {
+  switch (status) {
+    case 'active':
+      return { color: '#2EAF6F', bg: 'rgba(46,175,111,0.1)' };
+    case 'suspended':
+      return { color: '#F59E0B', bg: 'rgba(245,158,11,0.1)' };
+    case 'removed':
+      return { color: '#EF4444', bg: 'rgba(239,68,68,0.1)' };
+    default:
+      return { color: '#6B7280', bg: 'rgba(107,114,128,0.12)' };
+  }
 }
 
 export default function SavingsGroupDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const group = (id && groupData[id]) ? groupData[id] : defaultGroup;
   const [tab, setTab] = useState<Tab>('overview');
+  const [group, setGroup] = useState<SavingsGroup | null>(null);
+  const [memberships, setMemberships] = useState<Membership[]>([]);
+  const [contributions, setContributions] = useState<Contribution[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [notFound, setNotFound] = useState(false);
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteLoading, setInviteLoading] = useState(false);
+  const [inviteError, setInviteError] = useState('');
+  const [inviteNotice, setInviteNotice] = useState('');
+  const [inviteLink, setInviteLink] = useState('');
+  const [inviteToken, setInviteToken] = useState('');
+
+  const loadData = useCallback(async () => {
+    if (!id) {
+      setNotFound(true);
+      setLoading(false);
+      return;
+    }
+
+    const session = getValidSession();
+    if (!session?.token) {
+      setError('Please log in to view this savings group.');
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+    setNotFound(false);
+
+    try {
+      const headers = { Authorization: 'Bearer ' + session.token };
+      const groupResponse = await window.fetch(`/api/groups/${id}`, { headers });
+      const groupJson = await groupResponse.json() as ApiResponse<SavingsGroup>;
+
+      if (!groupResponse.ok) {
+        const message = getErrorMessage(groupJson, 'Could not load this group.');
+        if (groupResponse.status === 404) {
+          setNotFound(true);
+          setGroup(null);
+          setMemberships([]);
+          setContributions([]);
+          return;
+        }
+        throw new Error(message);
+      }
+
+      const groupData = groupJson.data ?? null;
+      setGroup(groupData);
+
+      const [membershipsResult, contributionsResult] = await Promise.allSettled([
+        window.fetch(`/api/memberships?group_id=${id}`, { headers }),
+        window.fetch(`/api/contributions?group_id=${id}`, { headers }),
+      ]);
+
+      if (membershipsResult.status === 'fulfilled' && membershipsResult.value.ok) {
+        const membershipsJson = await membershipsResult.value.json() as ApiResponse<Membership[]>;
+        setMemberships(Array.isArray(membershipsJson.data) ? membershipsJson.data : []);
+      } else {
+        setMemberships([]);
+      }
+
+      if (contributionsResult.status === 'fulfilled' && contributionsResult.value.ok) {
+        const contributionsJson = await contributionsResult.value.json() as ApiResponse<Contribution[]>;
+        const rows = Array.isArray(contributionsJson.data) ? contributionsJson.data : [];
+        setContributions(
+          rows.sort((left, right) => {
+            const leftDate = new Date(left.paid_date || left.due_date).getTime();
+            const rightDate = new Date(right.paid_date || right.due_date).getTime();
+            return rightDate - leftDate;
+          }),
+        );
+      } else {
+        setContributions([]);
+      }
+    } catch (loadError) {
+      setGroup(null);
+      setMemberships([]);
+      setContributions([]);
+      setError(loadError instanceof Error ? loadError.message : 'Could not load this group.');
+    } finally {
+      setLoading(false);
+    }
+  }, [id]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
+
+  // getValidSession() may clear an expired session from storage as a side
+  // effect; reading it via useMemo (rather than directly during render) keeps
+  // that mutation out of React's render phase, e.g. under Strict Mode's
+  // double-invocation of render functions.
+  const session = useMemo(() => getValidSession(), []);
+  const currentUserId = session?.userId;
+
+  const activeMembers = useMemo(
+    () => memberships.filter(member => member.status === 'active'),
+    [memberships],
+  );
+
+  const membershipSummary = useMemo(() => ({
+    active: activeMembers.length,
+    pending: memberships.filter(member => member.status === 'pending').length,
+    suspended: memberships.filter(member => member.status === 'suspended').length,
+    removed: memberships.filter(member => member.status === 'removed').length,
+  }), [memberships, activeMembers]);
+
+  const orderedMembers = useMemo(
+    () => [...memberships].sort((left, right) => {
+      const leftRole = left.role === 'leader' ? 0 : 1;
+      const rightRole = right.role === 'leader' ? 0 : 1;
+      if (leftRole !== rightRole) return leftRole - rightRole;
+      return (left.rotation_order ?? Number.MAX_SAFE_INTEGER) - (right.rotation_order ?? Number.MAX_SAFE_INTEGER);
+    }),
+    [memberships],
+  );
 
   const tabs: { key: Tab; label: string }[] = [
-    { key: 'overview',  label: 'Overview' },
-    { key: 'members',   label: 'Members' },
-    { key: 'activity',  label: 'Activity' },
-    { key: 'rules',     label: 'Rules' },
+    { key: 'overview', label: 'Overview' },
+    { key: 'members', label: 'Members' },
+    { key: 'activity', label: 'Activity' },
+    { key: 'rules', label: 'Rules' },
   ];
 
-  const membersCompleted = Math.round(group.members * (group.pct / 100));
+  const groupColor = group ? getGroupColor(group) : '#2EAF6F';
+  const occupancyPercentage = group ? Math.min(100, Math.round((activeMembers.length / Math.max(group.maximum_members, 1)) * 100)) : 0;
+
+  const closeInviteModal = () => {
+    setInviteOpen(false);
+    setInviteLoading(false);
+    setInviteError('');
+    setInviteNotice('');
+    setInviteEmail('');
+    setInviteLink('');
+    setInviteToken('');
+  };
+
+  const openInviteModal = () => {
+    setInviteOpen(true);
+    setInviteError('');
+    setInviteNotice('');
+  };
+
+  const handleCreateInvite = async () => {
+    if (!group) return;
+
+    const activeSession = getValidSession();
+    if (!activeSession?.token) {
+      setInviteError('Please log in to send invites.');
+      return;
+    }
+
+    setInviteLoading(true);
+    setInviteError('');
+    setInviteNotice('');
+
+    try {
+      const response = await window.fetch(`/api/groups/${group.id}/invitations`, {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer ' + activeSession.token,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email: inviteEmail.trim() || undefined }),
+      });
+
+      const json = await response.json() as ApiResponse<InvitationResult>;
+      if (!response.ok) {
+        setInviteError(getErrorMessage(json, 'Could not create an invite right now.'));
+        return;
+      }
+
+      const returnedInviteLink = json.data?.inviteLink || '';
+      const returnedToken = json.data?.token || '';
+      const queryToken = returnedInviteLink ? new window.URLSearchParams(returnedInviteLink.split('?')[1] || '').get('token') || '' : '';
+      const effectiveToken = returnedToken || queryToken;
+      const sharePath = effectiveToken
+        ? `/savings-groups/${group.id}/join?invite_token=${effectiveToken}`
+        : returnedInviteLink;
+      const fullLink = sharePath ? new window.URL(sharePath, window.location.origin).toString() : '';
+
+      setInviteToken(effectiveToken);
+      setInviteLink(fullLink);
+      setInviteNotice(inviteEmail.trim() ? `Invite created for ${inviteEmail.trim()}.` : 'Invite link created successfully.');
+    } catch {
+      setInviteError('Network error. Please check your connection and try again.');
+    } finally {
+      setInviteLoading(false);
+    }
+  };
+
+  const handleCopyLink = async () => {
+    if (!inviteLink) return;
+
+    try {
+      await window.navigator.clipboard.writeText(inviteLink);
+      setInviteNotice('Invite link copied.');
+      setInviteError('');
+    } catch {
+      setInviteError('Could not copy the invite link. Please copy it manually.');
+    }
+  };
+
+  if (loading) {
+    return <DashboardLayout><SkeletonPage /></DashboardLayout>;
+  }
+
+  if (notFound) {
+    return (
+      <DashboardLayout>
+        <div className="p-4 sm:p-6 max-w-2xl mx-auto text-center py-16">
+          <h1 className="text-2xl font-extrabold text-gray-900 mb-3" style={{ fontFamily: 'Nunito, sans-serif' }}>Group not found</h1>
+          <p className="text-gray-500 mb-6">The savings group you&apos;re looking for doesn&apos;t exist or is no longer available.</p>
+          <Link to="/savings-groups" className="inline-flex items-center gap-2 px-5 py-3 rounded-2xl font-bold text-white" style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}>
+            <ChevronLeft size={16} /> Back to savings groups
+          </Link>
+        </div>
+      </DashboardLayout>
+    );
+  }
+
+  if (error || !group) {
+    return (
+      <DashboardLayout>
+        <div className="p-4 sm:p-6 max-w-2xl mx-auto text-center py-16">
+          <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4" style={{ background: 'rgba(239,68,68,0.1)' }}>
+            <AlertTriangle size={24} style={{ color: '#EF4444' }} />
+          </div>
+          <h1 className="text-2xl font-extrabold text-gray-900 mb-3" style={{ fontFamily: 'Nunito, sans-serif' }}>Couldn&apos;t load this group</h1>
+          <p className="text-gray-500 mb-6">{error || 'Could not load this group.'}</p>
+          <button onClick={() => void loadData()} className="inline-flex items-center gap-2 px-5 py-3 rounded-2xl font-bold text-white" style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}>
+            <RefreshCw size={16} /> Try again
+          </button>
+        </div>
+      </DashboardLayout>
+    );
+  }
 
   return (
     <DashboardLayout>
       <Helmet>
         <title>{group.name} — PadiHub</title>
-        <meta name="description" content={group.description} />
+        <meta name="description" content={group.description || `Manage ${group.name} on PadiHub.`} />
         <link rel="canonical" href={`https://padihub.com/savings-groups/${group.id}`} />
-              <meta property="og:title" content="{group.name} — PadiHub" />
+        <meta property="og:title" content={`${group.name} — PadiHub`} />
         <meta property="og:description" content="The trusted community savings platform. Save together, grow together and belong." />
         <meta property="og:type" content="website" />
-        <meta property="og:url" content="https://padihub.com/savings-groups/[id]" />
+        <meta property="og:url" content={`https://padihub.com/savings-groups/${group.id}`} />
         <meta property="og:image" content="https://padihub.com/airo-assets/images/og/default" />
         <meta name="twitter:card" content="summary_large_image" />
         <meta name="twitter:image" content="https://padihub.com/airo-assets/images/og/default" />
-</Helmet>
+      </Helmet>
 
       <div className="p-4 sm:p-6 max-w-3xl mx-auto">
         <MotionDiv initial="hidden" animate="visible" variants={stagger}>
-
-          {/* Back */}
           <MotionDiv variants={fadeUp} className="mb-4">
             <Link to="/savings-groups" className="inline-flex items-center gap-1.5 text-sm font-semibold text-gray-400 hover:text-gray-700 transition-colors">
               <ChevronLeft size={16} /> Back to my groups
             </Link>
           </MotionDiv>
 
-          {/* Hero card */}
-          <MotionDiv variants={fadeUp} className="rounded-3xl p-6 mb-6 relative overflow-hidden"
-            style={{ background: 'linear-gradient(135deg, #0F172A, #1A1A2E)' }}>
-            <div className="absolute top-0 right-0 w-48 h-48 rounded-full blur-3xl opacity-20" style={{ background: group.color }} />
+          <MotionDiv variants={fadeUp} className="rounded-3xl p-6 mb-6 relative overflow-hidden" style={{ background: 'linear-gradient(135deg, #0F172A, #1A1A2E)' }}>
+            <div className="absolute top-0 right-0 w-48 h-48 rounded-full blur-3xl opacity-20" style={{ background: groupColor }} />
             <div className="relative">
-              {/* Header */}
               <div className="flex items-start justify-between gap-4 flex-wrap mb-5">
                 <div className="flex items-center gap-4">
-                  <div className="w-14 h-14 rounded-3xl flex items-center justify-center flex-shrink-0"
-                    style={{ background: `linear-gradient(135deg, ${group.color}, ${group.color}cc)`, boxShadow: `0 4px 20px ${group.color}40` }}>
+                  <div className="w-14 h-14 rounded-3xl flex items-center justify-center flex-shrink-0" style={{ background: `linear-gradient(135deg, ${groupColor}, ${groupColor}cc)`, boxShadow: `0 4px 20px ${groupColor}40` }}>
                     <PiggyBank size={24} color="#fff" />
                   </div>
                   <div>
                     <h1 className="text-xl font-extrabold text-white" style={{ fontFamily: 'Nunito, sans-serif' }}>{group.name}</h1>
-                    <p className="text-xs mt-0.5" style={{ color: 'rgba(255,255,255,0.45)' }}>Led by {group.leader}</p>
+                    <p className="text-xs mt-0.5" style={{ color: 'rgba(255,255,255,0.45)' }}>
+                      {titleCase(group.status)} · {group.currency} · Created {formatDate(group.created_at)}
+                    </p>
                   </div>
                 </div>
-                <Link to={`/savings-groups/${group.id}/contribute`}
-                  className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-sm font-bold text-white transition-all hover:opacity-90"
-                  style={{ background: `linear-gradient(135deg, ${group.color}, ${group.color}cc)` }}>
+                <Link to={`/savings-groups/${group.id}/contribute`} className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-sm font-bold text-white transition-all hover:opacity-90" style={{ background: `linear-gradient(135deg, ${groupColor}, ${groupColor}cc)` }}>
                   <PiggyBank size={14} /> Make Payment
                 </Link>
               </div>
 
-              {/* Key stats */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
                 {[
-                  { label: 'Contribution', value: group.amount,             color: group.color },
-                  { label: 'Frequency',    value: group.freq,               color: '#2eafaf' },
-                  { label: 'Members',      value: group.members.toString(), color: '#8B5CF6' },
-                  { label: 'Next due',     value: group.nextDue,            color: '#F59E0B' },
-                ].map(k => (
-                  <div key={k.label} className="rounded-2xl p-3 text-center" style={{ background: 'rgba(255,255,255,0.05)' }}>
-                    <p className="text-lg font-black" style={{ color: k.color, fontFamily: 'Nunito, sans-serif' }}>{k.value}</p>
-                    <p className="text-xs" style={{ color: 'rgba(255,255,255,0.35)' }}>{k.label}</p>
+                  { label: 'Contribution', value: formatCurrency(group.contribution_amount, group.currency), color: groupColor },
+                  { label: 'Frequency', value: titleCase(group.contribution_frequency), color: '#2eafaf' },
+                  { label: 'Active members', value: `${activeMembers.length}/${group.maximum_members}`, color: '#8B5CF6' },
+                  { label: 'Current cycle', value: group.current_cycle.toString(), color: '#F59E0B' },
+                ].map(stat => (
+                  <div key={stat.label} className="rounded-2xl p-3 text-center" style={{ background: 'rgba(255,255,255,0.05)' }}>
+                    <p className="text-lg font-black" style={{ color: stat.color, fontFamily: 'Nunito, sans-serif' }}>{stat.value}</p>
+                    <p className="text-xs" style={{ color: 'rgba(255,255,255,0.35)' }}>{stat.label}</p>
                   </div>
                 ))}
               </div>
 
-              {/* Progress bar */}
               <div className="rounded-2xl p-4" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}>
                 <div className="flex justify-between text-xs mb-2">
-                  <span style={{ color: 'rgba(255,255,255,0.5)' }}>{group.stage}</span>
-                  <span className="font-bold" style={{ color: group.color }}>{group.pct}% complete</span>
+                  <span style={{ color: 'rgba(255,255,255,0.5)' }}>Group occupancy</span>
+                  <span className="font-bold" style={{ color: groupColor }}>{occupancyPercentage}% full</span>
                 </div>
                 <div className="h-2 rounded-full" style={{ background: 'rgba(255,255,255,0.08)' }}>
-                  <MotionProgressBar className="h-2 rounded-full" initial={{ width: 0 }} animate={{ width: `${group.pct}%` }}
-                    transition={{ duration: 1, delay: 0.4, ease: 'easeOut' as const }}
-                    style={{ background: `linear-gradient(90deg, ${group.color}, #F59E0B)` }} />
+                  <div className="h-2 rounded-full transition-all duration-500" style={{ width: `${occupancyPercentage}%`, background: `linear-gradient(90deg, ${groupColor}, #F59E0B)` }} />
+                </div>
+                <div className="flex items-center justify-between mt-3 text-xs" style={{ color: 'rgba(255,255,255,0.45)' }}>
+                  <span>Rotation method: {titleCase(group.rotation_method)}</span>
+                  <span>Position {group.current_rotation_position}</span>
                 </div>
               </div>
 
-              {/* Quick actions */}
               <div className="flex gap-2 mt-4 flex-wrap">
-                {[
-                  { label: 'Invite',  icon: UserPlus, to: '#' },
-                  { label: 'Share',   icon: Share2,   to: '#' },
-                  { label: 'Leave',   icon: LogOut,   to: `/savings-groups/${group.id}/leave` },
-                ].map(a => (
-                  <Link key={a.label} to={a.to}
-                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all hover:bg-white/10"
-                    style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.6)' }}>
-                    <a.icon size={12} /> {a.label}
-                  </Link>
-                ))}
+                <button onClick={openInviteModal} className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all hover:bg-white/10" style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.75)' }}>
+                  <UserPlus size={12} /> Invite
+                </button>
+                <button onClick={openInviteModal} className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all hover:bg-white/10" style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.75)' }}>
+                  <Share2 size={12} /> Share
+                </button>
+                <Link to={`/savings-groups/${group.id}/leave`} className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all hover:bg-white/10" style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.75)' }}>
+                  <LogOut size={12} /> Leave
+                </Link>
               </div>
             </div>
           </MotionDiv>
 
-          {/* Tabs */}
           <MotionDiv variants={fadeUp} className="flex gap-1 p-1 rounded-2xl mb-6" style={{ background: '#F3F4F6' }}>
-            {tabs.map(t => (
-              <button key={t.key} onClick={() => setTab(t.key)}
+            {tabs.map(currentTab => (
+              <button
+                key={currentTab.key}
+                onClick={() => setTab(currentTab.key)}
                 className="flex-1 py-2.5 rounded-xl text-sm font-bold transition-all"
                 style={{
-                  background: tab === t.key ? '#fff' : 'transparent',
-                  color: tab === t.key ? '#1A1A2E' : '#6B7280',
-                  boxShadow: tab === t.key ? '0 1px 4px rgba(0,0,0,0.08)' : 'none',
-                }}>
-                {t.label}
+                  background: tab === currentTab.key ? '#fff' : 'transparent',
+                  color: tab === currentTab.key ? '#1A1A2E' : '#6B7280',
+                  boxShadow: tab === currentTab.key ? '0 1px 4px rgba(0,0,0,0.08)' : 'none',
+                }}
+              >
+                {currentTab.label}
               </button>
             ))}
           </MotionDiv>
 
           <AnimatePresence mode="wait">
-            <MotionDiv key={tab} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.25 }}>
-
-              {/* ── Overview ── */}
+            <MotionDiv key={tab} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.25 }}>
               {tab === 'overview' && (
                 <div className="flex flex-col gap-5">
-                  {/* Group info */}
                   <div className="rounded-3xl p-5 bg-white" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
                     <h2 className="font-extrabold text-gray-900 mb-4" style={{ fontFamily: 'Nunito, sans-serif' }}>Group Details</h2>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       {[
-                        { label: 'Description',   value: group.description },
-                        { label: 'Leader',         value: group.leader },
-                        { label: 'Rotation order', value: group.rotation },
-                        { label: 'Started',        value: group.startDate },
-                      ].map(r => (
-                        <div key={r.label} className="rounded-2xl p-3" style={{ background: '#F9FAFB' }}>
-                          <p className="text-xs text-gray-400 mb-1">{r.label}</p>
-                          <p className="text-sm font-semibold text-gray-800">{r.value}</p>
+                        { label: 'Description', value: group.description || 'No description added yet.' },
+                        { label: 'Leader', value: group.leader_id === currentUserId ? 'You' : shortId(group.leader_id) },
+                        { label: 'Country', value: group.country === 'NG' ? 'Nigeria' : 'United Kingdom' },
+                        { label: 'Payment provider', value: titleCase(group.payment_provider) },
+                        { label: 'Created', value: formatDate(group.created_at) },
+                        { label: 'Last updated', value: formatDate(group.updated_at) },
+                      ].map(row => (
+                        <div key={row.label} className="rounded-2xl p-3" style={{ background: '#F9FAFB' }}>
+                          <p className="text-xs text-gray-400 mb-1">{row.label}</p>
+                          <p className="text-sm font-semibold text-gray-800 break-words">{row.value}</p>
                         </div>
                       ))}
                     </div>
                   </div>
 
-                  {/* Payment progress */}
                   <div className="rounded-3xl p-5 bg-white" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
-                    <h2 className="font-extrabold text-gray-900 mb-4" style={{ fontFamily: 'Nunito, sans-serif' }}>Payment Progress</h2>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
+                    <h2 className="font-extrabold text-gray-900 mb-4" style={{ fontFamily: 'Nunito, sans-serif' }}>Membership Summary</h2>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
                       {[
-                        { label: 'Cycle',              value: `${group.cycle} of ${group.totalCycles}`, color: group.color },
-                        { label: 'Members paid',       value: `${membersCompleted} of ${group.members}`, color: '#2EAF6F' },
-                        { label: 'Completion',         value: `${group.pct}%`,                           color: '#F59E0B' },
-                      ].map(s => (
-                        <div key={s.label} className="rounded-2xl p-4 text-center" style={{ background: '#F9FAFB' }}>
-                          <p className="text-2xl font-black mb-0.5" style={{ color: s.color, fontFamily: 'Nunito, sans-serif' }}>{s.value}</p>
-                          <p className="text-xs text-gray-400">{s.label}</p>
+                        { label: 'Active', value: membershipSummary.active.toString(), color: '#2EAF6F' },
+                        { label: 'Pending', value: membershipSummary.pending.toString(), color: '#2eafaf' },
+                        { label: 'Suspended', value: membershipSummary.suspended.toString(), color: '#F59E0B' },
+                        { label: 'Removed', value: membershipSummary.removed.toString(), color: '#EF4444' },
+                      ].map(summary => (
+                        <div key={summary.label} className="rounded-2xl p-4 text-center" style={{ background: '#F9FAFB' }}>
+                          <p className="text-2xl font-black mb-0.5" style={{ color: summary.color, fontFamily: 'Nunito, sans-serif' }}>{summary.value}</p>
+                          <p className="text-xs text-gray-400">{summary.label}</p>
                         </div>
                       ))}
                     </div>
-                    {/* Cycle dots */}
-                    <div>
-                      <p className="text-xs text-gray-400 mb-2">Rotation cycles</p>
-                      <div className="flex gap-1.5 flex-wrap">
-                        {Array.from({ length: group.totalCycles }).map((_, i) => (
-                          <div key={i} className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold"
-                            style={{
-                              background: i < group.cycle ? `linear-gradient(135deg, ${group.color}, ${group.color}cc)` : i === group.cycle ? `${group.color}20` : '#F3F4F6',
-                              color: i < group.cycle ? '#fff' : i === group.cycle ? group.color : '#9CA3AF',
-                              border: i === group.cycle ? `2px solid ${group.color}` : 'none',
-                            }}>
-                            {i < group.cycle ? <CheckCircle size={12} /> : i + 1}
-                          </div>
-                        ))}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="rounded-2xl p-4" style={{ background: 'rgba(46,175,111,0.06)', border: '1px solid rgba(46,175,111,0.15)' }}>
+                        <p className="text-xs text-gray-400 mb-1">Current cycle</p>
+                        <p className="text-lg font-black text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>{group.current_cycle}</p>
                       </div>
-                    </div>
-                  </div>
-
-                  {/* Next payout */}
-                  <div className="rounded-3xl p-5 bg-white" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
-                    <h2 className="font-extrabold text-gray-900 mb-4" style={{ fontFamily: 'Nunito, sans-serif' }}>Next Payout</h2>
-                    <div className="flex items-center gap-4 p-4 rounded-2xl" style={{ background: 'rgba(46,175,111,0.05)', border: '1px solid rgba(46,175,111,0.15)' }}>
-                      <div className="w-12 h-12 rounded-full flex items-center justify-center font-bold text-white text-lg flex-shrink-0"
-                        style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}>
-                        {group.nextPayoutMember[0]}
-                      </div>
-                      <div className="flex-1">
-                        <p className="font-bold text-gray-900">{group.nextPayoutMember}</p>
-                        <p className="text-xs text-gray-400">Expected payout date</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="font-bold text-gray-900">{group.nextPayout}</p>
-                        <div className="flex items-center gap-1 text-xs" style={{ color: '#2EAF6F' }}>
-                          <Calendar size={11} /> Scheduled
-                        </div>
+                      <div className="rounded-2xl p-4" style={{ background: 'rgba(46,175,175,0.06)', border: '1px solid rgba(46,175,175,0.15)' }}>
+                        <p className="text-xs text-gray-400 mb-1">Current rotation position</p>
+                        <p className="text-lg font-black text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>{group.current_rotation_position}</p>
                       </div>
                     </div>
                   </div>
                 </div>
               )}
 
-              {/* ── Members ── */}
               {tab === 'members' && (
-                <div className="flex flex-col gap-3">
-                  {members.map((m, i) => (
-                    <div key={i} className="rounded-2xl p-4 bg-white flex items-center gap-4"
-                      style={{ border: '1px solid #F3F4F6', boxShadow: '0 1px 6px rgba(0,0,0,0.04)' }}>
-                      <div className="w-11 h-11 rounded-full flex items-center justify-center font-bold text-white flex-shrink-0"
-                        style={{ background: `linear-gradient(135deg, ${m.color}, ${m.color}cc)` }}>
-                        {m.initial}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <p className="font-bold text-gray-900 text-sm">{m.name}</p>
-                          {m.verified && <CheckCircle size={13} style={{ color: '#2EAF6F' }} />}
-                        </div>
-                        <p className="text-xs text-gray-400">{m.role} · Position {m.position}</p>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <div className="hidden sm:flex items-center gap-1 text-xs text-gray-500">
-                          <Shield size={11} style={{ color: '#2EAF6F' }} />
-                          <span className="font-semibold">{m.trust}</span>
-                        </div>
-                        <PaymentBadge status={m.paymentStatus} />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+                orderedMembers.length === 0 ? (
+                  <div className="rounded-3xl p-6 bg-white text-center" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
+                    <Users size={24} className="mx-auto mb-3" style={{ color: '#9CA3AF' }} />
+                    <h2 className="text-lg font-extrabold text-gray-900 mb-2" style={{ fontFamily: 'Nunito, sans-serif' }}>No member records yet</h2>
+                    <p className="text-sm text-gray-500">Members will appear here once the group has active memberships.</p>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-3">
+                    {orderedMembers.map((member, index) => {
+                      const badge = getMembershipBadge(member.status);
+                      const displayName = member.user_id === currentUserId ? 'You' : `Member ${index + 1}`;
 
-              {/* ── Activity ── */}
-              {tab === 'activity' && (
-                <div className="rounded-3xl p-5 bg-white" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
-                  <h2 className="font-extrabold text-gray-900 mb-5" style={{ fontFamily: 'Nunito, sans-serif' }}>Recent Activity</h2>
-                  <div className="flex flex-col">
-                    {activity.map((a, i) => (
-                      <div key={i} className="flex items-start gap-4 relative">
-                        {i < activity.length - 1 && (
-                          <div className="absolute left-5 top-10 bottom-0 w-0.5" style={{ background: '#F3F4F6' }} />
-                        )}
-                        <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 z-10 bg-white"
-                          style={{ border: `2px solid ${a.color}30` }}>
-                          <a.icon size={15} style={{ color: a.color }} />
-                        </div>
-                        <div className="flex-1 pb-5">
-                          <div className="flex items-center justify-between">
-                            <p className="text-sm font-semibold text-gray-800">{a.text}</p>
-                            <span className="text-xs text-gray-400 flex-shrink-0 ml-2">{a.date}</span>
+                      return (
+                        <div key={member.id} className="rounded-2xl p-4 bg-white flex items-center gap-4" style={{ border: '1px solid #F3F4F6', boxShadow: '0 1px 6px rgba(0,0,0,0.04)' }}>
+                          <div className="w-11 h-11 rounded-full flex items-center justify-center font-bold text-white flex-shrink-0" style={{ background: `linear-gradient(135deg, ${groupColor}, ${groupColor}cc)` }}>
+                            {displayName[0]}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="font-bold text-gray-900 text-sm">{displayName}</p>
+                              {member.role === 'leader' && <CheckCircle size={13} style={{ color: '#2EAF6F' }} />}
+                            </div>
+                            <p className="text-xs text-gray-400 break-all">
+                              {titleCase(member.role)} · Position {member.rotation_order ?? '—'} · {shortId(member.user_id)}
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <span className="px-2 py-0.5 rounded-full text-xs font-bold" style={{ background: badge.bg, color: badge.color }}>
+                              {titleCase(member.status)}
+                            </span>
+                            <p className="text-xs text-gray-400 mt-1">{member.strike_count} strike{member.strike_count === 1 ? '' : 's'}</p>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
-                </div>
+                )
               )}
 
-              {/* ── Rules ── */}
+              {tab === 'activity' && (
+                contributions.length === 0 ? (
+                  <div className="rounded-3xl p-6 bg-white text-center" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
+                    <TrendingUp size={24} className="mx-auto mb-3" style={{ color: '#9CA3AF' }} />
+                    <h2 className="text-lg font-extrabold text-gray-900 mb-2" style={{ fontFamily: 'Nunito, sans-serif' }}>No contribution activity yet</h2>
+                    <p className="text-sm text-gray-500">Once contribution schedules or payments exist for this group, they&apos;ll appear here.</p>
+                  </div>
+                ) : (
+                  <div className="rounded-3xl p-5 bg-white" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
+                    <h2 className="font-extrabold text-gray-900 mb-5" style={{ fontFamily: 'Nunito, sans-serif' }}>Contribution Activity</h2>
+                    <div className="flex flex-col">
+                      {contributions.map((entry, index) => {
+                        const meta = getContributionMeta(entry.payment_status);
+                        const Icon = meta.icon;
+                        const activityDate = entry.paid_date || entry.due_date;
+                        const amount = entry.payment_status === 'paid' && entry.amount_paid ? entry.amount_paid : entry.amount_due;
+
+                        return (
+                          <div key={entry.id} className="flex items-start gap-4 relative">
+                            {index < contributions.length - 1 && <div className="absolute left-5 top-10 bottom-0 w-0.5" style={{ background: '#F3F4F6' }} />}
+                            <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 z-10 bg-white" style={{ border: `2px solid ${meta.color}30` }}>
+                              <Icon size={15} style={{ color: meta.color }} />
+                            </div>
+                            <div className="flex-1 pb-5">
+                              <div className="flex items-center justify-between gap-4">
+                                <div>
+                                  <p className="text-sm font-semibold text-gray-800">Cycle {entry.cycle_number} · {meta.label}</p>
+                                  <p className="text-xs text-gray-400 break-all">Member {shortId(entry.member_id)}</p>
+                                </div>
+                                <div className="text-right">
+                                  <p className="text-sm font-bold" style={{ color: meta.color }}>{formatCurrency(amount, group.currency)}</p>
+                                  <span className="text-xs text-gray-400">{formatDate(activityDate)}</span>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )
+              )}
+
               {tab === 'rules' && (
                 <div className="rounded-3xl p-5 bg-white" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
                   <h2 className="font-extrabold text-gray-900 mb-5" style={{ fontFamily: 'Nunito, sans-serif' }}>Group Rules</h2>
                   <div className="flex flex-col gap-4">
                     {[
-                      {
-                        icon: AlertTriangle, color: '#EF4444',
-                        label: 'Maximum missed payments',
-                        value: `${group.maxMissed} missed payment${group.maxMissed > 1 ? 's' : ''} before removal`,
-                      },
-                      {
-                        icon: Clock, color: '#F59E0B',
-                        label: 'Late payment grace period',
-                        value: group.gracePeriod,
-                      },
-                      {
-                        icon: Users, color: '#8B5CF6',
-                        label: 'Voting required',
-                        value: group.votingRequired ? 'Yes — members vote on key decisions' : 'No — leader makes decisions',
-                      },
-                      {
-                        icon: TrendingUp, color: '#2EAF6F',
-                        label: 'Payout swap requests',
-                        value: group.allowSwaps ? 'Allowed — members can request position swaps' : 'Not allowed',
-                      },
-                    ].map((r, i) => (
-                      <div key={i} className="flex items-start gap-4 p-4 rounded-2xl" style={{ background: '#F9FAFB' }}>
-                        <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: `${r.color}15` }}>
-                          <r.icon size={18} style={{ color: r.color }} />
+                      { icon: AlertTriangle, color: '#EF4444', label: 'Strike threshold', value: `${group.strike_threshold} missed payment${group.strike_threshold === 1 ? '' : 's'} before warning` },
+                      { icon: Clock, color: '#F59E0B', label: 'Suspension threshold', value: `${group.suspension_threshold} missed payment${group.suspension_threshold === 1 ? '' : 's'} before suspension` },
+                      { icon: Users, color: '#8B5CF6', label: 'Voting threshold', value: `${group.voting_threshold}% approval required` },
+                      { icon: TrendingUp, color: '#2EAF6F', label: 'Payout swaps', value: group.allow_payout_swaps ? 'Allowed' : 'Not allowed' },
+                      { icon: Shield, color: '#2eafaf', label: 'Rotation method', value: titleCase(group.rotation_method) },
+                    ].map(rule => (
+                      <div key={rule.label} className="flex items-start gap-4 p-4 rounded-2xl" style={{ background: '#F9FAFB' }}>
+                        <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: `${rule.color}15` }}>
+                          <rule.icon size={18} style={{ color: rule.color }} />
                         </div>
                         <div>
-                          <p className="text-xs text-gray-400 mb-0.5">{r.label}</p>
-                          <p className="text-sm font-semibold text-gray-800">{r.value}</p>
+                          <p className="text-xs text-gray-400 mb-0.5">{rule.label}</p>
+                          <p className="text-sm font-semibold text-gray-800">{rule.value}</p>
                         </div>
                       </div>
                     ))}
                   </div>
                 </div>
               )}
-
             </MotionDiv>
           </AnimatePresence>
         </MotionDiv>
       </div>
+
+      <AnimatePresence>
+        {inviteOpen && (
+          <>
+            <MotionDiv initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm" onClick={closeInviteModal} />
+            <MotionDiv initial={{ opacity: 0, scale: 0.96, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 20 }} transition={{ type: 'spring', stiffness: 350, damping: 28 }} className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
+              <div className="bg-white rounded-3xl shadow-2xl p-7 w-full max-w-md pointer-events-auto relative">
+                <h2 className="text-xl font-extrabold text-gray-900 mb-2" style={{ fontFamily: 'Nunito, sans-serif' }}>Invite members</h2>
+                <p className="text-sm text-gray-500 mb-5">Enter an email to send a direct invite, or leave it blank to create a shareable link.</p>
+
+                {inviteError && (
+                  <div style={{ borderRadius: 16, padding: 16, fontSize: 14, fontWeight: 500, background: '#FEF2F2', color: '#DC2626', border: '1px solid #FECACA', marginBottom: 16 }}>
+                    {inviteError}
+                  </div>
+                )}
+
+                {inviteNotice && (
+                  <div style={{ borderRadius: 16, padding: 16, fontSize: 14, fontWeight: 500, background: '#F0FDF4', color: '#15803D', border: '1px solid #BBF7D0', marginBottom: 16 }}>
+                    {inviteNotice}
+                  </div>
+                )}
+
+                <label className="block text-sm font-bold text-gray-700 mb-1.5">Email address <span className="text-gray-400 font-normal">(optional)</span></label>
+                <input value={inviteEmail} onChange={event => setInviteEmail(event.target.value)} placeholder="name@example.com" type="email" className="w-full px-4 py-3 rounded-2xl border border-gray-200 text-sm focus:outline-none focus:border-green-400 transition-colors mb-4" />
+
+                {inviteLink && (
+                  <div className="rounded-2xl p-4 mb-4" style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
+                    <p className="text-xs text-gray-400 mb-2">Shareable link</p>
+                    <div className="rounded-xl bg-white border border-gray-200 px-3 py-2 text-xs text-gray-600 break-all mb-3">{inviteLink}</div>
+                    {inviteToken && <p className="text-xs text-gray-400 mb-3">Invite token: <span className="font-semibold text-gray-600">{inviteToken}</span></p>}
+                    <Button onClick={() => void handleCopyLink()} variant="outline" className="w-full rounded-2xl font-semibold gap-2">
+                      <Copy size={14} /> Copy link
+                    </Button>
+                  </div>
+                )}
+
+                <div className="flex gap-3">
+                  <Button variant="outline" onClick={closeInviteModal} className="flex-1 rounded-2xl font-semibold">Close</Button>
+                  <Button onClick={() => void handleCreateInvite()} disabled={inviteLoading} className="flex-1 rounded-2xl font-bold" style={{ background: '#2EAF6F', color: '#fff' }}>
+                    {inviteLoading ? 'Sending…' : inviteEmail.trim() ? 'Send invite' : 'Create link'}
+                  </Button>
+                </div>
+              </div>
+            </MotionDiv>
+          </>
+        )}
+      </AnimatePresence>
     </DashboardLayout>
   );
 }

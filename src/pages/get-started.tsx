@@ -4,6 +4,7 @@ import { Helmet } from '@dr.pogodin/react-helmet';
 import { Eye, EyeOff, Mail, Lock, User, ArrowRight, CheckCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import AuthLayout from '@/components/AuthLayout';
+import { getApiErrorMessage } from '@/lib/api-error';
 
 const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/get-started#webpage\",\"name\":\"Join PadiHub — Start saving with your community\",\"url\":\"https://padihub.com/get-started\",\"description\":\"Create your free PadiHub account and start saving smarter with your community today.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"}}";
 
@@ -27,6 +28,8 @@ export default function GetStartedPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.name.trim() || !form.email || !form.password) { setError('Please fill in all fields.'); return; }
+    const failedRule = passwordRules.find(r => !r.test(form.password));
+    if (failedRule) { setError(`Password requirement not met: ${failedRule.label.toLowerCase()}.`); return; }
     if (!agreed) { setError('Please agree to the Terms of Service and Privacy Policy.'); return; }
 
     // Split "Full name" into first_name / last_name; treat everything after
@@ -53,7 +56,7 @@ export default function GetStartedPage() {
       const json = await res.json();
       if (!res.ok) {
         // Surface the server's own error message (e.g. "Email already registered.")
-        setError(json?.message ?? 'Registration failed. Please try again.');
+        setError(getApiErrorMessage(json, 'Registration failed. Please try again.'));
         return;
       }
       // Registration succeeded — verification email sent by the server.
