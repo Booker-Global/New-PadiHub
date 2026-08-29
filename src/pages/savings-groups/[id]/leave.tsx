@@ -150,19 +150,11 @@ export default function LeaveSavingsGroupPage() {
 
     try {
       const headers = { Authorization: 'Bearer ' + session.token };
-      const tryLeave = async (targetId: string) => {
-        const response = await window.fetch(`/api/memberships/${targetId}`, { method: 'DELETE', headers });
-        const json = await response.json() as ApiResponse<null>;
-        return { response, json };
-      };
+      const response = await window.fetch(`/api/memberships/${membership.id}`, { method: 'DELETE', headers });
+      const json = await response.json() as ApiResponse<null>;
 
-      let result = await tryLeave(membership.id);
-      if (!result.response.ok && result.response.status === 404 && result.json.message === 'Group not found.') {
-        result = await tryLeave(group.id);
-      }
-
-      if (!result.response.ok) {
-        setError(getErrorMessage(result.json, 'Could not leave this group.'));
+      if (!response.ok) {
+        setError(getErrorMessage(json, 'Could not leave this group.'));
         return;
       }
 

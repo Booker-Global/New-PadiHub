@@ -250,7 +250,11 @@ export default function SavingsGroupDetailPage() {
     void loadData();
   }, [loadData]);
 
-  const session = getValidSession();
+  // getValidSession() may clear an expired session from storage as a side
+  // effect; reading it via useMemo (rather than directly during render) keeps
+  // that mutation out of React's render phase, e.g. under Strict Mode's
+  // double-invocation of render functions.
+  const session = useMemo(() => getValidSession(), []);
   const currentUserId = session?.userId;
 
   const activeMembers = useMemo(
@@ -259,11 +263,11 @@ export default function SavingsGroupDetailPage() {
   );
 
   const membershipSummary = useMemo(() => ({
-    active: memberships.filter(member => member.status === 'active').length,
+    active: activeMembers.length,
     pending: memberships.filter(member => member.status === 'pending').length,
     suspended: memberships.filter(member => member.status === 'suspended').length,
     removed: memberships.filter(member => member.status === 'removed').length,
-  }), [memberships]);
+  }), [memberships, activeMembers]);
 
   const orderedMembers = useMemo(
     () => [...memberships].sort((left, right) => {

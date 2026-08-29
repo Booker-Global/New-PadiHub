@@ -423,6 +423,12 @@ export default function CreateGroupWizard() {
                         </div>
                       </OptionCard>
                     ))}
+
+                    {data.rotationOrder === 'fcfs' && (
+                      <p className="text-xs px-3 py-2 rounded-xl" style={{ background: 'rgba(245,158,11,0.1)', color: '#B45309' }}>
+                        Note: "First come, first served" isn't tracked separately yet — this group will be created with manual payout ordering, so you'll assign positions as the leader.
+                      </p>
+                    )}
                   </div>
                 )}
 
