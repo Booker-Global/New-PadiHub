@@ -4,7 +4,8 @@ import {
   LayoutDashboard, PiggyBank, Shield,
   Bell, User, Settings, Menu, X,
   Plus, Search, ChevronDown, Zap,
-  HelpCircle, UserPlus, LayoutGrid, LogOut
+  HelpCircle, UserPlus, LayoutGrid, LogOut,
+  CreditCard
 } from 'lucide-react';
 import { getValidSession, logout } from '@/lib/session';
 
@@ -62,6 +63,7 @@ const identityNav = [
 
 const communityNav = [
   { icon: User,       label: 'Profile',  href: '/profile' },
+  { icon: CreditCard, label: 'Payments', href: '/payments/methods' },
   { icon: Settings,   label: 'Settings', href: '/settings' },
   { icon: HelpCircle, label: 'Help',     href: '/help' },
 ];

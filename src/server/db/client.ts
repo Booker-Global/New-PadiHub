@@ -92,9 +92,9 @@ export async function closeConnection(): Promise<void> {
  * to schema.ts. It intentionally only contains additive, nullable columns —
  * this helper never drops or alters existing columns/data.
  */
-const REQUIRED_USER_COLUMNS: Array<{ column: string; ddl: string }> = [
-  { column: 'stripe_payment_method_id', ddl: 'ALTER TABLE `users` ADD COLUMN `stripe_payment_method_id` VARCHAR(100) NULL' },
-  { column: 'flutterwave_card_token',   ddl: 'ALTER TABLE `users` ADD COLUMN `flutterwave_card_token` VARCHAR(255) NULL' },
+const REQUIRED_USER_COLUMNS: Array<{ column: string; sqlType: string }> = [
+  { column: 'stripe_payment_method_id', sqlType: 'VARCHAR(100) NULL' },
+  { column: 'flutterwave_card_token',   sqlType: 'VARCHAR(255) NULL' },
 ];
 
 /**
@@ -114,10 +114,13 @@ export async function ensureSchemaSync(): Promise<void> {
       (rows as Array<{ COLUMN_NAME: string }>).map(row => row.COLUMN_NAME)
     );
 
-    for (const { column, ddl } of REQUIRED_USER_COLUMNS) {
+    for (const { column, sqlType } of REQUIRED_USER_COLUMNS) {
       if (existingColumns.has(column)) continue;
       console.warn(`[PadiHub] Schema drift detected: users.${column} is missing — adding it now.`);
-      await poolConnection.query(ddl);
+      // column/sqlType come only from the hardcoded list above (never user input),
+      // so building the DDL string here is safe and keeps the name in sync with
+      // the `existingColumns.has(column)` check above (no separate literal to drift).
+      await poolConnection.query(`ALTER TABLE \`users\` ADD COLUMN \`${column}\` ${sqlType}`);
       console.log(`[PadiHub] ✓ Added missing column users.${column}.`);
     }
   } catch (err) {

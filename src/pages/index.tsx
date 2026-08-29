@@ -106,9 +106,9 @@ function DashboardPreview({ name, trust, token }: { name: string; trust: number;
     const headers = { Authorization: 'Bearer ' + token };
 
     void Promise.all([
-      fetch('/api/users/stats', { headers }).then(r => (r.ok ? r.json() : null)).catch(() => null),
-      fetch('/api/groups', { headers }).then(r => (r.ok ? r.json() : null)).catch(() => null),
-      fetch('/api/contributions', { headers }).then(r => (r.ok ? r.json() : null)).catch(() => null),
+      window.fetch('/api/users/stats', { headers }).then(r => (r.ok ? r.json() : null)).catch(() => null),
+      window.fetch('/api/groups', { headers }).then(r => (r.ok ? r.json() : null)).catch(() => null),
+      window.fetch('/api/contributions', { headers }).then(r => (r.ok ? r.json() : null)).catch(() => null),
     ]).then(([statsJson, groupsJson, contribJson]) => {
       if (!active) return;
       if (typeof statsJson?.data?.trust_score === 'number') setTrustScore(statsJson.data.trust_score);

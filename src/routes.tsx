@@ -68,6 +68,10 @@ const NotificationSettingsPage = lazy(() => import('./pages/notifications/settin
 const ProfileIndexPage = lazy(() => import('./pages/profile/index'));
 const EditProfilePage = lazy(() => import('./pages/profile/edit'));
 
+// Payments — payment method & payout destination setup
+const AddPaymentMethodPage = lazy(() => import('./pages/payments/methods'));
+const ConnectPayoutPage = lazy(() => import('./pages/payments/payout'));
+
 // Leader Tools
 const LeaderCommandCentrePage = lazy(() => import('./pages/leader/index'));
 const LeaderMembersPage        = lazy(() => import('./pages/leader/members'));
@@ -137,6 +141,10 @@ export const routes: RouteObject[] = [
   // Profile / Personal Control Centre
   { path: '/profile', element: <ProfileIndexPage /> },
   { path: '/profile/edit', element: <EditProfilePage /> },
+
+  // Payments — payment method & payout destination setup
+  { path: '/payments/methods', element: <AddPaymentMethodPage /> },
+  { path: '/payments/payout', element: <ConnectPayoutPage /> },
 
   // Leader Tools
   { path: '/leader',               element: <LeaderCommandCentrePage /> },
