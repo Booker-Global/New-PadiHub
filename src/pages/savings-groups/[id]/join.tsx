@@ -32,6 +32,7 @@ interface ApiResponse<T> {
   success?: boolean;
   data?: T;
   message?: string;
+  code?: string;
   errors?: Record<string, string[] | undefined>;
 }
 
@@ -80,6 +81,7 @@ export default function JoinSavingsGroupPage() {
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState('');
+  const [needsPaymentSetup, setNeedsPaymentSetup] = useState(false);
   const [notFound, setNotFound] = useState(false);
 
   const inviteToken = useMemo(
@@ -153,6 +155,7 @@ export default function JoinSavingsGroupPage() {
 
     setSubmitting(true);
     setError('');
+    setNeedsPaymentSetup(false);
 
     try {
       const response = await window.fetch('/api/memberships', {
@@ -170,6 +173,7 @@ export default function JoinSavingsGroupPage() {
       const json = await response.json() as ApiResponse<null>;
       if (!response.ok) {
         setError(getErrorMessage(json, 'Could not join this group.'));
+        setNeedsPaymentSetup(json.code === 'PAYMENT_SETUP_REQUIRED');
         return;
       }
 
@@ -314,6 +318,19 @@ export default function JoinSavingsGroupPage() {
           </div>
         )}
 
+        {needsPaymentSetup && (
+          <div className="rounded-2xl p-4 mb-5" style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)' }}>
+            <p className="text-sm font-semibold" style={{ color: '#92400E' }}>Complete payment setup to join</p>
+            <p className="text-xs mt-1" style={{ color: '#92400E' }}>
+              You need a verified payment method (to contribute) and a verified payout destination (to receive your payout when it&apos;s your turn) before you can join a group.
+            </p>
+            <div className="flex gap-3 mt-3">
+              <Link to="/payments/methods" className="text-xs font-bold underline" style={{ color: '#92400E' }}>Add payment method</Link>
+              <Link to="/payments/payout" className="text-xs font-bold underline" style={{ color: '#92400E' }}>Connect payout destination</Link>
+            </div>
+          </div>
+        )}
+
         <label className="flex items-start gap-3 cursor-pointer mb-5">
           <div className="relative mt-0.5">
             <input type="checkbox" className="sr-only" checked={agreed} onChange={event => setAgreed(event.target.checked)} />
@@ -330,7 +347,7 @@ export default function JoinSavingsGroupPage() {
           <Link to="/savings-groups" className="px-5 py-3.5 rounded-2xl font-bold text-gray-600 hover:bg-gray-50 transition-colors" style={{ border: '1px solid #E5E7EB' }}>
             Cancel
           </Link>
-          <button onClick={() => void handleJoin()} disabled={!agreed || submitting} className="flex-1 py-3.5 rounded-2xl font-bold text-white flex items-center justify-center gap-2 transition-all" style={{ background: agreed ? `linear-gradient(135deg, ${groupColor}, ${groupColor}cc)` : '#D1D5DB', cursor: agreed ? 'pointer' : 'not-allowed' }}>
+          <button onClick={() => void handleJoin()} disabled={!agreed || submitting || needsPaymentSetup} className="flex-1 py-3.5 rounded-2xl font-bold text-white flex items-center justify-center gap-2 transition-all" style={{ background: agreed && !needsPaymentSetup ? `linear-gradient(135deg, ${groupColor}, ${groupColor}cc)` : '#D1D5DB', cursor: agreed && !needsPaymentSetup ? 'pointer' : 'not-allowed' }}>
             {submitting ? (
               <svg className="animate-spin" width="18" height="18" viewBox="0 0 24 24" fill="none">
                 <circle cx="12" cy="12" r="10" stroke="rgba(255,255,255,0.3)" strokeWidth="3" />

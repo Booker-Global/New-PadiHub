@@ -131,6 +131,7 @@ export default function CreateGroupWizard() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [needsVerification, setNeedsVerification] = useState(false);
+  const [needsPaymentSetup, setNeedsPaymentSetup] = useState(false);
   const [bypassing, setBypassing] = useState(false);
   const [createdGroup, setCreatedGroup] = useState<SavingsGroup | null>(null);
 
@@ -142,6 +143,7 @@ export default function CreateGroupWizard() {
   const set = <K extends keyof GroupData>(key: K, value: GroupData[K]) => {
     setSubmitError('');
     setNeedsVerification(false);
+    setNeedsPaymentSetup(false);
     setData(current => ({ ...current, [key]: value }));
   };
 
@@ -160,6 +162,7 @@ export default function CreateGroupWizard() {
     if (step > 0) {
       setSubmitError('');
       setNeedsVerification(false);
+      setNeedsPaymentSetup(false);
       setStep(current => current - 1);
     }
   };
@@ -179,6 +182,7 @@ export default function CreateGroupWizard() {
     setSubmitting(true);
     setSubmitError('');
     setNeedsVerification(false);
+    setNeedsPaymentSetup(false);
 
     try {
       const response = await window.fetch('/api/groups', {
@@ -205,6 +209,7 @@ export default function CreateGroupWizard() {
       if (!response.ok) {
         setSubmitError(getErrorMessage(json, 'Could not create your group.'));
         setNeedsVerification(json.code === 'VERIFICATION_REQUIRED');
+        setNeedsPaymentSetup(json.code === 'PAYMENT_SETUP_REQUIRED');
         return;
       }
 
@@ -343,6 +348,12 @@ export default function CreateGroupWizard() {
                   >
                     {bypassing ? 'Bypassing verification…' : 'Bypass verification (test mode)'}
                   </button>
+                )}
+                {needsPaymentSetup && (
+                  <div className="flex gap-3 mt-3">
+                    <Link to="/payments/methods" style={{ fontSize: 13, fontWeight: 700, color: '#DC2626', textDecoration: 'underline' }}>Add payment method</Link>
+                    <Link to="/payments/payout" style={{ fontSize: 13, fontWeight: 700, color: '#DC2626', textDecoration: 'underline' }}>Connect payout destination</Link>
+                  </div>
                 )}
               </div>
             )}

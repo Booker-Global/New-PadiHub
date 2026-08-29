@@ -147,6 +147,19 @@ export class StripeProvider implements IPaymentProvider {
     return stripe.webhooks.constructEvent(rawBody, signature, secret);
   }
 
+  /** Retrieve a connected account's onboarding/payout status */
+  async getAccountStatus(accountId: string): Promise<{
+    chargesEnabled: boolean; payoutsEnabled: boolean; detailsSubmitted: boolean;
+  }> {
+    const stripe = getStripe();
+    const account = await stripe.accounts.retrieve(accountId);
+    return {
+      chargesEnabled:   Boolean(account.charges_enabled),
+      payoutsEnabled:   Boolean(account.payouts_enabled),
+      detailsSubmitted: Boolean(account.details_submitted),
+    };
+  }
+
   /** Create a Stripe Express connected account for a group leader */
   async createConnectedAccount(params: {
     userId: string; email: string;

@@ -7,6 +7,7 @@ import { createAuditLog } from '../middleware/auditLogger.js';
 import { notificationService } from './notificationService.js';
 import { trustScoreService } from './trustScoreService.js';
 import { groupService } from './groupService.js';
+import { assertPaymentSetupComplete } from './paymentEligibilityService.js';
 import {
   sendMemberRemovedEmail,
   sendInvitationAcceptedEmail,
@@ -33,6 +34,11 @@ export const membershipService = {
     // Check not already a member
     const existing = members.find(m => m.user_id === userId && m.status === 'active');
     if (existing) throw new AppError('Already a member of this group.', 409);
+
+    // Every member eventually receives a payout when it's their turn, so a
+    // verified payment method (to contribute) and a verified payout
+    // destination (to be paid out) are both required before joining.
+    await assertPaymentSetupComplete(userId);
 
     // Check identity verification — joining is allowed but a warning is returned if unverified
     const userRows = await db.select({ identity_verified: schema.users.identity_verified })

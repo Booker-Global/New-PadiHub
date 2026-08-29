@@ -5,16 +5,30 @@
  *
  * These are named exports ready for Trigger.dev or any cron runner.
  */
-import { eq, lt, lte, and } from 'drizzle-orm';
+import { eq, lt, lte, and, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { contributionService } from './contributionService.js';
 import { notificationService } from './notificationService.js';
 import { monitoringService } from './monitoringService.js';
+import { chargeContributionForUser } from '../controllers/paymentController.js';
+import { getFlutterwaveProvider } from '../integrations/payments/PaymentProviderFactory.js';
+import { createAuditLog } from '../middleware/auditLogger.js';
 import {
   sendContributionReminderEmail,
   sendSubscriptionRenewalReminderEmail,
 } from '../integrations/email/emailService.js';
+
+// ₦3,500/month — matches the published price in legalController.ts and the
+// renewal-reminder email copy. Configurable via env for future price changes.
+const DEFAULT_FLUTTERWAVE_SUBSCRIPTION_AMOUNT_NGN = 3500;
+
+function getFlutterwaveSubscriptionAmount() {
+  const parsed = Number.parseFloat(
+    process.env.FLUTTERWAVE_SUBSCRIPTION_AMOUNT_NGN ?? `${DEFAULT_FLUTTERWAVE_SUBSCRIPTION_AMOUNT_NGN}`,
+  );
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_FLUTTERWAVE_SUBSCRIPTION_AMOUNT_NGN;
+}
 
 // ─── Job runner helper ────────────────────────────────────────────────────────
 
@@ -59,6 +73,33 @@ export async function dailyContributionReminders(): Promise<void> {
           title: 'Contribution Reminder',
           message: `Your contribution of ${amount} to ${groupRow[0].name} is due on ${dueDate}.`,
         });
+      }
+    }
+  });
+}
+
+/**
+ * Automatically charge contributions once they become due, using the
+ * member's saved payment method — instead of relying solely on the member
+ * manually clicking "Confirm contribution". Runs before dailyOverdueCheck so
+ * a due contribution gets a real charge attempt before being marked missed.
+ */
+export async function dailyAutoChargeDueContributions(): Promise<void> {
+  await runJob('daily_auto_charge_due_contributions', async () => {
+    const due = await db.select().from(schema.contributions)
+      .where(eq(schema.contributions.payment_status, 'due'));
+
+    for (const c of due) {
+      try {
+        await chargeContributionForUser(c.member_id, c.id);
+      } catch (err) {
+        // Expected failures (no saved payment method, provider decline, etc.)
+        // are left for dailyFailedPaymentCheck / dailyOverdueCheck to handle —
+        // just log so a single member's failure doesn't stop the whole batch.
+        console.warn(
+          `[Job] daily_auto_charge_due_contributions: contribution ${c.id} charge attempt failed:`,
+          err instanceof Error ? err.message : err,
+        );
       }
     }
   });
@@ -208,16 +249,87 @@ export async function monthlyAdvanceRotation(): Promise<void> {
   });
 }
 
-/** Validate subscription renewals */
-export async function monthlySubscriptionRenewalValidation(): Promise<void> {
-  await runJob('monthly_subscription_renewal_validation', async () => {
-    const expired = await db.select({ id: schema.subscriptions.user_id })
-      .from(schema.subscriptions)
+/**
+ * Charge monthly platform-subscription renewals that have reached their
+ * renewal date. Stripe (UK) subscriptions bill themselves automatically via
+ * Stripe's native Subscriptions API — Stripe charges the customer's default
+ * payment method off-session and our webhookStripeController already
+ * reconciles billing_status/subscription_status from the resulting
+ * invoice.payment_succeeded/failed events, so nothing to do here for them.
+ * Flutterwave has no native recurring-billing engine, so NG renewals are
+ * charged explicitly here against the member's saved card token.
+ */
+export async function monthlySubscriptionRenewalCharge(): Promise<void> {
+  await runJob('monthly_subscription_renewal_charge', async () => {
+    const due = await db.select().from(schema.subscriptions)
       .where(and(
-        eq(schema.subscriptions.billing_status, 'active'),
-        lt(schema.subscriptions.renewal_date, new Date()),
+        inArray(schema.subscriptions.billing_status, ['active', 'trialing']),
+        lte(schema.subscriptions.renewal_date, new Date()),
       ));
-    console.log(`[Job] Subscription renewal validation: ${expired.length} subscriptions past renewal date.`);
+
+    for (const sub of due) {
+      if (sub.provider !== 'flutterwave') continue;
+
+      const userRows = await db.select().from(schema.users).where(eq(schema.users.id, sub.user_id)).limit(1);
+      if (!userRows.length) continue;
+      const user = userRows[0];
+
+      if (!user.flutterwave_card_token) {
+        await notificationService.create({
+          userId: user.id, type: 'subscription_payment_failed',
+          title: 'Subscription Renewal Failed',
+          message: 'We could not renew your PadiHub subscription — no saved card on file. Please add a payment method.',
+        });
+        await db.update(schema.subscriptions).set({ billing_status: 'past_due' }).where(eq(schema.subscriptions.id, sub.id));
+        await db.update(schema.users).set({ subscription_status: 'expired' }).where(eq(schema.users.id, user.id));
+        continue;
+      }
+
+      const amountInSmallestUnit = Math.round(getFlutterwaveSubscriptionAmount() * 100);
+      const renewalRef = `sub-renewal-${sub.id}-${sub.renewal_date?.getTime() ?? Date.now()}`;
+
+      try {
+        const result = await getFlutterwaveProvider().chargeContribution({
+          customerId:      user.email,
+          paymentMethodId: user.flutterwave_card_token,
+          amount:          amountInSmallestUnit,
+          currency:        user.currency,
+          countryCode:     user.country,
+          contributionId:  renewalRef,
+          description:     'PadiHub monthly subscription renewal',
+        });
+
+        const nextRenewalDate = sub.renewal_date ? new Date(sub.renewal_date) : new Date();
+        nextRenewalDate.setMonth(nextRenewalDate.getMonth() + 1);
+
+        if (result.status === 'succeeded') {
+          await db.update(schema.subscriptions)
+            .set({ billing_status: 'active', renewal_date: nextRenewalDate })
+            .where(eq(schema.subscriptions.id, sub.id));
+          await db.update(schema.users).set({ subscription_status: 'active' }).where(eq(schema.users.id, user.id));
+        } else {
+          await db.update(schema.subscriptions).set({ billing_status: 'past_due' }).where(eq(schema.subscriptions.id, sub.id));
+          await db.update(schema.users).set({ subscription_status: 'expired' }).where(eq(schema.users.id, user.id));
+          await notificationService.create({
+            userId: user.id, type: 'subscription_payment_failed',
+            title: 'Subscription Renewal Failed',
+            message: 'Your subscription payment failed. Please update your payment method to keep access.',
+          });
+        }
+
+        await createAuditLog({
+          userId: user.id, action: 'FLW_SUBSCRIPTION_RENEWAL_CHARGED', entity: 'subscriptions',
+          entityId: sub.id, metadata: result as unknown as Record<string, unknown>,
+        });
+      } catch (err) {
+        await db.update(schema.subscriptions).set({ billing_status: 'past_due' }).where(eq(schema.subscriptions.id, sub.id));
+        await db.update(schema.users).set({ subscription_status: 'expired' }).where(eq(schema.users.id, user.id));
+        console.warn(
+          `[Job] monthly_subscription_renewal_charge: renewal charge failed for subscription ${sub.id}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
   });
 }
 
@@ -236,6 +348,7 @@ export async function monthlyAuditLogArchive(): Promise<void> {
 
 export const dailyJobs = [
   dailyContributionReminders,
+  dailyAutoChargeDueContributions,
   dailyOverdueCheck,
   dailyTrustScoreUpdates,
   dailyFailedPaymentCheck,
@@ -251,6 +364,6 @@ export const weeklyJobs = [
 export const monthlyJobs = [
   monthlyGenerateContributionSchedule,
   monthlyAdvanceRotation,
-  monthlySubscriptionRenewalValidation,
+  monthlySubscriptionRenewalCharge,
   monthlyAuditLogArchive,
 ];

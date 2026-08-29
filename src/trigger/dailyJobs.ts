@@ -4,7 +4,8 @@
  * Schedules (UTC):
  *   06:00  contribution reminders
  *   06:10  overdue check
- *   06:20  trust-score status flip
+ *   06:20  trust-score status flip (scheduled → due)
+ *   06:25  auto-charge newly-due contributions
  *   06:30  failed-payment notifications
  *   03:00  notification cleanup
  */
@@ -13,6 +14,7 @@ import {
   dailyContributionReminders,
   dailyOverdueCheck,
   dailyTrustScoreUpdates,
+  dailyAutoChargeDueContributions,
   dailyFailedPaymentCheck,
   dailyNotificationCleanup,
 } from '../server/services/scheduledJobs.js';
@@ -41,6 +43,15 @@ export const dailyTrustScoreUpdatesTask = schedules.task({
   run: async () => {
     await dailyTrustScoreUpdates();
     return { ok: true, task: 'daily-trust-score-updates' };
+  },
+});
+
+export const dailyAutoChargeDueContributionsTask = schedules.task({
+  id: 'daily-auto-charge-due-contributions',
+  cron: '25 6 * * *',
+  run: async () => {
+    await dailyAutoChargeDueContributions();
+    return { ok: true, task: 'daily-auto-charge-due-contributions' };
   },
 });
 

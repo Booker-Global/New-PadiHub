@@ -93,8 +93,10 @@ export async function closeConnection(): Promise<void> {
  * this helper never drops or alters existing columns/data.
  */
 const REQUIRED_USER_COLUMNS: Array<{ column: string; sqlType: string }> = [
-  { column: 'stripe_payment_method_id', sqlType: 'VARCHAR(100) NULL' },
-  { column: 'flutterwave_card_token',   sqlType: 'VARCHAR(255) NULL' },
+  { column: 'stripe_payment_method_id',   sqlType: 'VARCHAR(100) NULL' },
+  { column: 'flutterwave_card_token',     sqlType: 'VARCHAR(255) NULL' },
+  { column: 'payment_method_verified_at', sqlType: 'TIMESTAMP NULL' },
+  { column: 'payout_verified_at',         sqlType: 'TIMESTAMP NULL' },
 ];
 
 /**

@@ -4,14 +4,14 @@
  * Schedules (UTC, 1st of each month):
  *   08:00  generate contribution schedules
  *   08:15  advance pending rotations
- *   08:30  subscription renewal validation
+ *   08:30  subscription renewal charge (Flutterwave charges card; Stripe self-bills)
  *   02:00  audit log archive
  */
 import { schedules } from '@trigger.dev/sdk/v3';
 import {
   monthlyGenerateContributionSchedule,
   monthlyAdvanceRotation,
-  monthlySubscriptionRenewalValidation,
+  monthlySubscriptionRenewalCharge,
   monthlyAuditLogArchive,
 } from '../server/services/scheduledJobs.js';
 
@@ -33,12 +33,12 @@ export const monthlyAdvanceRotationTask = schedules.task({
   },
 });
 
-export const monthlySubscriptionRenewalValidationTask = schedules.task({
-  id: 'monthly-subscription-renewal-validation',
+export const monthlySubscriptionRenewalChargeTask = schedules.task({
+  id: 'monthly-subscription-renewal-charge',
   cron: '30 8 1 * *',
   run: async () => {
-    await monthlySubscriptionRenewalValidation();
-    return { ok: true, task: 'monthly-subscription-renewal-validation' };
+    await monthlySubscriptionRenewalCharge();
+    return { ok: true, task: 'monthly-subscription-renewal-charge' };
   },
 });
 

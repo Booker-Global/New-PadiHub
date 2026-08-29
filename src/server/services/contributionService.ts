@@ -52,6 +52,11 @@ export const contributionService = {
     if (!rows.length) throw new AppError('Contribution not found.', 404);
     const c = rows[0];
 
+    // Idempotent: a contribution may be charged and marked paid synchronously
+    // (e.g. by the auto-charge job) and again later by the provider webhook —
+    // skip re-processing so trust score / notifications / emails aren't duplicated.
+    if (c.payment_status === 'paid') return true;
+
     await db.update(schema.contributions).set({
       payment_status:     'paid',
       amount_paid:        c.amount_due,
@@ -84,6 +89,10 @@ export const contributionService = {
       .where(eq(schema.contributions.id, contributionId)).limit(1);
     if (!rows.length) throw new AppError('Contribution not found.', 404);
     const c = rows[0];
+
+    // Idempotent — don't downgrade an already-paid contribution, and don't
+    // re-notify if it was already marked failed by an earlier attempt.
+    if (c.payment_status === 'paid' || c.payment_status === 'failed') return true;
 
     await db.update(schema.contributions)
       .set({ payment_status: 'failed' })

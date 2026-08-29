@@ -260,6 +260,7 @@ app.post('/api/payments/save-flutterwave-token', authenticate, paymentController
 // it's their turn in the rotation, so payout-destination setup must be
 // available to any authenticated member, not gated behind requireRole.
 app.post('/api/payments/connect-onboard',    authenticate, paymentController.connectOnboard);
+app.post('/api/payments/verify-payout',      authenticate, paymentController.verifyPayout);
 app.post('/api/payments/charge-contribution', authenticate, paymentController.chargeContribution);
 
 // ── Support ───────────────────────────────────────────────────────────[...]

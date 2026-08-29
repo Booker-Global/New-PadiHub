@@ -23,6 +23,7 @@ interface UserProfile {
   currency: 'GBP' | 'NGN';
   stripe_connected_account_id?: string | null;
   flutterwave_subaccount_id?: string | null;
+  payout_verified_at?: string | null;
 }
 
 interface ApiResponse<T> {
@@ -53,6 +54,7 @@ export default function ConnectPayoutPage() {
   const [actionError, setActionError] = useState('');
   const [actionNotice, setActionNotice] = useState('');
   const [connectLoading, setConnectLoading] = useState(false);
+  const [verifyLoading, setVerifyLoading] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [businessName, setBusinessName] = useState('');
   const [bankCode, setBankCode] = useState('');
@@ -90,18 +92,54 @@ export default function ConnectPayoutPage() {
     void loadProfile();
   }, [loadProfile]);
 
+  const hasConnectedDestination = Boolean(
+    profile && (profile.country === 'NG' ? profile.flutterwave_subaccount_id : profile.stripe_connected_account_id),
+  );
+  const isPayoutVerified = Boolean(profile?.payout_verified_at);
+
+  const handleVerify = async () => {
+    const session = getValidSession();
+    if (!session?.token) return;
+
+    setVerifyLoading(true);
+    try {
+      const response = await window.fetch('/api/payments/verify-payout', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + session.token },
+      });
+      const json = await response.json().catch(() => null) as ApiResponse<{ payout_verified: boolean }> | null;
+      if (!response.ok) {
+        throw new Error(getErrorMessage(json, 'Could not verify your payout destination.'));
+      }
+      await loadProfile();
+      if (json?.data?.payout_verified) {
+        setActionNotice('Your payout destination is verified. You can now receive payouts.');
+        setActionError('');
+      } else {
+        setActionNotice('');
+        setActionError(
+          profile?.country === 'NG'
+            ? 'Your payout account has not been verified yet. Please check your account details and try again.'
+            : 'Stripe has not finished verifying your payout account yet — this can take a few minutes after onboarding. Try verifying again shortly.',
+        );
+      }
+    } catch (verifyError) {
+      setActionError(verifyError instanceof Error ? verifyError.message : 'Could not verify your payout destination.');
+    } finally {
+      setVerifyLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (searchParams.get('stripe_connected') === '1') {
-      setActionNotice('Your Stripe payout account is connected. You can now receive payouts.');
+      setActionNotice('Your Stripe payout account is connected. Verifying with Stripe…');
       setActionError('');
+      void handleVerify();
     } else if (searchParams.get('stripe_refresh') === '1') {
       setActionError('Stripe onboarding was not completed. Please try connecting again.');
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
-
-  const hasConnectedPayout = Boolean(
-    profile && (profile.country === 'NG' ? profile.flutterwave_subaccount_id : profile.stripe_connected_account_id),
-  );
 
   const handleConnect = async () => {
     if (!termsAccepted) {
@@ -226,20 +264,39 @@ export default function ConnectPayoutPage() {
                   <span
                     className="text-xs font-bold px-3 py-1 rounded-full"
                     style={{
-                      color: hasConnectedPayout ? '#2EAF6F' : '#F59E0B',
-                      background: hasConnectedPayout ? 'rgba(46,175,111,0.12)' : 'rgba(245,158,11,0.12)',
+                      color: isPayoutVerified ? '#2EAF6F' : '#F59E0B',
+                      background: isPayoutVerified ? 'rgba(46,175,111,0.12)' : 'rgba(245,158,11,0.12)',
                     }}
                   >
-                    {hasConnectedPayout ? 'Payout destination connected' : 'Not connected yet'}
+                    {isPayoutVerified ? 'Verified' : hasConnectedDestination ? 'Connected — not verified yet' : 'Not connected yet'}
                   </span>
                 </div>
 
-                {hasConnectedPayout ? (
+                {isPayoutVerified ? (
                   <div className="rounded-2xl p-4 flex items-start gap-3" style={{ background: 'rgba(46,175,111,0.08)', border: '1px solid rgba(46,175,111,0.18)' }}>
                     <Shield size={18} style={{ color: '#2EAF6F', flexShrink: 0 }} />
                     <p className="text-sm text-gray-700">
-                      Your payout destination is connected. When it&apos;s your turn in the rotation, your payout will be sent here.
+                      Your payout destination is verified. When it&apos;s your turn in the rotation, your payout will be sent here.
                     </p>
+                  </div>
+                ) : hasConnectedDestination ? (
+                  <div className="space-y-3">
+                    <div className="rounded-2xl p-4 flex items-start gap-3" style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)' }}>
+                      <AlertTriangle size={18} style={{ color: '#F59E0B', flexShrink: 0 }} />
+                      <p className="text-sm text-gray-700">
+                        A payout destination is on file but hasn&apos;t been verified yet
+                        {profile?.country === 'NG' ? '.' : ' — Stripe may still be checking your details.'}
+                        {' '}You need a verified payout destination before you can join a group.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => void handleVerify()}
+                      disabled={verifyLoading}
+                      className="w-full py-3 rounded-2xl font-bold text-white inline-flex items-center justify-center gap-2 transition-all disabled:cursor-not-allowed disabled:opacity-60"
+                      style={{ background: 'linear-gradient(135deg, #2eafaf, #1f8f8f)' }}
+                    >
+                      {verifyLoading ? 'Verifying…' : 'Verify now'}
+                    </button>
                   </div>
                 ) : (
                   <div className="space-y-4">

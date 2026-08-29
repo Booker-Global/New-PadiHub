@@ -5,6 +5,7 @@ import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { notificationService } from './notificationService.js';
+import { assertPaymentSetupComplete } from './paymentEligibilityService.js';
 import { INVITE_TTL } from '../lib/constants.js';
 import {
   sendGroupInvitationEmail,
@@ -54,6 +55,10 @@ export const groupService = {
         'VERIFICATION_REQUIRED',
       );
     }
+
+    // The group creator is the group's first member, so the same
+    // payment-method + payout-destination gate applies to them too.
+    await assertPaymentSetupComplete(data.leader_id);
 
     const id = uuidv4();
     const payment_provider = assignProvider(data.country);

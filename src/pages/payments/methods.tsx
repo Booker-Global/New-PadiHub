@@ -24,6 +24,7 @@ interface UserProfile {
   currency: 'GBP' | 'NGN';
   stripe_payment_method_id?: string | null;
   flutterwave_card_token?: string | null;
+  payment_method_verified_at?: string | null;
 }
 
 interface ApiResponse<T> {
@@ -107,7 +108,8 @@ export default function AddPaymentMethodPage() {
   }, [searchParams]);
 
   const hasSavedPaymentMethod = Boolean(
-    profile && (profile.country === 'NG' ? profile.flutterwave_card_token : profile.stripe_payment_method_id),
+    profile && (profile.country === 'NG' ? profile.flutterwave_card_token : profile.stripe_payment_method_id)
+      && profile.payment_method_verified_at,
   );
 
   const needsStripeCard = Boolean(profile && profile.country !== 'NG' && !hasSavedPaymentMethod);
@@ -420,7 +422,7 @@ export default function AddPaymentMethodPage() {
                       background: hasSavedPaymentMethod ? 'rgba(46,175,111,0.12)' : 'rgba(245,158,11,0.12)',
                     }}
                   >
-                    {hasSavedPaymentMethod ? 'Payment method saved' : 'Not saved yet'}
+                    {hasSavedPaymentMethod ? 'Verified' : 'Not saved yet'}
                   </span>
                 </div>
 

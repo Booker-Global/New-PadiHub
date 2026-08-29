@@ -22,6 +22,13 @@ export const users = mysqlTable('users', {
   flutterwave_customer_id:     varchar('flutterwave_customer_id', { length: 100 }),
   flutterwave_card_token:      varchar('flutterwave_card_token', { length: 255 }),
   flutterwave_subaccount_id:   varchar('flutterwave_subaccount_id', { length: 100 }),
+  // Set only after server-side verification with the provider (Stripe PaymentMethod
+  // retrieval + customer match, or Flutterwave transaction verification), and after
+  // the payout destination has been confirmed usable (Stripe charges_enabled &&
+  // payouts_enabled, or Flutterwave subaccount creation). Joining/creating a group
+  // requires both to be non-null — see paymentEligibilityService.ts.
+  payment_method_verified_at:  timestamp('payment_method_verified_at'),
+  payout_verified_at:          timestamp('payout_verified_at'),
   notification_preferences:    json('notification_preferences'),
   account_status:              mysqlEnum('account_status', ['pending_verification', 'active', 'suspended', 'deactivated']).notNull().default('pending_verification'),
   email_verified:              boolean('email_verified').notNull().default(false),

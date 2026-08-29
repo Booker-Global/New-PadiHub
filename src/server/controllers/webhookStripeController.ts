@@ -141,7 +141,12 @@ async function handleStripeEvent(event: Stripe.Event) {
 
     case 'account.updated': {
       const account = event.data.object as Stripe.Account;
-      const verified = account.charges_enabled && account.payouts_enabled;
+      const verified = Boolean(account.charges_enabled && account.payouts_enabled);
+
+      await db.update(schema.users)
+        .set({ payout_verified_at: verified ? new Date() : null })
+        .where(eq(schema.users.stripe_connected_account_id, account.id));
+
       await createAuditLog({
         action: 'STRIPE_ACCOUNT_UPDATED', entity: 'users',
         metadata: { accountId: account.id, chargesEnabled: account.charges_enabled, payoutsEnabled: account.payouts_enabled, verified },
