@@ -1,30 +1,33 @@
 import { ReactNode, useState, useRef, useEffect } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, PiggyBank, Shield,
   Bell, User, Settings, Menu, X,
   Plus, Search, ChevronDown, Zap,
-  HelpCircle, UserPlus, LayoutGrid
+  HelpCircle, UserPlus, LayoutGrid, LogOut
 } from 'lucide-react';
+import { getValidSession, logout } from '@/lib/session';
 
 // ─── Session hook ────────────────────────────────────────────────────────────
+// Uses getValidSession() so a stored session whose JWT has already expired is
+// treated as logged-out (cleared) rather than silently showing a stale
+// "logged in" navbar with no re-authentication (see src/lib/session.ts).
 function useDashboardUser() {
   const [user, setUser] = useState<{ name: string; trust: number; initial: string }>({
     name: '', trust: 0, initial: '',
   });
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem('padihub_user') || sessionStorage.getItem('padihub_session');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        const name = parsed?.name || '';
-        setUser({
-          name,
-          trust: parsed?.trust ?? 0,
-          initial: name.charAt(0).toUpperCase() || '?',
-        });
-      }
-    } catch { /* ignore */ }
+    const session = getValidSession();
+    if (!session) {
+      setUser({ name: '', trust: 0, initial: '' });
+      return;
+    }
+    const name = session.name || '';
+    setUser({
+      name,
+      trust: session.trust ?? 0,
+      initial: name.charAt(0).toUpperCase() || '?',
+    });
   }, []);
   return user;
 }
@@ -55,8 +58,8 @@ const mobileBottomNav = [
 ];
 
 const fabActions = [
-  { icon: PiggyBank, label: 'Create Group',  color: '#2EAF6F' },
-  { icon: UserPlus,  label: 'Invite Member', color: '#F59E0B' },
+  { icon: PiggyBank, label: 'Create Group',  color: '#2EAF6F', href: '/savings-groups/create' },
+  { icon: UserPlus,  label: 'Invite Member', color: '#F59E0B', href: '/savings-groups' },
 ];
 
 // ─── NavLink — module-level so React sees a stable component type across renders.
@@ -158,18 +161,31 @@ interface DashboardLayoutProps {
 
 export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const location = useLocation();
+  const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen]   = useState(false);
   const [fabOpen, setFabOpen]           = useState(false);
   const [searchOpen, setSearchOpen]     = useState(false);
   const [quickOpen, setQuickOpen]       = useState(false);
+  const [profileOpen, setProfileOpen]   = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const quickRef  = useRef<HTMLDivElement>(null);
+  const profileRef = useRef<HTMLDivElement>(null);
   const dashUser = useDashboardUser();
 
-  // Close quick actions on outside click
+  // Redirect to login if the session's JWT has already expired — otherwise
+  // the dashboard keeps rendering as "logged in" indefinitely with no
+  // re-authentication, since localStorage never expires on its own.
+  useEffect(() => {
+    if (!getValidSession()) {
+      navigate('/login', { replace: true });
+    }
+  }, [navigate]);
+
+  // Close quick actions / profile menu on outside click
   useEffect(() => {
     function handler(e: MouseEvent) {
       if (quickRef.current && !quickRef.current.contains(e.target as Node)) setQuickOpen(false);
+      if (profileRef.current && !profileRef.current.contains(e.target as Node)) setProfileOpen(false);
     }
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
@@ -182,8 +198,14 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
 
   const closeSidebar = () => setSidebarOpen(false);
 
+  const handleLogout = async () => {
+    setProfileOpen(false);
+    await logout();
+    navigate('/login', { replace: true });
+  };
+
   const quickActions = [
-    { icon: PiggyBank, label: 'Create Group',     href: '/savings-groups', color: '#2EAF6F' },
+    { icon: PiggyBank, label: 'Create Group',     href: '/savings-groups/create', color: '#2EAF6F' },
     { icon: UserPlus,  label: 'Invite Member',    href: '/savings-groups', color: '#F59E0B' },
     { icon: LayoutGrid,label: 'Manage Group',     href: '/leader-dashboard', color: '#EF4444' },
   ];
@@ -295,12 +317,45 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full" style={{ background: '#2EAF6F' }} />
             </Link>
 
-            {/* Profile avatar */}
-            <Link to="/profile" className="w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold text-white flex-shrink-0"
-              style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}
-              aria-label="Profile">
-              {dashUser.initial}
-            </Link>
+            {/* Profile avatar + dropdown */}
+            <div className="relative" ref={profileRef}>
+              <button
+                onClick={() => setProfileOpen(o => !o)}
+                className="w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold text-white flex-shrink-0"
+                style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', border: 'none', cursor: 'pointer' }}
+                aria-label="Account menu"
+                aria-haspopup="menu"
+                aria-expanded={profileOpen}
+              >
+                {dashUser.initial}
+              </button>
+
+              {profileOpen && (
+                <div className="absolute right-0 top-full mt-2 w-52 bg-white rounded-2xl shadow-xl border border-gray-100 py-2 z-50" role="menu">
+                  {dashUser.name && (
+                    <div className="px-4 py-2 mb-1 border-b border-gray-50">
+                      <p className="text-sm font-bold text-gray-900 truncate">{dashUser.name}</p>
+                    </div>
+                  )}
+                  <Link to="/profile" onClick={() => setProfileOpen(false)}
+                    className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 transition-colors text-sm font-semibold text-gray-700">
+                    <User size={15} className="text-gray-400" /> Profile
+                  </Link>
+                  <Link to="/settings" onClick={() => setProfileOpen(false)}
+                    className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 transition-colors text-sm font-semibold text-gray-700">
+                    <Settings size={15} className="text-gray-400" /> Settings
+                  </Link>
+                  <button
+                    onClick={handleLogout}
+                    data-testid="dashboard-logout-button"
+                    className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 transition-colors text-sm font-semibold text-red-500 w-full text-left"
+                    style={{ background: 'none', border: 'none', cursor: 'pointer' }}
+                  >
+                    <LogOut size={15} /> Log out
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </header>
 
@@ -335,10 +390,11 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                 <span style={{ padding: '6px 12px', borderRadius: 999, fontSize: 12, fontWeight: 700, color: '#fff', background: action.color, boxShadow: '0 2px 8px rgba(0,0,0,0.2)' }}>
                   {action.label}
                 </span>
-                <button style={{ width: 44, height: 44, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: action.color, border: 'none', cursor: 'pointer', boxShadow: '0 2px 12px rgba(0,0,0,0.2)' }}
+                <Link to={action.href} aria-label={action.label}
+                  style={{ width: 44, height: 44, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: action.color, boxShadow: '0 2px 12px rgba(0,0,0,0.2)' }}
                   onClick={() => setFabOpen(false)}>
                   <action.icon size={18} style={{ color: '#fff' }} />
-                </button>
+                </Link>
               </div>
             ))}
           </>

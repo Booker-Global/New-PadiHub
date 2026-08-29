@@ -1,68 +1,264 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { MotionDiv } from '@/lib/motion-safe';
-import { Link, useParams } from 'react-router-dom';
-import { ChevronLeft, PiggyBank, Users, Shield, Calendar, CheckCircle, ArrowRight } from 'lucide-react';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { ChevronLeft, PiggyBank, Users, Shield, Calendar, CheckCircle, ArrowRight, AlertTriangle, RefreshCw } from 'lucide-react';
 import DashboardLayout from '@/components/DashboardLayout';
+import { SkeletonPage } from '@/components/ui/loading-skeleton';
+import { getValidSession } from '@/lib/session';
 
-const groupData: Record<string, { name: string; community: string; amount: string; freq: string; members: number; pct: number; leader: string; trust: number; color: string; nextDue: string; rotation: string; purpose: string }> = {
-  'tech-skills-fund':  { name: 'Tech Skills Fund',  community: 'Tech Professionals UK', amount: '£100',   freq: 'Monthly', members: 8,  pct: 35, leader: 'James O.', trust: 920, color: '#2EAF6F', nextDue: 'Jul 1',  rotation: 'Sequential', purpose: 'Saving for professional development and upskilling.' },
-  'holiday-pool-2026': { name: 'Holiday Pool 2026', community: 'Family First Network',  amount: '£75',    freq: 'Monthly', members: 6,  pct: 20, leader: 'Sarah K.', trust: 880, color: '#F59E0B', nextDue: 'Jul 5',  rotation: 'Ballot',     purpose: 'Saving for a group holiday in 2026.' },
-  'naija-growth-fund': { name: 'Naija Growth Fund', community: 'Naija Entrepreneurs',   amount: '₦3,000', freq: 'Monthly', members: 12, pct: 45, leader: 'Emeka S.', trust: 905, color: '#8B5CF6', nextDue: 'Jun 30', rotation: 'Need-based', purpose: 'Business growth fund for Nigerian entrepreneurs.' },
-};
-const defaultGroup = groupData['tech-skills-fund'];
+interface SavingsGroup {
+  id: string;
+  name: string;
+  description?: string | null;
+  leader_id: string;
+  country: 'GB' | 'NG';
+  currency: 'GBP' | 'NGN';
+  contribution_amount: string | number;
+  contribution_frequency: 'weekly' | 'monthly';
+  maximum_members: number;
+  rotation_method: 'manual' | 'random';
+  current_cycle: number;
+  status: 'active' | 'closed' | 'suspended';
+  created_at: string;
+}
+
+interface Membership {
+  id: string;
+  status: 'pending' | 'active' | 'suspended' | 'removed';
+}
+
+interface ApiResponse<T> {
+  success?: boolean;
+  data?: T;
+  message?: string;
+  errors?: Record<string, string[] | undefined>;
+}
+
+function getErrorMessage<T>(json: ApiResponse<T> | null, fallback: string) {
+  const firstFieldError = json?.errors
+    ? Object.values(json.errors).flat().find((value): value is string => Boolean(value))
+    : undefined;
+  return firstFieldError || json?.message || fallback;
+}
+
+function formatCurrency(amount: string | number, currency: 'GBP' | 'NGN') {
+  const numericAmount = typeof amount === 'number' ? amount : Number.parseFloat(amount);
+  const locale = currency === 'GBP' ? 'en-GB' : 'en-NG';
+
+  return new Intl.NumberFormat(locale, {
+    style: 'currency',
+    currency,
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  }).format(Number.isFinite(numericAmount) ? numericAmount : 0);
+}
+
+function formatDate(date: string) {
+  const parsed = new Date(date);
+  if (Number.isNaN(parsed.getTime())) return 'Date unavailable';
+  return parsed.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function titleCase(value: string) {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function getGroupColor(group: SavingsGroup) {
+  if (group.status === 'closed') return '#6B7280';
+  if (group.status === 'suspended') return '#F59E0B';
+  return group.currency === 'NGN' ? '#2EAF6F' : '#2eafaf';
+}
 
 export default function JoinSavingsGroupPage() {
   const { id } = useParams<{ id: string }>();
-  const group = (id && groupData[id]) ? groupData[id] : defaultGroup;
-  const groupId = id ?? 'tech-skills-fund';
+  const [searchParams] = useSearchParams();
+  const [group, setGroup] = useState<SavingsGroup | null>(null);
+  const [memberCount, setMemberCount] = useState(0);
   const [agreed, setAgreed] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [error, setError] = useState('');
+  const [notFound, setNotFound] = useState(false);
 
-  const handleJoin = () => {
+  const inviteToken = useMemo(
+    () => searchParams.get('invite_token') || searchParams.get('invite') || searchParams.get('token') || undefined,
+    [searchParams],
+  );
+
+  const loadData = useCallback(async () => {
+    if (!id) {
+      setNotFound(true);
+      setLoading(false);
+      return;
+    }
+
+    const session = getValidSession();
+    if (!session?.token) {
+      setError('Please log in to join this savings group.');
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
-    setTimeout(() => { setLoading(false); setSuccess(true); }, 1600);
+    setError('');
+    setNotFound(false);
+
+    try {
+      const headers = { Authorization: 'Bearer ' + session.token };
+      const groupResponse = await window.fetch(`/api/groups/${id}`, { headers });
+      const groupJson = await groupResponse.json() as ApiResponse<SavingsGroup>;
+
+      if (!groupResponse.ok) {
+        const message = getErrorMessage(groupJson, 'Could not load this group.');
+        if (groupResponse.status === 404) {
+          setNotFound(true);
+          setGroup(null);
+          return;
+        }
+        throw new Error(message);
+      }
+
+      setGroup(groupJson.data ?? null);
+
+      const membershipsResponse = await window.fetch(`/api/memberships?group_id=${id}`, { headers });
+      if (membershipsResponse.ok) {
+        const membershipsJson = await membershipsResponse.json() as ApiResponse<Membership[]>;
+        const memberships = Array.isArray(membershipsJson.data) ? membershipsJson.data : [];
+        setMemberCount(memberships.filter(member => member.status === 'active').length);
+      } else {
+        setMemberCount(0);
+      }
+    } catch (loadError) {
+      setGroup(null);
+      setError(loadError instanceof Error ? loadError.message : 'Could not load this group.');
+    } finally {
+      setLoading(false);
+    }
+  }, [id]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
+
+  const handleJoin = async () => {
+    if (!group) return;
+
+    const session = getValidSession();
+    if (!session?.token) {
+      setError('Please log in to join this savings group.');
+      return;
+    }
+
+    setSubmitting(true);
+    setError('');
+
+    try {
+      const response = await window.fetch('/api/memberships', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer ' + session.token,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          group_id: group.id,
+          ...(inviteToken ? { invite_token: inviteToken } : {}),
+        }),
+      });
+
+      const json = await response.json() as ApiResponse<null>;
+      if (!response.ok) {
+        setError(getErrorMessage(json, 'Could not join this group.'));
+        return;
+      }
+
+      setSuccess(true);
+    } catch {
+      setError('Network error. Please check your connection and try again.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  if (success) return (
-    <DashboardLayout>
-      <div className="p-4 sm:p-6 max-w-lg mx-auto text-center py-16">
-        <MotionDiv initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 300, damping: 20 }}
-          className="w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6"
-          style={{ background: `linear-gradient(135deg, ${group.color}, ${group.color}cc)`, boxShadow: `0 0 40px ${group.color}50` }}>
-          <CheckCircle size={36} color="#fff" />
-        </MotionDiv>
-        <h2 className="text-2xl font-extrabold text-gray-900 mb-2" style={{ fontFamily: 'Nunito, sans-serif' }}>You've joined! 🎉</h2>
-        <p className="text-gray-500 mb-8">Welcome to <strong>{group.name}</strong>. Your first contribution is due <strong>{group.nextDue}</strong>.</p>
-        <div className="flex flex-col sm:flex-row gap-3 justify-center">
-          <Link to={`/savings-groups/${groupId}`} className="px-6 py-3 rounded-2xl font-bold text-white hover:opacity-90 transition-all"
-            style={{ background: `linear-gradient(135deg, ${group.color}, ${group.color}cc)` }}>
-            View group
-          </Link>
-          <Link to="/savings-groups" className="px-6 py-3 rounded-2xl font-bold text-gray-600 hover:bg-gray-50 transition-colors text-center"
-            style={{ border: '1px solid #E5E7EB' }}>
-            All groups
+  if (loading) {
+    return <DashboardLayout><SkeletonPage /></DashboardLayout>;
+  }
+
+  if (notFound) {
+    return (
+      <DashboardLayout>
+        <div className="p-4 sm:p-6 max-w-lg mx-auto text-center py-16">
+          <h1 className="text-2xl font-extrabold text-gray-900 mb-3" style={{ fontFamily: 'Nunito, sans-serif' }}>Group not found</h1>
+          <p className="text-gray-500 mb-6">The savings group you&apos;re trying to join could not be found.</p>
+          <Link to="/savings-groups" className="inline-flex items-center gap-2 px-5 py-3 rounded-2xl font-bold text-white" style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}>
+            <ChevronLeft size={16} /> Back to savings groups
           </Link>
         </div>
-      </div>
-    </DashboardLayout>
-  );
+      </DashboardLayout>
+    );
+  }
+
+  if (error && !group) {
+    return (
+      <DashboardLayout>
+        <div className="p-4 sm:p-6 max-w-lg mx-auto text-center py-16">
+          <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4" style={{ background: 'rgba(239,68,68,0.1)' }}>
+            <AlertTriangle size={24} style={{ color: '#EF4444' }} />
+          </div>
+          <h1 className="text-2xl font-extrabold text-gray-900 mb-3" style={{ fontFamily: 'Nunito, sans-serif' }}>Couldn&apos;t load this group</h1>
+          <p className="text-gray-500 mb-6">{error}</p>
+          <button onClick={() => void loadData()} className="inline-flex items-center gap-2 px-5 py-3 rounded-2xl font-bold text-white" style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}>
+            <RefreshCw size={16} /> Try again
+          </button>
+        </div>
+      </DashboardLayout>
+    );
+  }
+
+  if (!group) {
+    return null;
+  }
+
+  const groupColor = getGroupColor(group);
+  const availableSpots = Math.max(group.maximum_members - memberCount, 0);
+
+  if (success) {
+    return (
+      <DashboardLayout>
+        <div className="p-4 sm:p-6 max-w-lg mx-auto text-center py-16">
+          <MotionDiv initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 300, damping: 20 }} className="w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6" style={{ background: `linear-gradient(135deg, ${groupColor}, ${groupColor}cc)`, boxShadow: `0 0 40px ${groupColor}50` }}>
+            <CheckCircle size={36} color="#fff" />
+          </MotionDiv>
+          <h2 className="text-2xl font-extrabold text-gray-900 mb-2" style={{ fontFamily: 'Nunito, sans-serif' }}>You&apos;ve joined! 🎉</h2>
+          <p className="text-gray-500 mb-8">Welcome to <strong>{group.name}</strong>. You can now view the group and track your contributions.</p>
+          <div className="flex flex-col sm:flex-row gap-3 justify-center">
+            <Link to={`/savings-groups/${group.id}`} className="px-6 py-3 rounded-2xl font-bold text-white hover:opacity-90 transition-all" style={{ background: `linear-gradient(135deg, ${groupColor}, ${groupColor}cc)` }}>
+              View group
+            </Link>
+            <Link to="/savings-groups" className="px-6 py-3 rounded-2xl font-bold text-gray-600 hover:bg-gray-50 transition-colors text-center" style={{ border: '1px solid #E5E7EB' }}>
+              All groups
+            </Link>
+          </div>
+        </div>
+      </DashboardLayout>
+    );
+  }
 
   return (
     <DashboardLayout>
       <Helmet>
         <title>Join {group.name} — PadiHub</title>
         <meta name="description" content={`Join ${group.name} savings group on PadiHub.`} />
-        <link rel="canonical" href={`https://padihub.com/savings-groups/${groupId}/join`} />
-              <meta property="og:title" content="Join {group.name} — PadiHub" />
+        <link rel="canonical" href={`https://padihub.com/savings-groups/${group.id}/join`} />
+        <meta property="og:title" content={`Join ${group.name} — PadiHub`} />
         <meta property="og:description" content="The trusted community savings platform. Save together, grow together and belong." />
         <meta property="og:type" content="website" />
-        <meta property="og:url" content="https://padihub.com/savings-groups/[id]/join" />
+        <meta property="og:url" content={`https://padihub.com/savings-groups/${group.id}/join`} />
         <meta property="og:image" content="https://padihub.com/airo-assets/images/og/default" />
         <meta name="twitter:card" content="summary_large_image" />
         <meta name="twitter:image" content="https://padihub.com/airo-assets/images/og/default" />
-</Helmet>
+      </Helmet>
 
       <div className="p-4 sm:p-6 max-w-lg mx-auto">
         <div className="mb-5">
@@ -71,77 +267,71 @@ export default function JoinSavingsGroupPage() {
           </Link>
         </div>
 
-        {/* Banner */}
         <div className="rounded-3xl p-6 mb-5 relative overflow-hidden" style={{ background: 'linear-gradient(135deg, #0F172A, #1A1A2E)' }}>
-          <div className="absolute top-0 right-0 w-32 h-32 rounded-full blur-3xl opacity-20" style={{ background: group.color }} />
+          <div className="absolute top-0 right-0 w-32 h-32 rounded-full blur-3xl opacity-20" style={{ background: groupColor }} />
           <div className="relative flex items-center gap-4">
-            <div className="w-14 h-14 rounded-3xl flex items-center justify-center flex-shrink-0"
-              style={{ background: `linear-gradient(135deg, ${group.color}, ${group.color}cc)` }}>
+            <div className="w-14 h-14 rounded-3xl flex items-center justify-center flex-shrink-0" style={{ background: `linear-gradient(135deg, ${groupColor}, ${groupColor}cc)` }}>
               <PiggyBank size={24} color="#fff" />
             </div>
             <div>
               <h1 className="text-xl font-extrabold text-white" style={{ fontFamily: 'Nunito, sans-serif' }}>{group.name}</h1>
-              <p className="text-xs" style={{ color: 'rgba(255,255,255,0.4)' }}>{group.community}</p>
+              <p className="text-xs" style={{ color: 'rgba(255,255,255,0.4)' }}>{titleCase(group.status)} · Created {formatDate(group.created_at)}</p>
             </div>
           </div>
         </div>
 
-        {/* Details */}
         <div className="rounded-3xl p-5 bg-white mb-5" style={{ border: '1px solid #E5E7EB' }}>
           <h2 className="font-extrabold text-gray-900 mb-4" style={{ fontFamily: 'Nunito, sans-serif' }}>Group details</h2>
-          <p className="text-sm text-gray-600 mb-4 leading-relaxed">{group.purpose}</p>
+          <p className="text-sm text-gray-600 mb-4 leading-relaxed">{group.description || 'This group has not added a description yet.'}</p>
           <div className="grid grid-cols-2 gap-3">
             {[
-              { label: 'Contribution', value: `${group.amount} ${group.freq}`, icon: PiggyBank, color: group.color },
-              { label: 'Members',      value: `${group.members} active`,       icon: Users,    color: '#8B5CF6' },
-              { label: 'Trust rating', value: group.trust.toString(),          icon: Shield,   color: '#2EAF6F' },
-              { label: 'Next due',     value: group.nextDue,                   icon: Calendar, color: '#F59E0B' },
-              { label: 'Leader',       value: group.leader,                    icon: Shield,   color: '#2eafaf' },
-              { label: 'Rotation',     value: group.rotation,                  icon: ArrowRight,color: '#6B7280' },
-            ].map(r => (
-              <div key={r.label} className="rounded-xl p-3" style={{ background: '#F9FAFB' }}>
-                <r.icon size={12} style={{ color: r.color, marginBottom: 4 }} />
-                <p className="text-sm font-bold text-gray-900">{r.value}</p>
-                <p className="text-xs text-gray-400">{r.label}</p>
+              { label: 'Contribution', value: `${formatCurrency(group.contribution_amount, group.currency)} ${titleCase(group.contribution_frequency)}`, icon: PiggyBank, color: groupColor },
+              { label: 'Members', value: `${memberCount}/${group.maximum_members} active`, icon: Users, color: '#8B5CF6' },
+              { label: 'Available spots', value: availableSpots.toString(), icon: Shield, color: '#2EAF6F' },
+              { label: 'Current cycle', value: group.current_cycle.toString(), icon: Calendar, color: '#F59E0B' },
+              { label: 'Rotation', value: titleCase(group.rotation_method), icon: ArrowRight, color: '#2eafaf' },
+              { label: 'Country', value: group.country === 'NG' ? 'Nigeria' : 'United Kingdom', icon: Shield, color: '#6B7280' },
+            ].map(row => (
+              <div key={row.label} className="rounded-xl p-3" style={{ background: '#F9FAFB' }}>
+                <row.icon size={12} style={{ color: row.color, marginBottom: 4 }} />
+                <p className="text-sm font-bold text-gray-900">{row.value}</p>
+                <p className="text-xs text-gray-400">{row.label}</p>
               </div>
             ))}
           </div>
         </div>
 
-        {/* Progress */}
-        <div className="rounded-2xl p-4 mb-5 bg-white" style={{ border: '1px solid #E5E7EB' }}>
-          <div className="flex justify-between text-xs mb-1">
-            <span className="text-gray-400">Group progress</span>
-            <span className="font-bold" style={{ color: group.color }}>{group.pct}%</span>
+        {inviteToken && (
+          <div className="rounded-2xl p-4 mb-5" style={{ background: 'rgba(46,175,111,0.05)', border: '1px solid rgba(46,175,111,0.15)' }}>
+            <p className="text-sm font-semibold" style={{ color: '#15803D' }}>Invitation applied</p>
+            <p className="text-xs text-gray-500 mt-1">We&apos;ll use your invite token when you join this group.</p>
           </div>
-          <div className="h-2 rounded-full bg-gray-100">
-            <div className="h-2 rounded-full" style={{ width: `${group.pct}%`, background: `linear-gradient(90deg, ${group.color}, #F59E0B)` }} />
-          </div>
-        </div>
+        )}
 
-        {/* Agreement */}
+        {error && (
+          <div style={{ borderRadius: 16, padding: 16, fontSize: 14, fontWeight: 500, background: '#FEF2F2', color: '#DC2626', border: '1px solid #FECACA', marginBottom: 20 }}>
+            {error}
+          </div>
+        )}
+
         <label className="flex items-start gap-3 cursor-pointer mb-5">
           <div className="relative mt-0.5">
-            <input type="checkbox" className="sr-only" checked={agreed} onChange={e => setAgreed(e.target.checked)} />
-            <div className="w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all"
-              style={{ borderColor: agreed ? group.color : '#D1D5DB', background: agreed ? group.color : '#fff' }}>
+            <input type="checkbox" className="sr-only" checked={agreed} onChange={event => setAgreed(event.target.checked)} />
+            <div className="w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all" style={{ borderColor: agreed ? groupColor : '#D1D5DB', background: agreed ? groupColor : '#fff' }}>
               {agreed && <CheckCircle size={12} color="#fff" />}
             </div>
           </div>
           <span className="text-sm text-gray-600 leading-relaxed">
-            I agree to contribute <strong>{group.amount}</strong> {group.freq.toLowerCase()} and abide by the group rules.
+            I agree to contribute <strong>{formatCurrency(group.contribution_amount, group.currency)}</strong> {group.contribution_frequency} and abide by the group rules.
           </span>
         </label>
 
         <div className="flex gap-3">
-          <Link to="/savings-groups" className="px-5 py-3.5 rounded-2xl font-bold text-gray-600 hover:bg-gray-50 transition-colors"
-            style={{ border: '1px solid #E5E7EB' }}>
+          <Link to="/savings-groups" className="px-5 py-3.5 rounded-2xl font-bold text-gray-600 hover:bg-gray-50 transition-colors" style={{ border: '1px solid #E5E7EB' }}>
             Cancel
           </Link>
-          <button onClick={handleJoin} disabled={!agreed || loading}
-            className="flex-1 py-3.5 rounded-2xl font-bold text-white flex items-center justify-center gap-2 transition-all"
-            style={{ background: agreed ? `linear-gradient(135deg, ${group.color}, ${group.color}cc)` : '#D1D5DB', cursor: agreed ? 'pointer' : 'not-allowed' }}>
-            {loading ? (
+          <button onClick={() => void handleJoin()} disabled={!agreed || submitting} className="flex-1 py-3.5 rounded-2xl font-bold text-white flex items-center justify-center gap-2 transition-all" style={{ background: agreed ? `linear-gradient(135deg, ${groupColor}, ${groupColor}cc)` : '#D1D5DB', cursor: agreed ? 'pointer' : 'not-allowed' }}>
+            {submitting ? (
               <svg className="animate-spin" width="18" height="18" viewBox="0 0 24 24" fill="none">
                 <circle cx="12" cy="12" r="10" stroke="rgba(255,255,255,0.3)" strokeWidth="3" />
                 <path d="M12 2a10 10 0 0 1 10 10" stroke="#fff" strokeWidth="3" strokeLinecap="round" />

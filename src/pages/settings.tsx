@@ -1,16 +1,49 @@
 import { Helmet } from '@dr.pogodin/react-helmet';
-import { useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { MotionDiv } from '@/lib/motion-safe';
 import {
   Bell, Shield, Globe, Moon, Smartphone, Lock, Eye, EyeOff,
-  ChevronRight, Check, Trash2, Download, LogOut
+  ChevronRight, Check, Trash2, Download, LogOut,
 } from 'lucide-react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { SkeletonPage } from '@/components/ui/loading-skeleton';
 import { SuccessToast, useSuccessToast } from '@/components/ui/success-toast';
+import { getValidSession, logout } from '@/lib/session';
 
 const fadeUp = { hidden: { opacity: 0, y: 16 }, visible: { opacity: 1, y: 0, transition: { duration: 0.4, ease: 'easeOut' as const } } };
 const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.06 } } };
+
+const defaultNotifications = {
+  contributions: true,
+  groupActivity: true,
+  invitations: true,
+  voting: false,
+  email: true,
+  sms: false,
+};
+
+const defaultPrivacy = {
+  showTrust: true,
+  publicProfile: true,
+  dataPreferences: false,
+};
+
+type NotificationSettings = typeof defaultNotifications;
+type PrivacySettings = typeof defaultPrivacy;
+
+type ApiResponse<T> = {
+  success?: boolean;
+  data?: T;
+  message?: string;
+  errors?: Record<string, string[]>;
+};
+
+type UserProfile = {
+  notification_preferences?: Record<string, unknown> | null;
+};
 
 function Toggle({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -21,14 +54,20 @@ function Toggle({ value, onChange }: { value: boolean; onChange: (v: boolean) =>
       className="relative w-11 h-6 rounded-full transition-colors duration-200 flex-shrink-0"
       style={{ background: value ? '#2EAF6F' : '#D1D5DB' }}
     >
-      <span className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200"
-        style={{ transform: value ? 'translateX(20px)' : 'translateX(0)' }} />
+      <span
+        className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200"
+        style={{ transform: value ? 'translateX(20px)' : 'translateX(0)' }}
+      />
     </button>
   );
 }
 
 function SettingRow({ icon: Icon, label, description, children, color = '#2EAF6F' }: {
-  icon: typeof Bell; label: string; description?: string; children: React.ReactNode; color?: string;
+  icon: typeof Bell;
+  label: string;
+  description?: string;
+  children: ReactNode;
+  color?: string;
 }) {
   return (
     <div className="flex items-center justify-between py-4 border-b border-gray-50 last:border-0">
@@ -46,16 +85,237 @@ function SettingRow({ icon: Icon, label, description, children, color = '#2EAF6F
   );
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function getBooleanValue(value: unknown, fallback: boolean) {
+  return typeof value === 'boolean' ? value : fallback;
+}
+
+function getApiErrorMessage(payload: unknown, fallback: string) {
+  if (isRecord(payload) && isRecord(payload.errors)) {
+    for (const value of Object.values(payload.errors)) {
+      if (Array.isArray(value)) {
+        const message = value.find((item): item is string => typeof item === 'string' && item.trim().length > 0);
+        if (message) return message;
+      }
+    }
+  }
+
+  if (isRecord(payload) && typeof payload.message === 'string' && payload.message.trim()) {
+    return payload.message;
+  }
+
+  return fallback;
+}
+
+function getNotificationSettings(preferences: Record<string, unknown>): NotificationSettings {
+  const source = isRecord(preferences.notifications) ? preferences.notifications : {};
+
+  return {
+    contributions: getBooleanValue(source.contributions, defaultNotifications.contributions),
+    groupActivity: getBooleanValue(source.groupActivity, defaultNotifications.groupActivity),
+    invitations: getBooleanValue(source.invitations, defaultNotifications.invitations),
+    voting: getBooleanValue(source.voting, defaultNotifications.voting),
+    email: getBooleanValue(source.email, defaultNotifications.email),
+    sms: getBooleanValue(source.sms, defaultNotifications.sms),
+  };
+}
+
+function getPrivacySettings(preferences: Record<string, unknown>): PrivacySettings {
+  const source = isRecord(preferences.privacy) ? preferences.privacy : {};
+
+  return {
+    showTrust: getBooleanValue(source.showTrust, defaultPrivacy.showTrust),
+    publicProfile: getBooleanValue(source.publicProfile, defaultPrivacy.publicProfile),
+    dataPreferences: getBooleanValue(source.dataPreferences, defaultPrivacy.dataPreferences),
+  };
+}
+
 export default function SettingsPage() {
-  const [notifs, setNotifs] = useState({ contributions: true, groupActivity: true, invitations: true, voting: false, email: true, sms: false });
-  const [privacy, setPrivacy] = useState({ showTrust: true, publicProfile: true, dataPreferences: false });
+  const navigate = useNavigate();
+  const [notifs, setNotifs] = useState<NotificationSettings>(defaultNotifications);
+  const [privacy, setPrivacy] = useState<PrivacySettings>(defaultPrivacy);
   const [darkMode, setDarkMode] = useState(false);
   const [twoFA, setTwoFA] = useState(false);
+  const [existingPreferences, setExistingPreferences] = useState<Record<string, unknown>>({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showLogoutDialog, setShowLogoutDialog] = useState(false);
   const { toastState, show: showToast, hide: hideToast } = useSuccessToast();
 
-  const handleSave = () => showToast('Settings saved', 'Your preferences have been updated.', 'default');
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', darkMode);
+  }, [darkMode]);
+
+  useEffect(() => {
+    let active = true;
+
+    const loadProfile = async () => {
+      const session = getValidSession();
+      if (!session?.token) {
+        if (!active) return;
+        const message = 'Your session has expired. Please sign in again.';
+        setLoadError(message);
+        setLoading(false);
+        showToast('Could not load settings', message, 'badge');
+        return;
+      }
+
+      try {
+        const response = await globalThis.fetch('/api/users/profile', {
+          headers: {
+            Authorization: 'Bearer ' + session.token,
+          },
+        });
+
+        const payload = await response.json().catch(() => null) as ApiResponse<UserProfile> | null;
+        if (!response.ok || !payload?.success || !payload.data) {
+          throw new Error(getApiErrorMessage(payload, 'Unable to load your settings right now.'));
+        }
+
+        if (!active) return;
+
+        const preferences = isRecord(payload.data.notification_preferences)
+          ? payload.data.notification_preferences
+          : {};
+
+        setExistingPreferences(preferences);
+        setNotifs(getNotificationSettings(preferences));
+        setPrivacy(getPrivacySettings(preferences));
+        setDarkMode(getBooleanValue(preferences.darkMode, false));
+        setTwoFA(getBooleanValue(preferences.twoFA, false));
+        setLoadError(null);
+      } catch (error) {
+        if (!active) return;
+        const message = error instanceof Error && error.message
+          ? error.message
+          : 'Unable to load your settings right now.';
+        setLoadError(message);
+        showToast('Could not load settings', message, 'badge');
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+
+    void loadProfile();
+
+    return () => {
+      active = false;
+    };
+  }, [showToast]);
+
+  const handleSave = async () => {
+    const session = getValidSession();
+    if (!session?.token) {
+      showToast('Could not save settings', 'Your session has expired. Please sign in again.', 'badge');
+      return;
+    }
+
+    setSaving(true);
+
+    const preferences = {
+      ...existingPreferences,
+      notifications: notifs,
+      privacy,
+      darkMode,
+      twoFA,
+    };
+
+    try {
+      const response = await globalThis.fetch('/api/users/preferences', {
+        method: 'PUT',
+        headers: {
+          Authorization: 'Bearer ' + session.token,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ preferences }),
+      });
+
+      const payload = await response.json().catch(() => null) as ApiResponse<null> | null;
+      if (!response.ok || !payload?.success) {
+        throw new Error(getApiErrorMessage(payload, 'Unable to save your settings right now.'));
+      }
+
+      setExistingPreferences(preferences);
+      showToast('Settings saved', 'Your preferences have been updated.', 'default');
+    } catch (error) {
+      const message = error instanceof Error && error.message
+        ? error.message
+        : 'Unable to save your settings right now.';
+      showToast('Could not save settings', message, 'badge');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleExport = async () => {
+    const session = getValidSession();
+    if (!session?.token) {
+      showToast('Could not export data', 'Your session has expired. Please sign in again.', 'badge');
+      return;
+    }
+
+    setExporting(true);
+
+    try {
+      const response = await globalThis.fetch('/api/users/profile', {
+        headers: {
+          Authorization: 'Bearer ' + session.token,
+        },
+      });
+
+      const payload = await response.json().catch(() => null) as ApiResponse<UserProfile> | null;
+      if (!response.ok || !payload?.success || !payload.data) {
+        throw new Error(getApiErrorMessage(payload, 'Unable to export your data right now.'));
+      }
+
+      const blob = new globalThis.Blob([
+        JSON.stringify({
+          exportedAt: new Date().toISOString(),
+          profile: payload.data,
+        }, null, 2),
+      ], { type: 'application/json' });
+
+      const url = globalThis.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `padihub-profile-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      globalThis.URL.revokeObjectURL(url);
+
+      showToast('Export ready', 'Your profile data has been downloaded.', 'default');
+    } catch (error) {
+      const message = error instanceof Error && error.message
+        ? error.message
+        : 'Unable to export your data right now.';
+      showToast('Could not export data', message, 'badge');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleLogoutConfirm = () => {
+    setShowLogoutDialog(false);
+    void (async () => {
+      await logout();
+      navigate('/login', { replace: true });
+    })();
+  };
+
+  if (loading) {
+    return (
+      <DashboardLayout>
+        <SkeletonPage />
+      </DashboardLayout>
+    );
+  }
 
   return (
     <DashboardLayout>
@@ -63,63 +323,68 @@ export default function SettingsPage() {
         <title>Settings — PadiHub</title>
         <meta name="description" content="Manage your PadiHub notification preferences, privacy settings, security and account options." />
         <link rel="canonical" href="https://padihub.com/settings" />
-              <meta property="og:title" content="Settings — PadiHub" />
+        <meta property="og:title" content="Settings — PadiHub" />
         <meta property="og:description" content="Manage your PadiHub notification preferences, privacy settings, security and account options." />
         <meta property="og:type" content="website" />
         <meta property="og:image" content="https://padihub.com/airo-assets/images/og/default" />
         <meta name="twitter:card" content="summary_large_image" />
         <meta name="twitter:image" content="https://padihub.com/airo-assets/images/og/default" />
         <meta name="robots" content="noindex,nofollow" />
-</Helmet>
+      </Helmet>
 
       <div className="p-4 sm:p-6 max-w-2xl mx-auto">
         <MotionDiv initial="hidden" animate="visible" variants={stagger}>
-
           <MotionDiv variants={fadeUp} className="mb-8">
             <h1 className="text-2xl font-extrabold text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>Settings</h1>
             <p className="text-gray-500 text-sm mt-1">Manage your preferences, privacy and security</p>
           </MotionDiv>
 
-          {/* Notifications */}
+          {loadError && (
+            <MotionDiv variants={fadeUp} className="mb-4">
+              <Alert variant="destructive" className="rounded-2xl">
+                <AlertTitle>Unable to load saved settings</AlertTitle>
+                <AlertDescription>{loadError}</AlertDescription>
+              </Alert>
+            </MotionDiv>
+          )}
+
           <MotionDiv variants={fadeUp} className="rounded-3xl p-6 bg-white mb-4" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
             <h2 className="font-extrabold text-gray-900 mb-1" style={{ fontFamily: 'Nunito, sans-serif' }}>Notifications</h2>
             <p className="text-xs text-gray-400 mb-4">Choose what you want to be notified about</p>
             <SettingRow icon={Bell} label="Contribution reminders" description="Get reminded before contributions are due" color="#2EAF6F">
-              <Toggle value={notifs.contributions} onChange={v => setNotifs(n => ({ ...n, contributions: v }))} />
+              <Toggle value={notifs.contributions} onChange={(value) => setNotifs((current) => ({ ...current, contributions: value }))} />
             </SettingRow>
             <SettingRow icon={Bell} label="Group activity" description="New members, payments and group updates" color="#2eafaf">
-              <Toggle value={notifs.groupActivity} onChange={v => setNotifs(n => ({ ...n, groupActivity: v }))} />
+              <Toggle value={notifs.groupActivity} onChange={(value) => setNotifs((current) => ({ ...current, groupActivity: value }))} />
             </SettingRow>
             <SettingRow icon={Bell} label="Invitations" description="When you're invited to join a group" color="#8B5CF6">
-              <Toggle value={notifs.invitations} onChange={v => setNotifs(n => ({ ...n, invitations: v }))} />
+              <Toggle value={notifs.invitations} onChange={(value) => setNotifs((current) => ({ ...current, invitations: value }))} />
             </SettingRow>
             <SettingRow icon={Bell} label="Voting & governance" description="New votes and voting deadlines" color="#F59E0B">
-              <Toggle value={notifs.voting} onChange={v => setNotifs(n => ({ ...n, voting: v }))} />
+              <Toggle value={notifs.voting} onChange={(value) => setNotifs((current) => ({ ...current, voting: value }))} />
             </SettingRow>
             <SettingRow icon={Bell} label="Email notifications" description="Receive reminders and updates by email" color="#EF4444">
-              <Toggle value={notifs.email} onChange={v => setNotifs(n => ({ ...n, email: v }))} />
+              <Toggle value={notifs.email} onChange={(value) => setNotifs((current) => ({ ...current, email: value }))} />
             </SettingRow>
             <SettingRow icon={Smartphone} label="SMS notifications" description="Critical alerts via text message (coming soon)" color="#6B7280">
-              <Toggle value={notifs.sms} onChange={v => setNotifs(n => ({ ...n, sms: v }))} />
+              <Toggle value={notifs.sms} onChange={(value) => setNotifs((current) => ({ ...current, sms: value }))} />
             </SettingRow>
           </MotionDiv>
 
-          {/* Privacy */}
           <MotionDiv variants={fadeUp} className="rounded-3xl p-6 bg-white mb-4" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
             <h2 className="font-extrabold text-gray-900 mb-1" style={{ fontFamily: 'Nunito, sans-serif' }}>Privacy</h2>
             <p className="text-xs text-gray-400 mb-4">Control what others can see about you</p>
             <SettingRow icon={Eye} label="Show Trust Score™" description="Visible to other group members" color="#2EAF6F">
-              <Toggle value={privacy.showTrust} onChange={v => setPrivacy(p => ({ ...p, showTrust: v }))} />
+              <Toggle value={privacy.showTrust} onChange={(value) => setPrivacy((current) => ({ ...current, showTrust: value }))} />
             </SettingRow>
             <SettingRow icon={EyeOff} label="Public profile" description="Allow others to find your profile" color="#8B5CF6">
-              <Toggle value={privacy.publicProfile} onChange={v => setPrivacy(p => ({ ...p, publicProfile: v }))} />
+              <Toggle value={privacy.publicProfile} onChange={(value) => setPrivacy((current) => ({ ...current, publicProfile: value }))} />
             </SettingRow>
             <SettingRow icon={Globe} label="Data preferences" description="Manage how your data is used" color="#2eafaf">
-              <Toggle value={privacy.dataPreferences} onChange={v => setPrivacy(p => ({ ...p, dataPreferences: v }))} />
+              <Toggle value={privacy.dataPreferences} onChange={(value) => setPrivacy((current) => ({ ...current, dataPreferences: value }))} />
             </SettingRow>
           </MotionDiv>
 
-          {/* Appearance */}
           <MotionDiv variants={fadeUp} className="rounded-3xl p-6 bg-white mb-4" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
             <h2 className="font-extrabold text-gray-900 mb-1" style={{ fontFamily: 'Nunito, sans-serif' }}>Appearance</h2>
             <p className="text-xs text-gray-400 mb-4">Personalise your PadiHub experience</p>
@@ -127,13 +392,12 @@ export default function SettingsPage() {
               <Toggle value={darkMode} onChange={setDarkMode} />
             </SettingRow>
             <SettingRow icon={Globe} label="Language" description="English (UK)" color="#2eafaf">
-              <button className="flex items-center gap-1 text-sm font-semibold text-gray-500 hover:text-gray-800 transition-colors">
+              <button className="flex items-center gap-1 text-sm font-semibold text-gray-500 hover:text-gray-800 transition-colors" type="button">
                 Change <ChevronRight size={14} />
               </button>
             </SettingRow>
           </MotionDiv>
 
-          {/* Security */}
           <MotionDiv variants={fadeUp} className="rounded-3xl p-6 bg-white mb-4" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
             <h2 className="font-extrabold text-gray-900 mb-1" style={{ fontFamily: 'Nunito, sans-serif' }}>Security</h2>
             <p className="text-xs text-gray-400 mb-4">Keep your account safe</p>
@@ -141,47 +405,52 @@ export default function SettingsPage() {
               <Toggle value={twoFA} onChange={setTwoFA} />
             </SettingRow>
             <SettingRow icon={Shield} label="Change password" color="#8B5CF6">
-              <button className="flex items-center gap-1 text-sm font-semibold text-gray-500 hover:text-gray-800 transition-colors">
+              <button className="flex items-center gap-1 text-sm font-semibold text-gray-500 hover:text-gray-800 transition-colors" type="button">
                 Update <ChevronRight size={14} />
               </button>
             </SettingRow>
             <SettingRow icon={Smartphone} label="Active sessions" description="2 devices" color="#2eafaf">
-              <button className="flex items-center gap-1 text-sm font-semibold text-gray-500 hover:text-gray-800 transition-colors">
+              <button className="flex items-center gap-1 text-sm font-semibold text-gray-500 hover:text-gray-800 transition-colors" type="button">
                 Manage <ChevronRight size={14} />
               </button>
             </SettingRow>
           </MotionDiv>
 
-          {/* Account */}
           <MotionDiv variants={fadeUp} className="rounded-3xl p-6 bg-white mb-6" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
             <h2 className="font-extrabold text-gray-900 mb-1" style={{ fontFamily: 'Nunito, sans-serif' }}>Account</h2>
             <p className="text-xs text-gray-400 mb-4">Manage your account data</p>
             <SettingRow icon={Download} label="Export my data" description="Download a copy of all your PadiHub data" color="#2eafaf">
-              <button className="flex items-center gap-1 text-sm font-semibold text-gray-500 hover:text-gray-800 transition-colors">
-                Export <ChevronRight size={14} />
+              <button
+                className="flex items-center gap-1 text-sm font-semibold text-gray-500 hover:text-gray-800 transition-colors disabled:opacity-60"
+                onClick={() => { void handleExport(); }}
+                type="button"
+                disabled={exporting}
+              >
+                {exporting ? 'Exporting…' : 'Export'} <ChevronRight size={14} />
               </button>
             </SettingRow>
             <SettingRow icon={LogOut} label="Sign out" description="Sign out of this device" color="#6B7280">
-              <button onClick={() => setShowLogoutDialog(true)} className="flex items-center gap-1 text-sm font-semibold text-gray-500 hover:text-gray-800 transition-colors">
+              <button onClick={() => setShowLogoutDialog(true)} className="flex items-center gap-1 text-sm font-semibold text-gray-500 hover:text-gray-800 transition-colors" type="button">
                 Sign out <ChevronRight size={14} />
               </button>
             </SettingRow>
             <SettingRow icon={Trash2} label="Delete account" description="Permanently delete your account and all data" color="#EF4444">
-              <button onClick={() => setShowDeleteDialog(true)} className="text-sm font-semibold text-red-500 hover:text-red-700 transition-colors">
+              <button onClick={() => setShowDeleteDialog(true)} className="text-sm font-semibold text-red-500 hover:text-red-700 transition-colors" type="button">
                 Delete
               </button>
             </SettingRow>
           </MotionDiv>
 
-          {/* Save */}
           <MotionDiv variants={fadeUp}>
-            <button onClick={handleSave}
-              className="w-full py-4 rounded-2xl font-bold text-white flex items-center justify-center gap-2 transition-all active:scale-98"
-              style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', boxShadow: '0 4px 20px rgba(46,175,111,0.3)' }}>
-              <Check size={18} /> Save all settings
+            <button
+              onClick={() => { void handleSave(); }}
+              disabled={saving}
+              className="w-full py-4 rounded-2xl font-bold text-white flex items-center justify-center gap-2 transition-all active:scale-98 disabled:opacity-60"
+              style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', boxShadow: '0 4px 20px rgba(46,175,111,0.3)' }}
+            >
+              <Check size={18} /> {saving ? 'Saving…' : 'Save all settings'}
             </button>
           </MotionDiv>
-
         </MotionDiv>
       </div>
 
@@ -202,7 +471,7 @@ export default function SettingsPage() {
         description="You'll need to sign back in to access your communities and savings groups."
         confirmLabel="Sign out"
         cancelLabel="Stay signed in"
-        onConfirm={() => setShowLogoutDialog(false)}
+        onConfirm={handleLogoutConfirm}
         onCancel={() => setShowLogoutDialog(false)}
       />
 

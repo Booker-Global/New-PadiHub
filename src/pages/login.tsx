@@ -4,6 +4,7 @@ import { Helmet } from '@dr.pogodin/react-helmet';
 import { Eye, EyeOff, Mail, Lock, ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import AuthLayout from '@/components/AuthLayout';
+import { getApiErrorMessage } from '@/lib/api-error';
 
 const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/login#webpage\",\"name\":\"Log in — PadiHub\",\"url\":\"https://padihub.com/login\",\"description\":\"Log in to your PadiHub account and continue your community savings journey.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"}}";
 
@@ -28,7 +29,7 @@ export default function LoginPage() {
       });
       const json = await res.json();
       if (!res.ok) {
-        setError(json?.message ?? 'Login failed. Please check your credentials.');
+        setError(getApiErrorMessage(json, 'Login failed. Please check your credentials.'));
         return;
       }
       // Store JWT and user info for header/dashboard use
