@@ -9,11 +9,13 @@ import { eq, lt, lte, and, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { contributionService } from './contributionService.js';
+import { rotationService } from './rotationService.js';
 import { notificationService } from './notificationService.js';
 import { monitoringService } from './monitoringService.js';
 import { chargeContributionForUser } from '../controllers/paymentController.js';
 import { getFlutterwaveProvider } from '../integrations/payments/PaymentProviderFactory.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
+import { computeNextPayoutDate } from '../lib/payoutSchedule.js';
 import {
   sendContributionReminderEmail,
   sendSubscriptionRenewalReminderEmail,
@@ -225,27 +227,79 @@ export async function weeklyDatabaseMaintenance(): Promise<void> {
 }
 
 // ─── Monthly Jobs ─────────────────────────────────────────────────────────────
+//
+// NOTE: monthlyGenerateContributionSchedule and monthlyAdvanceRotation are
+// also invoked from the daily job set below (see dailyJobs), not just
+// monthly, because a group's own contribution_frequency (daily/weekly/
+// monthly) determines its real cadence — the "monthly" trigger.dev cron is
+// only a once-a-month safety net. Both functions are idempotent (they check
+// existing state before acting), so running them more often is safe.
 
-/** Generate contribution schedule for the next cycle */
+/** Generate the next cycle's contribution schedule for active groups that don't have one yet. */
 export async function monthlyGenerateContributionSchedule(): Promise<void> {
   await runJob('monthly_generate_contribution_schedule', async () => {
     const activeGroups = await db.select().from(schema.savingsGroups)
       .where(eq(schema.savingsGroups.status, 'active'));
-    console.log(`[Job] Contribution schedule generation: ${activeGroups.length} active groups processed.`);
-    // Full schedule generation is handled by contributionService.generateSchedule
-    // called per-group when a new cycle begins
+
+    let generated = 0;
+    for (const group of activeGroups) {
+      const activeMembers = await db.select().from(schema.memberships)
+        .where(and(eq(schema.memberships.group_id, group.id), eq(schema.memberships.status, 'active')));
+      if (!activeMembers.length) continue;
+
+      // Skip if this group's current cycle already has a schedule generated.
+      const existing = await db.select({ id: schema.contributions.id }).from(schema.contributions)
+        .where(and(eq(schema.contributions.group_id, group.id), eq(schema.contributions.cycle_number, group.current_cycle)))
+        .limit(1);
+      if (existing.length) continue;
+
+      const dueDate = computeNextPayoutDate(group.contribution_frequency, group.payout_day, new Date());
+      await contributionService.generateCycleSchedule(
+        group.id,
+        group.current_cycle,
+        dueDate,
+        activeMembers.map(m => ({ user_id: m.user_id, amount_due: group.contribution_amount })),
+      );
+
+      // Ensure a rotation record (recipient + scheduled payout date) exists
+      // for the current cycle so /rotations "who's next" data is available.
+      const currentRotation = await rotationService.getCurrent(group.id);
+      if (!currentRotation) {
+        const sorted = [...activeMembers].sort((a, b) => (a.rotation_order ?? 0) - (b.rotation_order ?? 0));
+        const recipient = sorted.find(m => m.rotation_order === group.current_rotation_position) ?? sorted[0];
+        if (recipient) {
+          await rotationService.createForCycle(group.id, group.current_cycle, recipient.user_id, dueDate);
+        }
+      }
+      generated++;
+    }
+    console.log(`[Job] Contribution schedule generation: ${generated}/${activeGroups.length} active groups scheduled.`);
   });
 }
 
-/** Advance rotation for groups where payout is due */
+/** Advance rotation for groups whose current cycle is fully paid. */
 export async function monthlyAdvanceRotation(): Promise<void> {
   await runJob('monthly_advance_rotation', async () => {
-    const pendingPayouts = await db.select().from(schema.rotations)
-      .where(and(
-        eq(schema.rotations.payout_status, 'pending'),
-        lte(schema.rotations.scheduled_payout_date, new Date()),
-      ));
-    console.log(`[Job] Rotation advance: ${pendingPayouts.length} pending payouts found.`);
+    const activeGroups = await db.select().from(schema.savingsGroups)
+      .where(eq(schema.savingsGroups.status, 'active'));
+
+    let advanced = 0;
+    for (const group of activeGroups) {
+      const cycleContributions = await db.select().from(schema.contributions)
+        .where(and(
+          eq(schema.contributions.group_id, group.id),
+          eq(schema.contributions.cycle_number, group.current_cycle),
+        ));
+
+      const allPaid = cycleContributions.length > 0 &&
+        cycleContributions.every(c => c.payment_status === 'paid');
+
+      if (allPaid) {
+        await rotationService.advance(group.id, 'system');
+        advanced++;
+      }
+    }
+    console.log(`[Job] Rotation advance: ${advanced}/${activeGroups.length} active groups advanced.`);
   });
 }
 
@@ -347,6 +401,11 @@ export async function monthlyAuditLogArchive(): Promise<void> {
 // ─── All jobs export (for Trigger.dev registration) ──────────────────────────
 
 export const dailyJobs = [
+  // Run schedule-generation/rotation-advance daily (not just once a month)
+  // so daily- and weekly-frequency groups aren't stuck waiting for the
+  // monthly cron — both functions are idempotent and safe to run often.
+  monthlyGenerateContributionSchedule,
+  monthlyAdvanceRotation,
   dailyContributionReminders,
   dailyAutoChargeDueContributions,
   dailyOverdueCheck,

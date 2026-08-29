@@ -2,6 +2,8 @@
  * PadiHub — Daily scheduled tasks (Trigger.dev v3)
  *
  * Schedules (UTC):
+ *   05:45  generate contribution schedules (idempotent — also covers daily/weekly groups)
+ *   05:50  advance rotations whose current cycle is fully paid
  *   06:00  contribution reminders
  *   06:10  overdue check
  *   06:20  trust-score status flip (scheduled → due)
@@ -11,6 +13,8 @@
  */
 import { schedules } from '@trigger.dev/sdk/v3';
 import {
+  monthlyGenerateContributionSchedule,
+  monthlyAdvanceRotation,
   dailyContributionReminders,
   dailyOverdueCheck,
   dailyTrustScoreUpdates,
@@ -18,6 +22,24 @@ import {
   dailyFailedPaymentCheck,
   dailyNotificationCleanup,
 } from '../server/services/scheduledJobs.js';
+
+export const dailyGenerateContributionScheduleTask = schedules.task({
+  id: 'daily-generate-contribution-schedule',
+  cron: '45 5 * * *',
+  run: async () => {
+    await monthlyGenerateContributionSchedule();
+    return { ok: true, task: 'daily-generate-contribution-schedule' };
+  },
+});
+
+export const dailyAdvanceRotationTask = schedules.task({
+  id: 'daily-advance-rotation',
+  cron: '50 5 * * *',
+  run: async () => {
+    await monthlyAdvanceRotation();
+    return { ok: true, task: 'daily-advance-rotation' };
+  },
+});
 
 export const dailyContributionRemindersTask = schedules.task({
   id: 'daily-contribution-reminders',

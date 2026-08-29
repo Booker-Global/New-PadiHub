@@ -94,18 +94,51 @@ export async function closeConnection(): Promise<void> {
  * columns/data.
  */
 const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }>> = {
+  // Every nullable column on `users` is listed here (not just the most
+  // recently-added ones) because `userService.getProfile` performs a
+  // select-all query — any single missing column, old or new, turns that
+  // request into an "Unknown column" 500 that the generic error handler
+  // reports as "An unexpected error occurred", surfacing simultaneously as
+  // both the /profile banner and toast (and on /dashboard, which reads the
+  // same row).
   users: [
-    { column: 'stripe_payment_method_id',   sqlType: 'VARCHAR(100) NULL' },
-    { column: 'flutterwave_card_token',     sqlType: 'VARCHAR(255) NULL' },
-    { column: 'payment_method_verified_at', sqlType: 'TIMESTAMP NULL' },
-    { column: 'payout_verified_at',         sqlType: 'TIMESTAMP NULL' },
-    { column: 'payment_terms_accepted_at',  sqlType: 'TIMESTAMP NULL' },
+    { column: 'display_name',               sqlType: 'VARCHAR(100) NULL' },
+    { column: 'phone_number',                sqlType: 'VARCHAR(30) NULL' },
+    { column: 'stripe_customer_id',          sqlType: 'VARCHAR(100) NULL' },
+    { column: 'stripe_payment_method_id',    sqlType: 'VARCHAR(100) NULL' },
+    { column: 'stripe_connected_account_id', sqlType: 'VARCHAR(100) NULL' },
+    { column: 'flutterwave_customer_id',     sqlType: 'VARCHAR(100) NULL' },
+    { column: 'flutterwave_card_token',      sqlType: 'VARCHAR(255) NULL' },
+    { column: 'flutterwave_subaccount_id',   sqlType: 'VARCHAR(100) NULL' },
+    { column: 'payment_method_verified_at',  sqlType: 'TIMESTAMP NULL' },
+    { column: 'payout_verified_at',          sqlType: 'TIMESTAMP NULL' },
+    { column: 'payment_terms_accepted_at',   sqlType: 'TIMESTAMP NULL' },
+    { column: 'notification_preferences',    sqlType: 'JSON NULL' },
+    { column: 'identity_verified_at',        sqlType: 'TIMESTAMP NULL' },
+    { column: 'stripe_identity_session_id',  sqlType: 'VARCHAR(255) NULL' },
+    { column: 'bvn_verification_reference',  sqlType: 'VARCHAR(255) NULL' },
+    { column: 'last_login_at',               sqlType: 'TIMESTAMP NULL' },
   ],
   savings_groups: [
-    { column: 'payout_day', sqlType: 'INT NULL' },
+    { column: 'description', sqlType: 'TEXT NULL' },
+    { column: 'payout_day',  sqlType: 'INT NULL' },
   ],
   contributions: [
-    { column: 'fee_amount', sqlType: 'DECIMAL(12,2) NULL' },
+    { column: 'amount_paid',        sqlType: 'DECIMAL(12,2) NULL' },
+    { column: 'fee_amount',         sqlType: 'DECIMAL(12,2) NULL' },
+    { column: 'paid_date',          sqlType: 'TIMESTAMP NULL' },
+    { column: 'provider_reference', sqlType: 'VARCHAR(255) NULL' },
+  ],
+  memberships: [
+    { column: 'rotation_order', sqlType: 'INT NULL' },
+  ],
+  rotations: [
+    { column: 'provider_transfer_reference', sqlType: 'VARCHAR(255) NULL' },
+    { column: 'completed_date',              sqlType: 'TIMESTAMP NULL' },
+  ],
+  subscriptions: [
+    { column: 'provider_subscription_id', sqlType: 'VARCHAR(255) NULL' },
+    { column: 'renewal_date',             sqlType: 'TIMESTAMP NULL' },
   ],
 };
 
