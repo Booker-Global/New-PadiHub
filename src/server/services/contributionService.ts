@@ -46,7 +46,7 @@ export const contributionService = {
     return id;
   },
 
-  async markPaid(contributionId: string, providerReference: string, ipAddress?: string) {
+  async markPaid(contributionId: string, providerReference: string, ipAddress?: string, feeAmount?: string) {
     
     const rows = await db.select().from(schema.contributions)
       .where(eq(schema.contributions.id, contributionId)).limit(1);
@@ -61,6 +61,7 @@ export const contributionService = {
     await db.update(schema.contributions).set({
       payment_status:     'paid',
       amount_paid:        c.amount_due,
+      fee_amount:          feeAmount ?? c.fee_amount,
       paid_date:          new Date(),
       provider_reference: providerReference,
     }).where(eq(schema.contributions.id, contributionId));

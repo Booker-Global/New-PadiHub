@@ -15,7 +15,8 @@ interface SavingsGroup {
   country: 'GB' | 'NG';
   currency: 'GBP' | 'NGN';
   contribution_amount: string | number;
-  contribution_frequency: 'weekly' | 'monthly';
+  contribution_frequency: 'daily' | 'weekly' | 'monthly';
+  payout_day?: number | null;
   maximum_members: number;
   rotation_method: 'manual' | 'random';
   current_cycle: number;
@@ -69,6 +70,21 @@ function getGroupColor(group: SavingsGroup) {
   if (group.status === 'closed') return '#6B7280';
   if (group.status === 'suspended') return '#F59E0B';
   return group.currency === 'NGN' ? '#2EAF6F' : '#2eafaf';
+}
+
+/** Mirrors src/server/lib/payoutSchedule.ts describePayoutSchedule() for client-side display. */
+function describePayoutSchedule(frequency: SavingsGroup['contribution_frequency'], payoutDay: number | null | undefined) {
+  if (frequency === 'daily') return 'Every day';
+  if (frequency === 'weekly') {
+    const names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const idx = payoutDay !== null && payoutDay !== undefined ? Math.min(6, Math.max(0, payoutDay)) : 0;
+    return `Every ${names[idx]}`;
+  }
+  const day = payoutDay !== null && payoutDay !== undefined ? Math.min(31, Math.max(1, payoutDay)) : 1;
+  const suffix = day % 10 === 1 && day !== 11 ? 'st'
+    : day % 10 === 2 && day !== 12 ? 'nd'
+    : day % 10 === 3 && day !== 13 ? 'rd' : 'th';
+  return `Monthly on the ${day}${suffix}`;
 }
 
 export default function JoinSavingsGroupPage() {
@@ -290,6 +306,7 @@ export default function JoinSavingsGroupPage() {
           <div className="grid grid-cols-2 gap-3">
             {[
               { label: 'Contribution', value: `${formatCurrency(group.contribution_amount, group.currency)} ${titleCase(group.contribution_frequency)}`, icon: PiggyBank, color: groupColor },
+              { label: 'Payout schedule', value: describePayoutSchedule(group.contribution_frequency, group.payout_day), icon: Calendar, color: '#F59E0B' },
               { label: 'Members', value: `${memberCount}/${group.maximum_members} active`, icon: Users, color: '#8B5CF6' },
               { label: 'Available spots', value: availableSpots.toString(), icon: Shield, color: '#2EAF6F' },
               { label: 'Current cycle', value: group.current_cycle.toString(), icon: Calendar, color: '#F59E0B' },

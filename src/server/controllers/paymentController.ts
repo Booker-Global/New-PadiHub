@@ -13,6 +13,7 @@ import { getStripeProvider, getFlutterwaveProvider } from '../integrations/payme
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { contributionService } from '../services/contributionService.js';
 import { getPaymentEligibility } from '../services/paymentEligibilityService.js';
+import { calculateProcessingFee } from '../lib/paymentFees.js';
 
 const FLUTTERWAVE_SETUP_TX_REF_PREFIX = 'padihub-flw-setup';
 const DEFAULT_FLUTTERWAVE_SETUP_AMOUNT = 50;
@@ -108,18 +109,26 @@ export async function chargeContributionForUser(userId: string, contributionId: 
     throw new AppError('Contribution amount is invalid.', 400, 'INVALID_CONTRIBUTION_AMOUNT');
   }
 
+  // The provider processing fee is added on top of the contribution amount
+  // (the member pays amount_due + fee) rather than deducted from the group
+  // pot — see paymentFees.ts. Members consent to this when accepting the
+  // payment terms & conditions while saving a payment method.
+  const feeInSmallestUnit = calculateProcessingFee(group.payment_provider, amountInSmallestUnit);
+  const totalChargeInSmallestUnit = amountInSmallestUnit + feeInSmallestUnit;
+
   const result = await provider.chargeContribution({
     customerId,
     paymentMethodId,
-    amount:         amountInSmallestUnit,
+    amount:         totalChargeInSmallestUnit,
     currency:       group.currency,
     countryCode:    group.country,
     contributionId,
     description:    `PadiHub contribution — ${group.name} cycle ${contribution.cycle_number}`,
   });
 
+  const feeAmount = (feeInSmallestUnit / 100).toFixed(2);
   if (result.status === 'succeeded') {
-    await contributionService.markPaid(contributionId, result.providerReference);
+    await contributionService.markPaid(contributionId, result.providerReference, undefined, feeAmount);
   } else if (result.status === 'failed') {
     await contributionService.markFailed(contributionId);
   }
@@ -129,7 +138,7 @@ export async function chargeContributionForUser(userId: string, contributionId: 
     action: 'CONTRIBUTION_CHARGE_INITIATED',
     entity: 'contributions',
     entityId: contributionId,
-    metadata: result as unknown as Record<string, unknown>,
+    metadata: { ...result, feeAmount } as unknown as Record<string, unknown>,
   });
 
   return result;
@@ -177,8 +186,11 @@ export const paymentController = {
   confirmSetupIntent: async (req: Request, res: Response, next: NextFunction) => {
     try {
       const userId = req.user!.userId;
-      const { payment_method_id } = req.body as { payment_method_id?: string };
+      const { payment_method_id, terms_accepted } = req.body as { payment_method_id?: string; terms_accepted?: boolean };
       if (!payment_method_id) throw new AppError('payment_method_id is required.', 400);
+      if (terms_accepted !== true) {
+        throw new AppError('You must accept the payment terms & conditions to save a payment method.', 400, 'TERMS_NOT_ACCEPTED');
+      }
 
       const user = await getUserOrThrow(userId);
       if (!user.stripe_customer_id) {
@@ -208,7 +220,11 @@ export const paymentController = {
       });
 
       await db.update(schema.users)
-        .set({ stripe_payment_method_id: payment_method_id, payment_method_verified_at: new Date() })
+        .set({
+          stripe_payment_method_id: payment_method_id,
+          payment_method_verified_at: new Date(),
+          payment_terms_accepted_at: new Date(),
+        })
         .where(eq(schema.users.id, userId));
 
       await createAuditLog({
@@ -230,7 +246,10 @@ export const paymentController = {
   createFlutterwavePaymentLink: async (req: Request, res: Response, next: NextFunction) => {
     try {
       const userId = req.user!.userId;
-      const { contribution_id } = req.body as { contribution_id?: string };
+      const { contribution_id, terms_accepted } = req.body as { contribution_id?: string; terms_accepted?: boolean };
+      if (terms_accepted !== true) {
+        throw new AppError('You must accept the payment terms & conditions to save a payment method.', 400, 'TERMS_NOT_ACCEPTED');
+      }
 
       let user: Awaited<ReturnType<typeof getUserOrThrow>>;
       let currency: string;
@@ -347,6 +366,10 @@ export const paymentController = {
           flutterwave_customer_id: user.flutterwave_customer_id ?? `flw_cust_${userId}`,
           flutterwave_card_token: result.cardToken,
           payment_method_verified_at: new Date(),
+          // Reaching this point requires having initiated the hosted
+          // checkout via createFlutterwavePaymentLink, which already
+          // required terms_accepted === true — record the acceptance here.
+          payment_terms_accepted_at: new Date(),
         })
         .where(eq(schema.users.id, userId));
 

@@ -294,7 +294,7 @@ export default function AddPaymentMethodPage() {
           'Content-Type': 'application/json',
           Authorization: 'Bearer ' + session.token,
         },
-        body: JSON.stringify({ payment_method_id: paymentMethodId }),
+        body: JSON.stringify({ payment_method_id: paymentMethodId, terms_accepted: true }),
       });
       const saveJson = await saveResponse.json().catch(() => null) as ApiResponse<null> | null;
       if (!saveResponse.ok) {
@@ -333,7 +333,7 @@ export default function AddPaymentMethodPage() {
           'Content-Type': 'application/json',
           Authorization: 'Bearer ' + session.token,
         },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ terms_accepted: true }),
       });
       const json = await response.json().catch(() => null) as ApiResponse<FlutterwavePaymentLinkResponse> | null;
       if (!response.ok) {
@@ -439,7 +439,8 @@ export default function AddPaymentMethodPage() {
                       <Checkbox checked={termsAccepted} onCheckedChange={value => setTermsAccepted(value === true)} className="mt-0.5" />
                       <span className="text-sm text-gray-700">
                         I authorize PadiHub to securely store this payment method and charge it automatically for my recurring
-                        group contributions, in line with the{' '}
+                        group contributions, and I understand a processing fee is added to each charge on top of my
+                        contribution amount, in line with the{' '}
                         <Link to="/terms" target="_blank" rel="noopener noreferrer" className="font-semibold text-gray-900 underline">
                           Terms &amp; Conditions
                         </Link>{' '}

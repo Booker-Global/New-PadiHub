@@ -78,6 +78,19 @@ interface Contribution {
   payment_status: 'scheduled' | 'due' | 'paid' | 'failed' | 'missed';
 }
 
+interface RotationInfo {
+  cycle_number: number;
+  recipient_id: string;
+  scheduled_payout_date: string;
+  payout_status: 'pending' | 'processing' | 'completed' | 'failed';
+}
+
+interface NextRotationInfo {
+  cycle_number: number;
+  recipient_id: string;
+  rotation_order: number;
+}
+
 interface InvitationResult {
   token?: string;
   inviteLink?: string;
@@ -162,6 +175,8 @@ export default function SavingsGroupDetailPage() {
   const [group, setGroup] = useState<SavingsGroup | null>(null);
   const [memberships, setMemberships] = useState<Membership[]>([]);
   const [contributions, setContributions] = useState<Contribution[]>([]);
+  const [currentRotation, setCurrentRotation] = useState<RotationInfo | null>(null);
+  const [nextRotation, setNextRotation] = useState<NextRotationInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notFound, setNotFound] = useState(false);
@@ -203,6 +218,8 @@ export default function SavingsGroupDetailPage() {
           setGroup(null);
           setMemberships([]);
           setContributions([]);
+          setCurrentRotation(null);
+          setNextRotation(null);
           return;
         }
         throw new Error(message);
@@ -211,9 +228,11 @@ export default function SavingsGroupDetailPage() {
       const groupData = groupJson.data ?? null;
       setGroup(groupData);
 
-      const [membershipsResult, contributionsResult] = await Promise.allSettled([
+      const [membershipsResult, contributionsResult, currentRotationResult, nextRotationResult] = await Promise.allSettled([
         window.fetch(`/api/memberships?group_id=${id}`, { headers }),
         window.fetch(`/api/contributions?group_id=${id}`, { headers }),
+        window.fetch(`/api/rotations/${id}/current`, { headers }),
+        window.fetch(`/api/rotations/${id}/next`, { headers }),
       ]);
 
       if (membershipsResult.status === 'fulfilled' && membershipsResult.value.ok) {
@@ -236,10 +255,26 @@ export default function SavingsGroupDetailPage() {
       } else {
         setContributions([]);
       }
+
+      if (currentRotationResult.status === 'fulfilled' && currentRotationResult.value.ok) {
+        const currentRotationJson = await currentRotationResult.value.json() as ApiResponse<RotationInfo>;
+        setCurrentRotation(currentRotationJson.data ?? null);
+      } else {
+        setCurrentRotation(null);
+      }
+
+      if (nextRotationResult.status === 'fulfilled' && nextRotationResult.value.ok) {
+        const nextRotationJson = await nextRotationResult.value.json() as ApiResponse<NextRotationInfo>;
+        setNextRotation(nextRotationJson.data ?? null);
+      } else {
+        setNextRotation(null);
+      }
     } catch (loadError) {
       setGroup(null);
       setMemberships([]);
       setContributions([]);
+      setCurrentRotation(null);
+      setNextRotation(null);
       setError(loadError instanceof Error ? loadError.message : 'Could not load this group.');
     } finally {
       setLoading(false);
@@ -522,6 +557,37 @@ export default function SavingsGroupDetailPage() {
                           <p className="text-sm font-semibold text-gray-800 break-words">{row.value}</p>
                         </div>
                       ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-3xl p-5 bg-white" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
+                    <h2 className="font-extrabold text-gray-900 mb-4" style={{ fontFamily: 'Nunito, sans-serif' }}>Rotation — Who&apos;s Next</h2>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="rounded-2xl p-4" style={{ background: 'rgba(46,175,111,0.06)', border: '1px solid rgba(46,175,111,0.15)' }}>
+                        <p className="text-xs text-gray-400 mb-1">Receiving this cycle (cycle {group.current_cycle})</p>
+                        {currentRotation ? (
+                          <>
+                            <p className="text-lg font-black text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>
+                              {currentRotation.recipient_id === currentUserId ? 'You' : shortId(currentRotation.recipient_id)}
+                            </p>
+                            <p className="text-xs text-gray-500 mt-1">
+                              {titleCase(currentRotation.payout_status)} · Scheduled {formatDate(currentRotation.scheduled_payout_date)}
+                            </p>
+                          </>
+                        ) : (
+                          <p className="text-sm text-gray-500">Not yet scheduled.</p>
+                        )}
+                      </div>
+                      <div className="rounded-2xl p-4" style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.15)' }}>
+                        <p className="text-xs text-gray-400 mb-1">Up next (cycle {nextRotation?.cycle_number ?? group.current_cycle + 1})</p>
+                        {nextRotation ? (
+                          <p className="text-lg font-black text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>
+                            {nextRotation.recipient_id === currentUserId ? 'You' : shortId(nextRotation.recipient_id)}
+                          </p>
+                        ) : (
+                          <p className="text-sm text-gray-500">Not enough active members yet.</p>
+                        )}
+                      </div>
                     </div>
                   </div>
 
