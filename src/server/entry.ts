@@ -256,7 +256,10 @@ app.post('/api/payments/setup-intent',       authenticate, paymentController.set
 app.post('/api/payments/confirm-setup-intent', authenticate, paymentController.confirmSetupIntent);
 app.post('/api/payments/create-flutterwave-payment-link', authenticate, paymentController.createFlutterwavePaymentLink);
 app.post('/api/payments/save-flutterwave-token', authenticate, paymentController.saveFlutterwaveToken);
-app.post('/api/payments/connect-onboard',    authenticate, requireRole('group_leader', 'admin'), paymentController.connectOnboard);
+// Every member — not just group leaders — eventually receives a payout when
+// it's their turn in the rotation, so payout-destination setup must be
+// available to any authenticated member, not gated behind requireRole.
+app.post('/api/payments/connect-onboard',    authenticate, paymentController.connectOnboard);
 app.post('/api/payments/charge-contribution', authenticate, paymentController.chargeContribution);
 
 // ── Support ───────────────────────────────────────────────────────────[...]
@@ -616,11 +619,12 @@ if (import.meta.env.PROD) {
 		// issues are immediately visible in logs rather than surfacing as
 		// cryptic "unexpected error" responses at request time.
 		try {
-			const { testConnection, getConnectionTarget } = await import('./db/client.js');
+			const { testConnection, getConnectionTarget, ensureSchemaSync } = await import('./db/client.js');
 			console.log(`[PadiHub] Checking database connectivity to ${getConnectionTarget()}...`);
 			const connected = await testConnection();
 			if (connected) {
 				console.log('[PadiHub] ✓ Database connection verified.');
+				await ensureSchemaSync();
 			} else {
 				console.error(
 					`[PadiHub] ✗ Database connection FAILED after all retries. ` +

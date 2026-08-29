@@ -161,8 +161,8 @@ export class StripeProvider implements IPaymentProvider {
 
     const accountLink = await stripe.accountLinks.create({
       account:     account.id,
-      refresh_url: `${process.env.APP_URL ?? 'https://padihub.com'}/dashboard?stripe_refresh=1`,
-      return_url:  `${process.env.APP_URL ?? 'https://padihub.com'}/dashboard?stripe_connected=1`,
+      refresh_url: `${process.env.APP_URL ?? 'https://padihub.com'}/payments/payout?stripe_refresh=1`,
+      return_url:  `${process.env.APP_URL ?? 'https://padihub.com'}/payments/payout?stripe_connected=1`,
       type:        'account_onboarding',
     });
 

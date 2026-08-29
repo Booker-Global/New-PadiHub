@@ -3,9 +3,10 @@ import { Helmet } from '@dr.pogodin/react-helmet';
 import { useEffect, useState } from 'react';
 import {
   ArrowRight, Shield, Users, TrendingUp, Star, CheckCircle,
-  Zap, Globe, ChevronRight, Play, Heart, Sparkles, PiggyBank, Bell
+  Zap, Globe, ChevronRight, Play, Heart, Sparkles, PiggyBank, Bell, Plus
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { getValidSession } from '@/lib/session';
 
 const _jsonLd = "{\"@context\":\"https://schema.org\",\"@graph\":[{\"@type\":\"WebSite\",\"@id\":\"https://padihub.com/#website\",\"name\":\"PadiHub\",\"url\":\"https://padihub.com/\"},{\"@type\":\"Organization\",\"@id\":\"https://padihub.com/#organization\",\"name\":\"PadiHub\",\"url\":\"https://padihub.com/\",\"logo\":\"https://padihub.com/airo-assets/images/logo/primary\"},{\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/#webpage\",\"url\":\"https://padihub.com/\",\"name\":\"PadiHub — Save Together. Grow Together. Belong.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"},\"datePublished\":\"2026-07-16\",\"dateModified\":\"2026-07-16\"},{\"@type\":\"SoftwareApplication\",\"name\":\"PadiHub\",\"applicationCategory\":\"FinanceApplication\",\"operatingSystem\":\"Web\",\"offers\":{\"@type\":\"Offer\",\"price\":\"4.99\",\"priceCurrency\":\"GBP\"}}]}";
 
@@ -30,30 +31,20 @@ function usePricingRegion(): Region {
 // useEffect. This guarantees the first client render is identical to the SSR
 // output (both see isLoggedIn=false / isMounted=false), preventing hydration
 // error #418 which fires when the server and client produce different DOM trees.
-function useAuthUser(): { isMounted: boolean; isLoggedIn: boolean; name: string; trust: number } {
-  const [state, setState] = useState<{ isMounted: boolean; isLoggedIn: boolean; name: string; trust: number }>({
-    isMounted: false, isLoggedIn: false, name: '', trust: 0,
+//
+// Uses getValidSession() (src/lib/session.ts) — the single source of truth for
+// session/JWT-expiry — rather than re-parsing localStorage/sessionStorage here,
+// so an expired token is treated as logged-out just like on /dashboard.
+function useAuthUser(): { isMounted: boolean; isLoggedIn: boolean; name: string; trust: number; token: string } {
+  const [state, setState] = useState<{ isMounted: boolean; isLoggedIn: boolean; name: string; trust: number; token: string }>({
+    isMounted: false, isLoggedIn: false, name: '', trust: 0, token: '',
   });
   useEffect(() => {
     // This effect runs only in the browser, after hydration is complete.
-    // Reading localStorage here is safe — it never runs on the server.
-    try {
-      const raw = localStorage.getItem('padihub_user');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed?.name) {
-          setState({ isMounted: true, isLoggedIn: true, name: parsed.name, trust: parsed.trust ?? 0 });
-          return;
-        }
-      }
-      const sessionFlag = sessionStorage.getItem('padihub_session');
-      if (sessionFlag) {
-        const parsed = JSON.parse(sessionFlag);
-        setState({ isMounted: true, isLoggedIn: true, name: parsed.name ?? 'Member', trust: parsed.trust ?? 0 });
-        return;
-      }
-    } catch {
-      // storage unavailable or malformed — fall through to mounted-but-not-logged-in
+    const session = getValidSession();
+    if (session?.token) {
+      setState({ isMounted: true, isLoggedIn: true, name: session.name || 'Member', trust: session.trust ?? 0, token: session.token });
+      return;
     }
     setState(s => ({ ...s, isMounted: true }));
   }, []);
@@ -61,14 +52,85 @@ function useAuthUser(): { isMounted: boolean; isLoggedIn: boolean; name: string;
 }
 
 // ── Mini Dashboard Card (logged-in only) ─────────────────────────────────────
-function DashboardPreview({ name, trust }: { name: string; trust: number }) {
+// Pulls the same real data as /dashboard (same API endpoints) instead of the
+// previous hardcoded "Lagos Savers Circle" demo group — a logged-in member
+// with no groups/contributions must see that here too, not a fake preview.
+interface PreviewGroup {
+  id: string;
+  name: string;
+  currency: string;
+  contribution_amount: string | number;
+  contribution_frequency: string;
+}
+
+interface PreviewContribution {
+  group_id: string;
+  amount_due: string | number;
+  due_date: string;
+  payment_status: string;
+}
+
+function formatPreviewCurrency(amount: string | number, currency: string) {
+  const value = typeof amount === 'string' ? Number.parseFloat(amount) : amount;
+  const symbol = currency === 'NGN' ? '₦' : currency === 'GBP' ? '£' : '';
+  if (!Number.isFinite(value)) return `${symbol}0`;
+  return `${symbol}${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+}
+
+function formatPreviewDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+}
+
+function DashboardPreview({ name, trust, token }: { name: string; trust: number; token: string }) {
   // Default to neutral greeting for SSR/first render — avoids hydration mismatch
   // when server clock and visitor's local time disagree on morning/afternoon/evening.
   const [greeting, setGreeting] = useState('Welcome back');
+  const [loading, setLoading] = useState(true);
+  const [trustScore, setTrustScore] = useState(trust);
+  const [groups, setGroups] = useState<PreviewGroup[]>([]);
+  const [dueContribution, setDueContribution] = useState<PreviewContribution | null>(null);
+
   useEffect(() => {
     const hour = new Date().getHours();
     setGreeting(hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening');
   }, []);
+
+  useEffect(() => {
+    if (!token) {
+      setLoading(false);
+      return;
+    }
+    let active = true;
+    const headers = { Authorization: 'Bearer ' + token };
+
+    void Promise.all([
+      fetch('/api/users/stats', { headers }).then(r => (r.ok ? r.json() : null)).catch(() => null),
+      fetch('/api/groups', { headers }).then(r => (r.ok ? r.json() : null)).catch(() => null),
+      fetch('/api/contributions', { headers }).then(r => (r.ok ? r.json() : null)).catch(() => null),
+    ]).then(([statsJson, groupsJson, contribJson]) => {
+      if (!active) return;
+      if (typeof statsJson?.data?.trust_score === 'number') setTrustScore(statsJson.data.trust_score);
+
+      const nextGroups: PreviewGroup[] = Array.isArray(groupsJson?.data) ? groupsJson.data : [];
+      setGroups(nextGroups);
+
+      const contributions: PreviewContribution[] = Array.isArray(contribJson?.data) ? contribJson.data : [];
+      const due = contributions
+        .filter(c => c.payment_status === 'due' || c.payment_status === 'overdue')
+        .sort((a, b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime())[0];
+      setDueContribution(due ?? null);
+    }).finally(() => {
+      if (active) setLoading(false);
+    });
+
+    return () => { active = false; };
+  }, [token]);
+
+  const firstGroup = groups[0];
+  const dueGroup = dueContribution ? groups.find(g => g.id === dueContribution.group_id) : undefined;
+
   return (
     <div className="relative w-full max-w-md mx-auto">
       <div className="absolute inset-0 rounded-3xl blur-3xl opacity-30" style={{ background: 'linear-gradient(135deg, #2EAF6F, #F59E0B)' }} />
@@ -82,7 +144,7 @@ function DashboardPreview({ name, trust }: { name: string; trust: number }) {
           </div>
           <div className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-bold"
             style={{ background: 'rgba(46,175,111,0.2)', color: '#2EAF6F', border: '1px solid rgba(46,175,111,0.3)' }}>
-            <Shield size={12} /> Trust: {trust}
+            <Shield size={12} /> Trust: {trustScore}
           </div>
         </div>
         {/* Quick actions */}
@@ -99,30 +161,48 @@ function DashboardPreview({ name, trust }: { name: string; trust: number }) {
             </Link>
           ))}
         </div>
-        {/* Savings group */}
-        <div className="rounded-2xl p-4 mb-3" style={{ background: 'rgba(46,175,111,0.1)', border: '1px solid rgba(46,175,111,0.2)' }}>
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-white font-semibold text-sm">Lagos Savers Circle</span>
-            <span className="text-xs font-bold" style={{ color: '#2EAF6F' }}>78% funded</span>
+        {/* Savings group — real data, or a real empty state if the member has none yet */}
+        {!loading && !firstGroup ? (
+          <Link to="/savings-groups/create" className="flex items-center gap-3 rounded-2xl p-4 mb-3 transition-all hover:opacity-90"
+            style={{ background: 'rgba(46,175,111,0.1)', border: '1px dashed rgba(46,175,111,0.3)' }}>
+            <div className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: 'rgba(46,175,111,0.2)' }}>
+              <Plus size={15} style={{ color: '#2EAF6F' }} />
+            </div>
+            <div>
+              <p className="text-white text-xs font-bold">Create your first savings group</p>
+              <p className="text-gray-400 text-xs">You haven't joined or created any groups yet.</p>
+            </div>
+          </Link>
+        ) : firstGroup ? (
+          <div className="rounded-2xl p-4 mb-3" style={{ background: 'rgba(46,175,111,0.1)', border: '1px solid rgba(46,175,111,0.2)' }}>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-white font-semibold text-sm truncate">{firstGroup.name}</span>
+              {groups.length > 1 && (
+                <span className="text-xs font-bold flex-shrink-0" style={{ color: '#2EAF6F' }}>+{groups.length - 1} more</span>
+              )}
+            </div>
+            <div className="flex items-center justify-between mt-2">
+              <span className="text-gray-400 text-xs">
+                {formatPreviewCurrency(firstGroup.contribution_amount, firstGroup.currency)} · {firstGroup.contribution_frequency}
+              </span>
+            </div>
           </div>
-          <div className="w-full h-2 rounded-full bg-white/10">
-            <div className="h-2 rounded-full" style={{ width: '78%', background: 'linear-gradient(90deg, #2EAF6F, #F59E0B)' }} />
+        ) : null}
+        {/* Notification — only a real, due contribution reminder, never fabricated */}
+        {dueContribution && (
+          <div className="flex items-center gap-3 rounded-2xl p-3" style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.2)' }}>
+            <div className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: 'rgba(245,158,11,0.2)' }}>
+              <Bell size={15} style={{ color: '#F59E0B' }} />
+            </div>
+            <div>
+              <p className="text-white text-xs font-bold">Payment reminder</p>
+              <p className="text-gray-400 text-xs">
+                {formatPreviewCurrency(dueContribution.amount_due, dueGroup?.currency ?? 'GBP')} due {formatPreviewDate(dueContribution.due_date)}
+                {dueGroup?.name ? ` · ${dueGroup.name}` : ''}
+              </p>
+            </div>
           </div>
-          <div className="flex items-center justify-between mt-2">
-            <span className="text-gray-400 text-xs">12 of 15 members contributed</span>
-            <span className="text-gray-400 text-xs">3 days left</span>
-          </div>
-        </div>
-        {/* Notification */}
-        <div className="flex items-center gap-3 rounded-2xl p-3" style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.2)' }}>
-          <div className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: 'rgba(245,158,11,0.2)' }}>
-            <Bell size={15} style={{ color: '#F59E0B' }} />
-          </div>
-          <div>
-            <p className="text-white text-xs font-bold">Payment reminder</p>
-            <p className="text-gray-400 text-xs">Your next contribution is due in 3 days</p>
-          </div>
-        </div>
+        )}
       </div>
     </div>
   );
@@ -317,7 +397,7 @@ export default function HomePage() {
                   Without this gate, React 19 detects a server/client DOM mismatch
                   and throws hydration error #418. */}
               {authUser.isMounted && authUser.isLoggedIn
-                ? <DashboardPreview name={authUser.name} trust={authUser.trust} />
+                ? <DashboardPreview name={authUser.name} trust={authUser.trust} token={authUser.token} />
                 : <HeroIllustration />
               }
             </div>

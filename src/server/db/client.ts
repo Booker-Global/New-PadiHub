@@ -79,3 +79,51 @@ export async function testConnection(retries = 3, delayMs = 2000): Promise<boole
 export async function closeConnection(): Promise<void> {
   await poolConnection.end();
 }
+
+/**
+ * Columns that `schema.ts` expects to exist on `users` but that a deploy
+ * could miss if only app code (not `npm run db:push`) was redeployed. Every
+ * `select()` (select-all) query — e.g. userService.getProfile — asks MySQL
+ * for all of these columns, so a single missing one turns into an "Unknown
+ * column" error that the generic error handler reports as a vague
+ * "An unexpected error occurred.", surfacing on both /profile and /dashboard.
+ *
+ * This list should stay in sync with any new nullable `users` columns added
+ * to schema.ts. It intentionally only contains additive, nullable columns —
+ * this helper never drops or alters existing columns/data.
+ */
+const REQUIRED_USER_COLUMNS: Array<{ column: string; ddl: string }> = [
+  { column: 'stripe_payment_method_id', ddl: 'ALTER TABLE `users` ADD COLUMN `stripe_payment_method_id` VARCHAR(100) NULL' },
+  { column: 'flutterwave_card_token',   ddl: 'ALTER TABLE `users` ADD COLUMN `flutterwave_card_token` VARCHAR(255) NULL' },
+];
+
+/**
+ * Idempotent, non-destructive self-heal for the schema drift described
+ * above. Runs once at boot: checks `information_schema` for each required
+ * column and adds it if missing. Never throws — a failure here is logged
+ * but must not prevent the server from starting, since the app should still
+ * serve the routes that don't touch the affected columns.
+ */
+export async function ensureSchemaSync(): Promise<void> {
+  try {
+    const [rows] = await poolConnection.query(
+      'SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?',
+      [dbConfig.database, 'users'],
+    );
+    const existingColumns = new Set(
+      (rows as Array<{ COLUMN_NAME: string }>).map(row => row.COLUMN_NAME)
+    );
+
+    for (const { column, ddl } of REQUIRED_USER_COLUMNS) {
+      if (existingColumns.has(column)) continue;
+      console.warn(`[PadiHub] Schema drift detected: users.${column} is missing — adding it now.`);
+      await poolConnection.query(ddl);
+      console.log(`[PadiHub] ✓ Added missing column users.${column}.`);
+    }
+  } catch (err) {
+    console.error(
+      '[PadiHub] Schema sync check failed — some requests may still return "Unknown column" errors until `npm run db:push` is run:',
+      err instanceof Error ? err.message : err,
+    );
+  }
+}

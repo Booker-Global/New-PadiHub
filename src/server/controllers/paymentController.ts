@@ -167,31 +167,53 @@ export const paymentController = {
     try {
       const userId = req.user!.userId;
       const { contribution_id } = req.body as { contribution_id?: string };
-      if (!contribution_id) throw new AppError('contribution_id is required.', 400);
 
-      const { contribution, user, group } = await getContributionContext(userId, contribution_id);
-      if (group.payment_provider !== 'flutterwave' || group.country !== 'NG' || group.currency !== 'NGN') {
-        throw new AppError('Flutterwave card setup is only available for Nigerian NGN groups.', 400);
+      let user: Awaited<ReturnType<typeof getUserOrThrow>>;
+      let currency: string;
+      let country: string;
+      let groupName: string | undefined;
+      let redirectUrl: URL;
+
+      if (contribution_id) {
+        const context = await getContributionContext(userId, contribution_id);
+        if (context.group.payment_provider !== 'flutterwave' || context.group.country !== 'NG' || context.group.currency !== 'NGN') {
+          throw new AppError('Flutterwave card setup is only available for Nigerian NGN groups.', 400);
+        }
+        user = context.user;
+        currency = context.group.currency;
+        country = context.group.country;
+        groupName = context.group.name;
+        redirectUrl = new URL(`/savings-groups/${context.group.id}/contribute`, getBaseAppUrl());
+        redirectUrl.searchParams.set('contribution_id', context.contribution.id);
+      } else {
+        // Standalone setup — not tied to any contribution/group. Every member
+        // needs a payment method to contribute, whether or not they've joined
+        // a group yet, so this is derived entirely from the user's own profile.
+        user = await getUserOrThrow(userId);
+        if (user.country !== 'NG' || user.currency !== 'NGN') {
+          throw new AppError('Flutterwave card setup is only available for Nigerian NGN users.', 400);
+        }
+        currency = user.currency;
+        country = user.country;
+        redirectUrl = new URL('/payments/methods', getBaseAppUrl());
       }
 
       const verificationAmount = getFlutterwaveSetupAmount();
-      const txRef = buildFlutterwaveSetupTxRef(userId, contribution.id);
-      const redirectUrl = new URL(`/savings-groups/${group.id}/contribute`, getBaseAppUrl());
+      const txRef = buildFlutterwaveSetupTxRef(userId, contribution_id ?? 'standalone');
       redirectUrl.searchParams.set('setup_provider', 'flutterwave');
-      redirectUrl.searchParams.set('contribution_id', contribution.id);
 
       const result = await getFlutterwaveProvider().createHostedPaymentLink({
         amount: verificationAmount,
-        currency: group.currency,
+        currency,
         email: user.email,
         name: `${user.first_name} ${user.last_name}`,
         txRef,
         redirectUrl: redirectUrl.toString(),
         title: 'Save card for future contributions',
-        description: `Save a card for ${group.name}`,
+        description: groupName ? `Save a card for ${groupName}` : 'Save a card for your PadiHub contributions',
         meta: {
           padihub_user_id: userId,
-          contribution_id: contribution.id,
+          contribution_id: contribution_id ?? null,
           purpose: 'payment_method_setup',
         },
       });
@@ -203,9 +225,10 @@ export const paymentController = {
         entityId: userId,
         metadata: {
           txRef,
-          contributionId: contribution.id,
+          contributionId: contribution_id ?? null,
           verificationAmount,
-          currency: group.currency,
+          currency,
+          country,
         },
       });
 
@@ -215,11 +238,12 @@ export const paymentController = {
           ...result,
           tx_ref: txRef,
           verification_amount: verificationAmount,
-          currency: group.currency,
+          currency,
         },
       });
     } catch (e) { next(e); }
   },
+
 
   /** POST /api/payments/save-flutterwave-token — verify hosted checkout result and persist card token */
   saveFlutterwaveToken: async (req: Request, res: Response, next: NextFunction) => {
