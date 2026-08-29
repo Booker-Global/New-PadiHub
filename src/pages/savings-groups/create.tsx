@@ -52,6 +52,7 @@ interface ApiResponse<T> {
   success?: boolean;
   data?: T;
   message?: string;
+  code?: string;
   errors?: Record<string, string[] | undefined>;
 }
 
@@ -129,6 +130,8 @@ export default function CreateGroupWizard() {
   const [done, setDone] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
+  const [needsVerification, setNeedsVerification] = useState(false);
+  const [bypassing, setBypassing] = useState(false);
   const [createdGroup, setCreatedGroup] = useState<SavingsGroup | null>(null);
 
   const normalizedAmount = useMemo(() => normalizeContributionAmount(data.amount), [data.amount]);
@@ -138,6 +141,7 @@ export default function CreateGroupWizard() {
 
   const set = <K extends keyof GroupData>(key: K, value: GroupData[K]) => {
     setSubmitError('');
+    setNeedsVerification(false);
     setData(current => ({ ...current, [key]: value }));
   };
 
@@ -155,6 +159,7 @@ export default function CreateGroupWizard() {
   const back = () => {
     if (step > 0) {
       setSubmitError('');
+      setNeedsVerification(false);
       setStep(current => current - 1);
     }
   };
@@ -173,6 +178,7 @@ export default function CreateGroupWizard() {
 
     setSubmitting(true);
     setSubmitError('');
+    setNeedsVerification(false);
 
     try {
       const response = await window.fetch('/api/groups', {
@@ -198,6 +204,7 @@ export default function CreateGroupWizard() {
       const json = await response.json() as ApiResponse<SavingsGroup>;
       if (!response.ok) {
         setSubmitError(getErrorMessage(json, 'Could not create your group.'));
+        setNeedsVerification(json.code === 'VERIFICATION_REQUIRED');
         return;
       }
 
@@ -209,6 +216,35 @@ export default function CreateGroupWizard() {
       setSubmitting(false);
     }
   };
+
+  const bypassVerification = async () => {
+    const session = getValidSession();
+    if (!session?.token) {
+      setSubmitError('Please log in to create a group.');
+      return;
+    }
+
+    setBypassing(true);
+    try {
+      const response = await window.fetch('/api/identity/bypass', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + session.token },
+      });
+      const json = await response.json() as ApiResponse<{ identity_verified: boolean }>;
+      if (!response.ok) {
+        setSubmitError(getErrorMessage(json, 'Could not bypass verification.'));
+        return;
+      }
+      setNeedsVerification(false);
+      setSubmitError('');
+      await finish();
+    } catch {
+      setSubmitError('Network error. Please check your connection and try again.');
+    } finally {
+      setBypassing(false);
+    }
+  };
+
 
   const rotationDuration = data.frequency === 'monthly'
     ? `${data.memberCount} months`
@@ -297,7 +333,17 @@ export default function CreateGroupWizard() {
           <div className="rounded-3xl bg-white p-7 mb-5" style={{ border: '1px solid #F3F4F6', boxShadow: '0 4px 24px rgba(0,0,0,0.06)' }}>
             {step === 6 && submitError && (
               <div style={{ borderRadius: 16, padding: 16, fontSize: 14, fontWeight: 500, background: '#FEF2F2', color: '#DC2626', border: '1px solid #FECACA', marginBottom: 20 }}>
-                {submitError}
+                <p>{submitError}</p>
+                {needsVerification && (
+                  <button
+                    type="button"
+                    onClick={() => void bypassVerification()}
+                    disabled={bypassing}
+                    style={{ marginTop: 12, borderRadius: 12, padding: '8px 14px', fontSize: 13, fontWeight: 700, background: '#DC2626', color: '#fff', opacity: bypassing ? 0.7 : 1 }}
+                  >
+                    {bypassing ? 'Bypassing verification…' : 'Bypass verification (test mode)'}
+                  </button>
+                )}
               </div>
             )}
 

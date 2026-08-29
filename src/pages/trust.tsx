@@ -1,83 +1,183 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { MotionDiv, MotionCircle, MotionProgressBar } from '@/lib/motion-safe';
 import { Link } from 'react-router-dom';
 import {
   Shield, CheckCircle, TrendingUp, Users, Award, Star,
-  ArrowRight, Share2, HelpCircle, Zap, Globe
+  ArrowRight, HelpCircle, Zap, Globe, AlertCircle, XCircle,
 } from 'lucide-react';
 import DashboardLayout from '@/components/DashboardLayout';
+import { SkeletonPage } from '@/components/ui/loading-skeleton';
+import { getValidSession } from '@/lib/session';
+import { getTrustTiers, getCurrentTier, type TrustTier } from '@/lib/trust-tiers';
 
 const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/trust#webpage\",\"name\":\"Trust Score™ — PadiHub\",\"url\":\"https://padihub.com/trust\",\"description\":\"Build your reputation through positive community participation. View your Trust Score™ on PadiHub.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"}}";
 
 const fadeUp = { hidden: { opacity: 0, y: 16 }, visible: { opacity: 1, y: 0, transition: { duration: 0.4, ease: 'easeOut' as const } } };
 const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.07 } } };
 
-/* ── Tiers ────────────────────────────────────────────────────────────── */
-const tiers = [
-  { name: 'Explorer',           range: '0–299',   color: '#9CA3AF', desc: 'Just getting started',          min: 0,   max: 299 },
-  { name: 'Builder',            range: '300–499', color: '#2eafaf', desc: 'Building your reputation',      min: 300, max: 499 },
-  { name: 'Trusted',            range: '500–699', color: '#2EAF6F', desc: 'Consistently reliable',         min: 500, max: 699 },
-  { name: 'Respected',          range: '700–849', color: '#F59E0B', desc: 'Highly regarded member',        min: 700, max: 849 },
-  { name: 'Leader',             range: '850–949', color: '#8B5CF6', desc: 'Community leader',              min: 850, max: 949 },
-  { name: 'Community Champion', range: '950–1000',color: '#EF4444', desc: 'Elite community champion',      min: 950, max: 1000 },
-];
+interface UserStats {
+  trust_score: number;
+  trust_score_max: number;
+  trust_score_min: number;
+  identity_verified: boolean;
+  communities_count: number;
+  is_group_leader: boolean;
+  contribution_reliability: number | null;
+  contributions_paid_count: number;
+  governance_participation: number | null;
+  votes_cast_count: number;
+  milestones: {
+    joined_at: string | null;
+    first_community_at: string | null;
+    first_contribution_at: string | null;
+    first_vote_at: string | null;
+    identity_verified_at: string | null;
+  };
+}
 
-const currentScore = 847;
-const currentTier = tiers.find(t => currentScore >= t.min && currentScore <= t.max) ?? tiers[3];
-const nextTier = tiers[tiers.indexOf(currentTier) + 1];
-const progressToNext = nextTier ? Math.round(((currentScore - currentTier.min) / (nextTier.min - currentTier.min)) * 100) : 100;
+interface ApiResponse<T> {
+  success?: boolean;
+  data?: T;
+  message?: string;
+}
 
-/* ── KPIs ─────────────────────────────────────────────────────────────── */
-const kpis = [
-  { label: 'Trust Score™',           value: '847',  color: '#2EAF6F', icon: Shield },
-  { label: 'Trust Tier',             value: 'Respected', color: '#F59E0B', icon: Award },
-  { label: 'Contribution Reliability',value: '96%', color: '#2eafaf', icon: CheckCircle },
-  { label: 'Governance Participation',value: '78%', color: '#8B5CF6', icon: Users },
-  { label: 'Communities',            value: '4',    color: '#2EAF6F', icon: Globe },
-  { label: 'Verification',           value: 'Verified', color: '#2EAF6F', icon: CheckCircle },
-];
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
-/* ── Journey ──────────────────────────────────────────────────────────── */
-const journey = [
-  { label: 'Joined PadiHub',      date: 'Jan 2026', done: true,  icon: Zap },
-  { label: 'Profile Verified',    date: 'Jan 2026', done: true,  icon: CheckCircle },
-  { label: 'First Community',     date: 'Feb 2026', done: true,  icon: Users },
-  { label: 'First Contribution',  date: 'Feb 2026', done: true,  icon: Shield },
-  { label: 'First Vote',          date: 'Mar 2026', done: true,  icon: Star },
-  { label: 'Community Leader',    date: 'Coming',   done: false, icon: Award },
-  { label: 'Community Champion',  date: 'Coming',   done: false, icon: Star },
-];
+function getApiErrorMessage(payload: unknown, fallback: string) {
+  if (isRecord(payload) && typeof payload.message === 'string' && payload.message.trim()) {
+    return payload.message;
+  }
+  return fallback;
+}
 
-/* ── Recommendations ─────────────────────────────────────────────────── */
-const recommendations = [
-  { title: 'Make a contribution',       desc: 'Contribute to your savings group to earn +15 Trust',    action: 'Contribute now', color: '#8B5CF6', icon: Users,       to: '/savings-groups' },
-  { title: 'Complete your profile',     desc: 'Add a bio and profile photo for +10 Trust',             action: 'Update profile', color: '#2EAF6F', icon: CheckCircle, to: '/profile/edit' },
-  { title: 'Create a savings group',    desc: 'Start a new group to earn +20 Trust',                   action: 'Create now',     color: '#F59E0B', icon: Zap,         to: '/savings-groups/create' },
-  { title: 'Join a savings group',      desc: 'Expand your savings network for +12 Trust',             action: 'Explore',        color: '#2eafaf', icon: Globe,       to: '/savings-groups' },
-];
+function formatDate(value: string | null) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+}
 
-/* ── Activity ─────────────────────────────────────────────────────────── */
-const activity = [
-  { text: 'Contribution completed — Monthly Ajo Pool',  date: 'Jun 18', change: '+8',  color: '#2EAF6F', icon: CheckCircle },
-  { text: 'Governance vote submitted',                  date: 'Jun 15', change: '+5',  color: '#8B5CF6', icon: Users },
-  { text: 'New community joined — Diaspora Builders',   date: 'Jun 10', change: '+12', color: '#2eafaf', icon: Globe },
-  { text: 'Profile verification completed',             date: 'Jun 5',  change: '+20', color: '#2EAF6F', icon: CheckCircle },
-  { text: 'Contribution completed — Emergency Fund',    date: 'Jun 1',  change: '+8',  color: '#2EAF6F', icon: CheckCircle },
-];
+function buildJourney(stats: UserStats, tiers: TrustTier[]) {
+  const leaderTier = tiers.find(t => t.name === 'Leader');
+  const championTier = tiers.find(t => t.name === 'Community Champion');
 
-/* ── Achievements ─────────────────────────────────────────────────────── */
-const achievements = [
-  { title: 'First Contribution',    unlocked: true,  color: '#2EAF6F', icon: CheckCircle },
-  { title: 'Reliable Member',       unlocked: true,  color: '#F59E0B', icon: Award },
-  { title: 'Verified Member',       unlocked: true,  color: '#2EAF6F', icon: Shield },
-  { title: 'Trusted Contributor',   unlocked: true,  color: '#2eafaf', icon: Star },
-  { title: 'Community Builder',     unlocked: false, color: '#8B5CF6', icon: Users },
-  { title: 'Community Champion',    unlocked: false, color: '#EF4444', icon: Award },
-];
+  return [
+    { label: 'Joined PadiHub', date: formatDate(stats.milestones.joined_at), done: true, icon: Zap },
+    { label: 'Identity Verified', date: formatDate(stats.milestones.identity_verified_at), done: stats.identity_verified, icon: CheckCircle },
+    { label: 'First Community', date: formatDate(stats.milestones.first_community_at), done: Boolean(stats.milestones.first_community_at), icon: Users },
+    { label: 'First Contribution', date: formatDate(stats.milestones.first_contribution_at), done: Boolean(stats.milestones.first_contribution_at), icon: Shield },
+    { label: 'First Vote', date: formatDate(stats.milestones.first_vote_at), done: Boolean(stats.milestones.first_vote_at), icon: Star },
+    { label: 'Community Leader', date: null, done: leaderTier ? stats.trust_score >= leaderTier.min : false, icon: Award },
+    { label: 'Community Champion', date: null, done: championTier ? stats.trust_score >= championTier.min : false, icon: Star },
+  ];
+}
 
+function buildRecommendations(stats: UserStats) {
+  const recommendations: Array<{ title: string; desc: string; action: string; color: string; icon: typeof Shield; to: string }> = [];
+
+  if (!stats.identity_verified) {
+    recommendations.push({
+      title: 'Verify your identity',
+      desc: 'Confirm your identity to unlock full trust and access — worth +50 Trust',
+      action: 'Go to profile', color: '#2EAF6F', icon: CheckCircle, to: '/profile',
+    });
+  }
+
+  if (stats.communities_count === 0) {
+    recommendations.push({
+      title: 'Join or create a savings group',
+      desc: 'Start saving with others — you earn +2 Trust for every contribution you pay on time',
+      action: 'Explore groups', color: '#F59E0B', icon: Globe, to: '/savings-groups',
+    });
+  } else {
+    recommendations.push({
+      title: 'Keep your contributions on time',
+      desc: 'Every on-time contribution adds +2 Trust; a missed contribution costs 5',
+      action: 'View groups', color: '#8B5CF6', icon: Users, to: '/savings-groups',
+    });
+  }
+
+  return recommendations;
+}
+
+/* ── Page ─────────────────────────────────────────────────────────────── */
 export default function TrustScorePage() {
-  const [showShare, setShowShare] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [stats, setStats] = useState<UserStats | null>(null);
+
+  const loadStats = useCallback(async () => {
+    const session = getValidSession();
+    if (!session?.token) {
+      setError('Please log in to view your Trust Score™.');
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+
+    try {
+      const response = await window.fetch('/api/users/stats', {
+        headers: { Authorization: 'Bearer ' + session.token },
+      });
+      const json = await response.json() as ApiResponse<UserStats>;
+      if (!response.ok) {
+        setError(getApiErrorMessage(json, 'We could not load your Trust Score™ right now.'));
+        return;
+      }
+      setStats(json.data ?? null);
+    } catch {
+      setError('Network error. Please check your connection and try again.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void loadStats(); }, [loadStats]);
+
+  if (loading) {
+    return (
+      <DashboardLayout>
+        <SkeletonPage />
+      </DashboardLayout>
+    );
+  }
+
+  if (error || !stats) {
+    return (
+      <DashboardLayout>
+        <div className="p-4 sm:p-6 max-w-5xl mx-auto">
+          <div className="rounded-2xl p-4 flex items-start gap-3" style={{ background: '#FEF2F2', border: '1px solid #FECACA' }}>
+            <AlertCircle className="w-5 h-5 flex-shrink-0" style={{ color: '#DC2626' }} />
+            <p className="text-sm font-medium" style={{ color: '#DC2626' }}>{error || 'We could not load your Trust Score™.'}</p>
+          </div>
+        </div>
+      </DashboardLayout>
+    );
+  }
+
+  const currentScore = stats.trust_score;
+  const scoreMax = stats.trust_score_max;
+  const tiers = getTrustTiers(scoreMax);
+  const currentTier = getCurrentTier(currentScore, tiers);
+  const nextTier = tiers[tiers.indexOf(currentTier) + 1];
+  const progressToNext = nextTier ? Math.round(((currentScore - currentTier.min) / (nextTier.min - currentTier.min)) * 100) : 100;
+
+  const kpis = [
+    { label: 'Trust Score™', value: `${currentScore}`, color: '#2EAF6F', icon: Shield },
+    { label: 'Trust Tier', value: currentTier.name, color: '#F59E0B', icon: Award },
+    { label: 'Contribution Reliability', value: stats.contribution_reliability !== null ? `${stats.contribution_reliability}%` : '—', color: '#2eafaf', icon: CheckCircle },
+    { label: 'Governance Participation', value: stats.governance_participation !== null ? `${stats.governance_participation}%` : '—', color: '#8B5CF6', icon: Users },
+    { label: 'Communities', value: `${stats.communities_count}`, color: '#2EAF6F', icon: Globe },
+    { label: 'Verification', value: stats.identity_verified ? 'Verified' : 'Not verified', color: stats.identity_verified ? '#2EAF6F' : '#9CA3AF', icon: stats.identity_verified ? CheckCircle : XCircle },
+  ];
+
+  const journey = buildJourney(stats, tiers);
+  const recommendations = buildRecommendations(stats);
 
   return (
     <DashboardLayout>
@@ -104,18 +204,11 @@ export default function TrustScorePage() {
               <h1 className="text-2xl font-extrabold text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>Trust Score™</h1>
               <p className="text-gray-500 text-sm mt-1">Build your reputation through positive community participation.</p>
             </div>
-            <div className="flex items-center gap-2">
-              <button onClick={() => setShowShare(v => !v)}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-bold transition-all"
-                style={{ background: '#F3F4F6', color: '#6B7280' }}>
-                <Share2 size={15} /> Share
-              </button>
-              <Link to="/trust/history"
-                className="flex items-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-bold text-white transition-all hover:opacity-90"
-                style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}>
-                View history
-              </Link>
-            </div>
+            <Link to="/trust/history"
+              className="flex items-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-bold text-white transition-all hover:opacity-90"
+              style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}>
+              View history
+            </Link>
           </MotionDiv>
 
           {/* Hero card */}
@@ -130,13 +223,13 @@ export default function TrustScorePage() {
                   <circle cx="72" cy="72" r="60" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="10" />
                   <MotionCircle cx="72" cy="72" r="60" fill="none" stroke={currentTier.color} strokeWidth="10"
                     strokeLinecap="round" strokeDasharray={`${2 * Math.PI * 60}`}
-                    animate={{ strokeDashoffset: 2 * Math.PI * 60 * (1 - currentScore / 1000) }}
+                    animate={{ strokeDashoffset: 2 * Math.PI * 60 * (1 - (scoreMax > 0 ? currentScore / scoreMax : 0)) }}
                     transition={{ duration: 1.5, ease: 'easeOut' as const }}
                     transform="rotate(-90 72 72)" />
                 </svg>
                 <div className="absolute inset-0 flex flex-col items-center justify-center">
                   <span className="text-4xl font-black text-white" style={{ fontFamily: 'Nunito, sans-serif' }}>{currentScore}</span>
-                  <span className="text-xs" style={{ color: 'rgba(255,255,255,0.4)' }}>/ 1000</span>
+                  <span className="text-xs" style={{ color: 'rgba(255,255,255,0.4)' }}>/ {scoreMax}</span>
                 </div>
               </div>
 
@@ -145,7 +238,7 @@ export default function TrustScorePage() {
                   <span className="text-2xl font-extrabold" style={{ color: currentTier.color, fontFamily: 'Nunito, sans-serif' }}>
                     {currentTier.name}
                   </span>
-                  <CheckCircle size={18} style={{ color: '#2EAF6F' }} />
+                  {stats.identity_verified && <CheckCircle size={18} style={{ color: '#2EAF6F' }} />}
                 </div>
                 <p className="text-sm mb-4" style={{ color: 'rgba(255,255,255,0.5)' }}>{currentTier.desc}</p>
 
@@ -167,45 +260,19 @@ export default function TrustScorePage() {
                 )}
 
                 <div className="flex items-center gap-3 mt-4 justify-center md:justify-start">
-                  <span className="text-xs font-bold px-3 py-1.5 rounded-full" style={{ background: 'rgba(46,175,111,0.2)', color: '#2EAF6F' }}>
-                    ✓ Verified member
-                  </span>
-                  <span className="text-xs font-bold px-3 py-1.5 rounded-full" style={{ background: 'rgba(245,158,11,0.2)', color: '#F59E0B' }}>
-                    ↑ +45 this month
+                  <span
+                    className="text-xs font-bold px-3 py-1.5 rounded-full"
+                    style={{
+                      background: stats.identity_verified ? 'rgba(46,175,111,0.2)' : 'rgba(156,163,175,0.2)',
+                      color: stats.identity_verified ? '#2EAF6F' : '#9CA3AF',
+                    }}
+                  >
+                    {stats.identity_verified ? '✓ Verified member' : 'Not yet verified'}
                   </span>
                 </div>
               </div>
             </div>
           </MotionDiv>
-
-          {/* Share card */}
-          {showShare && (
-            <MotionDiv initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
-              className="rounded-3xl p-5 mb-6 bg-white" style={{ border: '1px solid #E5E7EB' }}>
-              <p className="font-extrabold text-gray-900 mb-3" style={{ fontFamily: 'Nunito, sans-serif' }}>Share your Trust Score™</p>
-              <div className="flex items-center gap-3 p-3 rounded-2xl mb-3" style={{ background: '#F9FAFB' }}>
-                <div className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white" style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}>A</div>
-                <div>
-                  <p className="font-bold text-gray-900 text-sm">Amara Okonkwo</p>
-                  <p className="text-xs text-gray-400">Trust Score™ {currentScore} · {currentTier.name} · Verified</p>
-                </div>
-                <div className="ml-auto text-right">
-                  <p className="text-xl font-black" style={{ color: currentTier.color, fontFamily: 'Nunito, sans-serif' }}>{currentScore}</p>
-                  <p className="text-xs text-gray-400">PadiHub</p>
-                </div>
-              </div>
-              <div className="flex gap-2">
-                <button className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white hover:opacity-90 transition-all"
-                  style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}>
-                  Share Passport™
-                </button>
-                <button className="flex-1 py-2.5 rounded-xl text-sm font-bold transition-all hover:bg-gray-100"
-                  style={{ background: '#F3F4F6', color: '#6B7280' }}>
-                  Copy link
-                </button>
-              </div>
-            </MotionDiv>
-          )}
 
           {/* KPI cards */}
           <MotionDiv variants={fadeUp} className="r-grid-3" style={{ marginBottom: 32 }}>
@@ -242,7 +309,7 @@ export default function TrustScorePage() {
                         style={{ color: isActive ? t.color : isPast ? '#6B7280' : '#9CA3AF' }}>
                         {t.name}
                       </p>
-                      <p className="text-xs text-gray-400 mt-0.5">{t.range}</p>
+                      <p className="text-xs text-gray-400 mt-0.5">{t.min}–{t.max}</p>
                     </div>
                     {i < tiers.length - 1 && (
                       <div className="w-8 h-0.5 mx-1 flex-shrink-0"
@@ -273,7 +340,7 @@ export default function TrustScorePage() {
                     </div>
                     <div className="flex-1 pb-4">
                       <p className="text-sm font-semibold" style={{ color: j.done ? '#1A1A2E' : '#9CA3AF' }}>{j.label}</p>
-                      <p className="text-xs text-gray-400">{j.date}</p>
+                      <p className="text-xs text-gray-400">{j.date ?? (j.done ? '' : 'Not yet')}</p>
                     </div>
                     {j.done && <CheckCircle size={14} style={{ color: '#2EAF6F', flexShrink: 0, marginTop: 4 }} />}
                   </div>
@@ -284,77 +351,31 @@ export default function TrustScorePage() {
             {/* Recommendations */}
             <MotionDiv variants={fadeUp} className="rounded-3xl p-5 bg-white" style={{ border: '1px solid #F3F4F6' }}>
               <h2 className="font-extrabold text-gray-900 mb-4" style={{ fontFamily: 'Nunito, sans-serif' }}>Boost your score</h2>
-              <div className="flex flex-col gap-3">
-                {recommendations.map((r, i) => (
-                  <div key={i} className="flex items-start gap-3 p-3 rounded-2xl"
-                    style={{ background: `${r.color}06`, border: `1px solid ${r.color}15` }}>
-                    <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
-                      style={{ background: `${r.color}15` }}>
-                      <r.icon size={15} style={{ color: r.color }} />
+              {recommendations.length === 0 ? (
+                <p className="text-sm text-gray-500">You're doing great — keep participating to grow your Trust Score™.</p>
+              ) : (
+                <div className="flex flex-col gap-3">
+                  {recommendations.map((r, i) => (
+                    <div key={i} className="flex items-start gap-3 p-3 rounded-2xl"
+                      style={{ background: `${r.color}06`, border: `1px solid ${r.color}15` }}>
+                      <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
+                        style={{ background: `${r.color}15` }}>
+                        <r.icon size={15} style={{ color: r.color }} />
+                      </div>
+                      <div className="flex-1">
+                        <p className="font-bold text-gray-900 text-sm">{r.title}</p>
+                        <p className="text-xs text-gray-500">{r.desc}</p>
+                      </div>
+                      <Link to={r.to} className="text-xs font-bold flex items-center gap-1 flex-shrink-0"
+                        style={{ color: r.color }}>
+                        {r.action} <ArrowRight size={11} />
+                      </Link>
                     </div>
-                    <div className="flex-1">
-                      <p className="font-bold text-gray-900 text-sm">{r.title}</p>
-                      <p className="text-xs text-gray-500">{r.desc}</p>
-                    </div>
-                    <Link to={r.to} className="text-xs font-bold flex items-center gap-1 flex-shrink-0"
-                      style={{ color: r.color }}>
-                      {r.action} <ArrowRight size={11} />
-                    </Link>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </MotionDiv>
           </div>
-
-          {/* Recent activity */}
-          <MotionDiv variants={fadeUp} className="rounded-3xl p-5 bg-white mb-6" style={{ border: '1px solid #F3F4F6' }}>
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="font-extrabold text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>Recent Trust Activity</h2>
-              <Link to="/trust/history" className="text-xs font-bold" style={{ color: '#2EAF6F' }}>View all →</Link>
-            </div>
-            <div className="flex flex-col gap-0">
-              {activity.map((a, i) => (
-                <div key={i} className="flex items-start gap-3 relative">
-                  {i < activity.length - 1 && (
-                    <div className="absolute left-4 top-9 bottom-0 w-0.5" style={{ background: '#F3F4F6' }} />
-                  )}
-                  <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 z-10 bg-white"
-                    style={{ border: `1px solid ${a.color}25` }}>
-                    <a.icon size={13} style={{ color: a.color }} />
-                  </div>
-                  <div className="flex-1 pb-4">
-                    <p className="text-sm text-gray-700">{a.text}</p>
-                    <p className="text-xs text-gray-400">{a.date}</p>
-                  </div>
-                  <span className="text-xs font-black flex-shrink-0 mt-0.5" style={{ color: '#2EAF6F' }}>{a.change}</span>
-                </div>
-              ))}
-            </div>
-          </MotionDiv>
-
-          {/* Achievements */}
-          <MotionDiv variants={fadeUp} className="rounded-3xl p-5 bg-white mb-6" style={{ border: '1px solid #F3F4F6' }}>
-            <h2 className="font-extrabold text-gray-900 mb-4" style={{ fontFamily: 'Nunito, sans-serif' }}>Trust Achievements</h2>
-            <div className="r-grid-3">
-              {achievements.map((a, i) => (
-                <div key={i} className="rounded-2xl p-4 text-center"
-                  style={{
-                    background: a.unlocked ? `${a.color}08` : '#F9FAFB',
-                    border: a.unlocked ? `1px solid ${a.color}20` : '1px solid #E5E7EB',
-                    opacity: a.unlocked ? 1 : 0.6,
-                  }}>
-                  <div className="w-10 h-10 rounded-full flex items-center justify-center mx-auto mb-2"
-                    style={{ background: a.unlocked ? `linear-gradient(135deg, ${a.color}, ${a.color}cc)` : '#E5E7EB' }}>
-                    <a.icon size={16} color={a.unlocked ? '#fff' : '#9CA3AF'} />
-                  </div>
-                  <p className="text-xs font-bold text-gray-700 leading-tight">{a.title}</p>
-                  <p className="text-xs mt-1" style={{ color: a.unlocked ? a.color : '#9CA3AF' }}>
-                    {a.unlocked ? '✓ Earned' : 'Locked'}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </MotionDiv>
 
           {/* How it works */}
           <MotionDiv variants={fadeUp} className="rounded-3xl p-5 mb-6 relative overflow-hidden"
@@ -365,8 +386,9 @@ export default function TrustScorePage() {
               <div>
                 <p className="font-extrabold text-white mb-1" style={{ fontFamily: 'Nunito, sans-serif' }}>How Trust Score™ works</p>
                 <p className="text-sm" style={{ color: 'rgba(255,255,255,0.5)' }}>
-                  Trust grows through positive participation, reliability, transparency and community engagement.
-                  Every contribution, vote and community action builds your reputation.
+                  Trust grows through positive participation and reliability: +2 for every on-time contribution,
+                  +3 when a savings cycle completes in your favour, and +50 for verifying your identity.
+                  Missing a contribution costs 5 points, and being suspended from a group costs 10.
                 </p>
               </div>
             </div>

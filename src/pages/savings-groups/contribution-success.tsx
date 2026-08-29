@@ -1,157 +1,287 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Helmet } from '@dr.pogodin/react-helmet';
-import { MotionDiv } from '@/lib/motion-safe';
-import { MotionProgressBar } from '@/lib/motion-safe';
-import { Link } from 'react-router-dom';
-import { CheckCircle, Shield, Award, TrendingUp, Users, Zap } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { CheckCircle, Clock, AlertTriangle, PiggyBank, Shield } from 'lucide-react';
 import DashboardLayout from '@/components/DashboardLayout';
+import { MotionDiv } from '@/lib/motion-safe';
+import { SkeletonPage } from '@/components/ui/loading-skeleton';
+import { getValidSession } from '@/lib/session';
 
-const fadeUp = { hidden: { opacity: 0, y: 16 }, visible: { opacity: 1, y: 0, transition: { duration: 0.4, ease: 'easeOut' as const } } };
-const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.1 } } };
+interface SavingsGroup {
+  id: string;
+  name: string;
+  currency: 'GBP' | 'NGN';
+}
 
-const streakDots = [true, true, true, true, true, false, false, false, false, false];
+interface Contribution {
+  id: string;
+  group_id: string;
+  cycle_number: number;
+  amount_due: string | number;
+  amount_paid?: string | number | null;
+  due_date: string;
+  paid_date?: string | null;
+  payment_status: 'scheduled' | 'due' | 'paid' | 'failed' | 'missed';
+  provider_reference?: string | null;
+}
+
+interface ApiResponse<T> {
+  success?: boolean;
+  data?: T;
+  message?: string;
+  errors?: Record<string, string[] | undefined>;
+}
+
+type ChargeStatus = 'succeeded' | 'pending' | 'failed';
+
+function getErrorMessage<T>(json: ApiResponse<T> | null, fallback: string) {
+  const firstFieldError = json?.errors
+    ? Object.values(json.errors).flat().find((value): value is string => Boolean(value))
+    : undefined;
+  return firstFieldError || json?.message || fallback;
+}
+
+function formatCurrency(amount: string | number, currency: 'GBP' | 'NGN') {
+  const numericAmount = typeof amount === 'number' ? amount : Number.parseFloat(amount);
+  const locale = currency === 'GBP' ? 'en-GB' : 'en-NG';
+
+  return new Intl.NumberFormat(locale, {
+    style: 'currency',
+    currency,
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  }).format(Number.isFinite(numericAmount) ? numericAmount : 0);
+}
+
+function formatDate(date: string | null | undefined) {
+  if (!date) return 'Not available';
+  const parsed = new Date(date);
+  if (Number.isNaN(parsed.getTime())) return 'Not available';
+  return parsed.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function mapContributionStatus(status?: Contribution['payment_status'] | null): ChargeStatus {
+  switch (status) {
+    case 'paid':
+      return 'succeeded';
+    case 'failed':
+    case 'missed':
+      return 'failed';
+    default:
+      return 'pending';
+  }
+}
 
 export default function ContributionSuccessPage() {
-  // Start false so SSR and first client render produce identical markup.
-  // Confetti is enabled in useEffect (client-only) to avoid hydration mismatch
-  // from Math.random() producing different values on server vs client.
-  const [showConfetti, setShowConfetti] = useState(false);
+  const [searchParams] = useSearchParams();
+  const contributionId = searchParams.get('contribution_id') ?? '';
+  const groupIdFromQuery = searchParams.get('group_id') ?? '';
+  const statusFromQuery = searchParams.get('status') as ChargeStatus | null;
+  const [contribution, setContribution] = useState<Contribution | null>(null);
+  const [group, setGroup] = useState<SavingsGroup | null>(null);
+  const [loading, setLoading] = useState(Boolean(contributionId));
+  const [error, setError] = useState('');
 
   useEffect(() => {
-    setShowConfetti(true);
-    const t = setTimeout(() => setShowConfetti(false), 3000);
-    return () => clearTimeout(t);
-  }, []);
+    if (!contributionId) {
+      setLoading(false);
+      return;
+    }
+
+    const session = getValidSession();
+    if (!session?.token) {
+      setError('Please log in to view contribution details.');
+      setLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadDetails = async () => {
+      setLoading(true);
+      setError('');
+
+      try {
+        const headers = { Authorization: 'Bearer ' + session.token };
+        const contributionsResponse = await window.fetch('/api/contributions', { headers });
+        const contributionsJson = await contributionsResponse.json().catch(() => null) as ApiResponse<Contribution[]> | null;
+        if (!contributionsResponse.ok) {
+          throw new Error(getErrorMessage(contributionsJson, 'Could not load your contribution details.'));
+        }
+
+        const contributionRow = (Array.isArray(contributionsJson?.data) ? contributionsJson.data : [])
+          .find(row => row.id === contributionId);
+
+        if (!contributionRow) {
+          throw new Error('Contribution not found.');
+        }
+
+        const groupId = contributionRow.group_id || groupIdFromQuery;
+        let groupRow: SavingsGroup | null = null;
+        if (groupId) {
+          const groupResponse = await window.fetch(`/api/groups/${groupId}`, { headers });
+          const groupJson = await groupResponse.json().catch(() => null) as ApiResponse<SavingsGroup> | null;
+          if (groupResponse.ok) {
+            groupRow = groupJson?.data ?? null;
+          }
+        }
+
+        if (cancelled) return;
+        setContribution(contributionRow);
+        setGroup(groupRow);
+      } catch (loadError) {
+        if (cancelled) return;
+        setError(loadError instanceof Error ? loadError.message : 'Could not load your contribution details.');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    void loadDetails();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [contributionId, groupIdFromQuery]);
+
+  const effectiveStatus = useMemo<ChargeStatus>(() => {
+    if (statusFromQuery === 'succeeded' || statusFromQuery === 'pending' || statusFromQuery === 'failed') {
+      return statusFromQuery;
+    }
+    return mapContributionStatus(contribution?.payment_status);
+  }, [contribution?.payment_status, statusFromQuery]);
+
+  const statusMeta = useMemo(() => {
+    switch (effectiveStatus) {
+      case 'succeeded':
+        return {
+          title: 'Contribution received',
+          description: 'Your payment was confirmed and your contribution has been recorded.',
+          tone: '#2EAF6F',
+          icon: CheckCircle,
+        };
+      case 'failed':
+        return {
+          title: 'Contribution not completed',
+          description: 'The payment provider did not confirm this contribution. Please return and try again.',
+          tone: '#EF4444',
+          icon: AlertTriangle,
+        };
+      default:
+        return {
+          title: 'Payment processing',
+          description: 'Your payment is still processing. We will update your contribution once the provider confirms it.',
+          tone: '#F59E0B',
+          icon: Clock,
+        };
+    }
+  }, [effectiveStatus]);
+
+  if (loading) {
+    return <DashboardLayout><SkeletonPage /></DashboardLayout>;
+  }
+
+  const StatusIcon = statusMeta.icon;
+  const resolvedGroupId = group?.id || contribution?.group_id || groupIdFromQuery;
+  const amount = contribution && group ? formatCurrency(contribution.amount_due, group.currency) : null;
 
   return (
     <DashboardLayout>
       <Helmet>
-        <title>Contribution Recorded — PadiHub</title>
-        <meta name="description" content="Your contribution has been recorded. Thank you for strengthening your community." />
+        <title>{statusMeta.title} — PadiHub</title>
+        <meta name="description" content={statusMeta.description} />
         <link rel="canonical" href="https://padihub.com/savings-groups/contribution-success" />
-              <meta property="og:title" content="Contribution Recorded — PadiHub" />
-        <meta property="og:description" content="Your contribution has been recorded. Thank you for strengthening your community." />
+        <meta property="og:title" content={`${statusMeta.title} — PadiHub`} />
+        <meta property="og:description" content={statusMeta.description} />
         <meta property="og:type" content="website" />
         <meta property="og:image" content="https://padihub.com/airo-assets/images/og/default" />
         <meta name="twitter:card" content="summary_large_image" />
         <meta name="twitter:image" content="https://padihub.com/airo-assets/images/og/default" />
         <meta name="robots" content="noindex,nofollow" />
-</Helmet>
+      </Helmet>
 
-      <div className="p-4 sm:p-6 max-w-lg mx-auto">
-        {/* Confetti particles */}
-        {showConfetti && (
-          <div className="fixed inset-0 pointer-events-none overflow-hidden z-50">
-            {Array.from({ length: 24 }).map((_, i) => (
-              <MotionDiv key={i}
-                className="absolute w-2 h-2 rounded-full"
-                style={{
-                  left: `${Math.random() * 100}%`,
-                  top: '-8px',
-                  background: ['#2EAF6F', '#F59E0B', '#8B5CF6', '#2eafaf', '#EF4444'][i % 5],
-                }}
-                animate={{ y: ['0vh', '110vh'], rotate: [0, 360 * (Math.random() > 0.5 ? 1 : -1)], opacity: [1, 0] }}
-                transition={{ duration: 2 + Math.random(), delay: Math.random() * 0.8, ease: 'easeIn' as const }} />
-            ))}
+      <div className="p-4 sm:p-6 max-w-2xl mx-auto">
+        <MotionDiv initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }} className="text-center">
+          <div className="w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-6" style={{ background: `${statusMeta.tone}16` }}>
+            <StatusIcon size={44} style={{ color: statusMeta.tone }} />
           </div>
-        )}
 
-        <MotionDiv initial="hidden" animate="visible" variants={stagger} className="text-center">
+          <h1 className="text-3xl font-extrabold text-gray-900 mb-2" style={{ fontFamily: 'Nunito, sans-serif' }}>
+            {statusMeta.title}
+          </h1>
+          <p className="text-gray-500 mb-8">{statusMeta.description}</p>
 
-          {/* Success icon */}
-          <MotionDiv variants={fadeUp}>
-            <MotionDiv
-              initial={{ scale: 0 }} animate={{ scale: 1 }}
-              transition={{ type: 'spring', stiffness: 300, damping: 20, delay: 0.1 }}
-              className="w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-6"
-              style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', boxShadow: '0 0 50px rgba(46,175,111,0.4)' }}>
-              <CheckCircle size={44} color="#fff" />
-            </MotionDiv>
-          </MotionDiv>
-
-          <MotionDiv variants={fadeUp}>
-            <h1 className="text-3xl font-extrabold text-gray-900 mb-2" style={{ fontFamily: 'Nunito, sans-serif' }}>
-              Contribution Recorded!
-            </h1>
-            <p className="text-gray-500 mb-1">Thank you for strengthening your community.</p>
-            <p className="text-sm text-gray-400 mb-8">Monthly Ajo Pool · Lagos Savers Circle</p>
-          </MotionDiv>
-
-          {/* Unlocked updates */}
-          <MotionDiv variants={fadeUp} className="grid grid-cols-2 gap-4 mb-8">
-            {[
-              { label: 'Trust Score™',     value: '+8',    sub: 'Now 855',   color: '#2EAF6F', icon: Shield },
-              { label: 'Community Karma™', value: '+25',   sub: 'Now 1,265', color: '#F59E0B', icon: Award },
-              { label: 'Contribution Streak',value: '6',   sub: 'months',    color: '#8B5CF6', icon: Zap },
-              { label: 'Group Progress',   value: '+1%',   sub: 'Now 65%',   color: '#2eafaf', icon: TrendingUp },
-            ].map(u => (
-              <div key={u.label} className="rounded-2xl p-4 text-center"
-                style={{ background: `${u.color}08`, border: `1px solid ${u.color}20` }}>
-                <u.icon size={16} style={{ color: u.color, margin: '0 auto 6px' }} />
-                <p className="text-2xl font-black" style={{ color: u.color, fontFamily: 'Nunito, sans-serif' }}>{u.value}</p>
-                <p className="text-xs font-bold text-gray-700">{u.label}</p>
-                <p className="text-xs text-gray-400">{u.sub}</p>
+          {error ? (
+            <div className="rounded-3xl p-5 mb-6 text-left bg-white" style={{ border: '1px solid rgba(239,68,68,0.2)' }}>
+              <div className="flex items-start gap-3">
+                <AlertTriangle size={18} style={{ color: '#EF4444', flexShrink: 0, marginTop: 2 }} />
+                <p className="text-sm text-gray-700">{error}</p>
               </div>
-            ))}
-          </MotionDiv>
-
-          {/* Streak */}
-          <MotionDiv variants={fadeUp} className="rounded-3xl p-5 mb-6 bg-white" style={{ border: '1px solid #F3F4F6' }}>
-            <div className="flex items-center justify-between mb-3">
-              <p className="font-extrabold text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>Contribution Streak</p>
-              <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: 'rgba(139,92,246,0.1)', color: '#8B5CF6' }}>
-                🔥 6 months
-              </span>
             </div>
-            <div className="flex gap-2 justify-center mb-2">
-              {streakDots.map((active, i) => (
-                <div key={i} className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all"
-                  style={{
-                    background: active ? 'linear-gradient(135deg, #8B5CF6, #7C3AED)' : '#F3F4F6',
-                    color: active ? '#fff' : '#9CA3AF',
-                    boxShadow: active ? '0 2px 8px rgba(139,92,246,0.3)' : 'none',
-                  }}>
-                  {active ? <CheckCircle size={14} /> : i + 1}
+          ) : contribution ? (
+            <div className="rounded-3xl p-6 mb-6 text-left bg-white" style={{ border: '1px solid #E5E7EB' }}>
+              <div className="flex items-center gap-3 mb-5">
+                <div className="w-11 h-11 rounded-2xl flex items-center justify-center" style={{ background: `${statusMeta.tone}16` }}>
+                  <PiggyBank size={18} style={{ color: statusMeta.tone }} />
                 </div>
-              ))}
-            </div>
-            <p className="text-xs text-gray-400 text-center">4 more contributions to unlock the <strong>Reliable Member</strong> badge</p>
-          </MotionDiv>
-
-          {/* Community progress */}
-          <MotionDiv variants={fadeUp} className="rounded-3xl p-5 mb-8 relative overflow-hidden"
-            style={{ background: 'linear-gradient(135deg, #0F172A, #1A1A2E)' }}>
-            <div className="absolute top-0 right-0 w-20 h-20 rounded-full blur-2xl opacity-20" style={{ background: '#2EAF6F' }} />
-            <div className="relative">
-              <div className="flex items-center gap-2 mb-3">
-                <Users size={16} style={{ color: '#2EAF6F' }} />
-                <p className="font-extrabold text-white text-sm" style={{ fontFamily: 'Nunito, sans-serif' }}>Community impact</p>
+                <div>
+                  <p className="font-extrabold text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>{group?.name ?? 'Savings group'}</p>
+                  <p className="text-xs text-gray-500">Contribution ID: {contribution.id}</p>
+                </div>
               </div>
-              <p className="text-sm mb-3" style={{ color: 'rgba(255,255,255,0.5)' }}>
-                Your contribution brings Monthly Ajo Pool to <strong className="text-white">65%</strong> of its goal.
-              </p>
-              <div className="h-2 rounded-full mb-1" style={{ background: 'rgba(255,255,255,0.08)' }}>
-                <MotionProgressBar className="h-2 rounded-full" initial={{ width: '64%' }} animate={{ width: '65%' }}
-                  transition={{ duration: 0.8, ease: 'easeOut' as const }}
-                  style={{ background: 'linear-gradient(90deg, #2EAF6F, #F59E0B)' }} />
-              </div>
-              <p className="text-xs" style={{ color: 'rgba(255,255,255,0.3)' }}>₦325,000 of ₦500,000</p>
-            </div>
-          </MotionDiv>
 
-          {/* Actions */}
-          <MotionDiv variants={fadeUp} className="flex flex-col sm:flex-row gap-3">
-            <Link to="/dashboard"
+              <div className="grid sm:grid-cols-2 gap-3 mb-4">
+                <div className="rounded-2xl p-4" style={{ background: '#F9FAFB' }}>
+                  <p className="text-xs text-gray-500 mb-1">Amount</p>
+                  <p className="font-bold text-gray-900">{amount ?? 'Not available'}</p>
+                </div>
+                <div className="rounded-2xl p-4" style={{ background: '#F9FAFB' }}>
+                  <p className="text-xs text-gray-500 mb-1">Cycle</p>
+                  <p className="font-bold text-gray-900">Cycle {contribution.cycle_number}</p>
+                </div>
+                <div className="rounded-2xl p-4" style={{ background: '#F9FAFB' }}>
+                  <p className="text-xs text-gray-500 mb-1">Due date</p>
+                  <p className="font-bold text-gray-900">{formatDate(contribution.due_date)}</p>
+                </div>
+                <div className="rounded-2xl p-4" style={{ background: '#F9FAFB' }}>
+                  <p className="text-xs text-gray-500 mb-1">Current record status</p>
+                  <p className="font-bold text-gray-900">{contribution.payment_status}</p>
+                </div>
+              </div>
+
+              <div className="rounded-2xl p-4 flex items-start gap-3" style={{ background: 'rgba(46,175,111,0.06)', border: '1px solid rgba(46,175,111,0.15)' }}>
+                <Shield size={16} style={{ color: '#2EAF6F', flexShrink: 0, marginTop: 2 }} />
+                <p className="text-sm text-gray-700">
+                  {effectiveStatus === 'succeeded'
+                    ? 'Your contribution has been confirmed. Any provider webhooks will reconcile the record if needed.'
+                    : effectiveStatus === 'pending'
+                      ? 'The payment is still with the provider. Refresh this page or check back later to see the final status.'
+                      : 'No contribution was recorded from this attempt. Please go back and try again after updating your payment method if needed.'}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-3xl p-6 mb-6 bg-white" style={{ border: '1px solid #E5E7EB' }}>
+              <p className="text-sm text-gray-600">This screen reflects the result of your last contribution attempt. No mock data is shown here.</p>
+            </div>
+          )}
+
+          <div className="flex flex-col sm:flex-row gap-3">
+            <Link
+              to="/dashboard"
               className="flex-1 py-3.5 rounded-2xl font-bold text-white text-center transition-all hover:opacity-90"
-              style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', boxShadow: '0 4px 16px rgba(46,175,111,0.3)' }}>
+              style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}
+            >
               Return to dashboard
             </Link>
-            <Link to="/savings-groups/monthly-ajo-pool"
+            <Link
+              to={resolvedGroupId ? `/savings-groups/${resolvedGroupId}` : '/savings-groups'}
               className="flex-1 py-3.5 rounded-2xl font-bold text-gray-700 text-center hover:bg-gray-50 transition-colors"
-              style={{ border: '1px solid #E5E7EB' }}>
-              View group
+              style={{ border: '1px solid #E5E7EB' }}
+            >
+              View savings group
             </Link>
-          </MotionDiv>
+          </div>
         </MotionDiv>
       </div>
     </DashboardLayout>

@@ -35,6 +35,7 @@ import {
   initiateBvn,
   confirmBvn,
   getIdentityStatus,
+  bypassIdentityVerification,
 } from './controllers/identityController.js';
 import { legalController } from './controllers/legalController.js';
 import { monitoringController } from './controllers/monitoringController.js';
@@ -202,6 +203,8 @@ app.put(   '/api/users/profile',       authenticate, ...userController.updatePro
 app.delete('/api/users/profile',       authenticate, userController.deleteProfile);
 app.get(   '/api/users/notifications', authenticate, userController.getNotifications);
 app.put(   '/api/users/preferences',   authenticate, ...userController.updatePreferences);
+app.get(   '/api/users/stats',         authenticate, userController.getStats);
+app.get(   '/api/users/trust-history', authenticate, userController.getTrustHistory);
 
 // ── Groups ───────────────────────────────────────────────────────────�[...]
 app.get(   '/api/groups',                    authenticate, groupController.list);
@@ -250,6 +253,9 @@ app.post('/api/subscriptions/reactivate', authenticate, subscriptionController.r
 
 // ── Payments ──────────────────────────────────────────────────────────��[...]
 app.post('/api/payments/setup-intent',       authenticate, paymentController.setupIntent);
+app.post('/api/payments/confirm-setup-intent', authenticate, paymentController.confirmSetupIntent);
+app.post('/api/payments/create-flutterwave-payment-link', authenticate, paymentController.createFlutterwavePaymentLink);
+app.post('/api/payments/save-flutterwave-token', authenticate, paymentController.saveFlutterwaveToken);
 app.post('/api/payments/connect-onboard',    authenticate, requireRole('group_leader', 'admin'), paymentController.connectOnboard);
 app.post('/api/payments/charge-contribution', authenticate, paymentController.chargeContribution);
 
@@ -286,6 +292,9 @@ app.post('/api/identity/verify/start', authenticate, startStripeIdentity);
 app.get( '/api/identity/status',       authenticate, getIdentityStatus);
 app.post('/api/identity/bvn/verify',   authenticate, initiateBvn);
 app.post('/api/identity/bvn/confirm',  authenticate, confirmBvn);
+// Test-mode bypass — hard-gated inside the handler; returns 403 unless
+// NODE_ENV !== 'production' AND KYC_BYPASS === 'true'. Never reachable live.
+app.post('/api/identity/bypass',       authenticate, bypassIdentityVerification);
 
 // ── Legal ───────────────────────────────────────────────────────────��[...]
 app.get('/api/legal/terms',   legalController.terms);
