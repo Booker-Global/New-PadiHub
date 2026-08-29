@@ -19,6 +19,21 @@ export const userController = {
     } catch (e) { next(e); }
   },
 
+  getStats: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await userService.getStats(req.user!.userId);
+      res.json({ success: true, data });
+    } catch (e) { next(e); }
+  },
+
+  getTrustHistory: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const limit = Math.min(100, parseInt(qs(req.query.limit) || '20', 10));
+      const data = await userService.getTrustHistory(req.user!.userId, limit);
+      res.json({ success: true, data });
+    } catch (e) { next(e); }
+  },
+
   updateProfile: [
     validate(updateProfileSchema),
     async (req: Request, res: Response, next: NextFunction) => {

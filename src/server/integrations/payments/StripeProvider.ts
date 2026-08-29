@@ -39,9 +39,25 @@ export class StripeProvider implements IPaymentProvider {
     return { clientSecret: intent.client_secret ?? undefined };
   }
 
+  async retrievePaymentMethod(paymentMethodId: string) {
+    const stripe = getStripe();
+    return stripe.paymentMethods.retrieve(paymentMethodId);
+  }
+
+  async setCustomerDefaultPaymentMethod(params: {
+    customerId: string;
+    paymentMethodId: string;
+  }) {
+    const stripe = getStripe();
+    await stripe.customers.update(params.customerId, {
+      invoice_settings: { default_payment_method: params.paymentMethodId },
+    });
+    return { updated: true };
+  }
+
   async chargeContribution(params: {
     customerId: string; paymentMethodId: string;
-    amount: number; currency: string;
+    amount: number; currency: string; countryCode?: string;
     contributionId: string; description: string;
   }): Promise<ChargeResult> {
     const stripe = getStripe();

@@ -12,43 +12,119 @@ import type {
 
 const FLW_BASE = 'https://api.flutterwave.com/v3';
 
+type FlutterwaveVerifyResponse = {
+  status?: string;
+  data?: {
+    id?: number | string;
+    status?: string;
+    tx_ref?: string;
+    card?: {
+      token?: string;
+    };
+    customer?: {
+      email?: string;
+    };
+  };
+};
+
 function getHeaders() {
   const key = process.env.FLUTTERWAVE_SECRET_KEY;
   if (!key) throw new Error('FLUTTERWAVE_SECRET_KEY environment variable is not set.');
-  return { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' };
+  return {
+    Authorization: 'Bearer ' + key,
+    'Content-Type': 'application/json',
+  };
 }
 
 export class FlutterwaveProvider implements IPaymentProvider {
   async createCustomer(params: {
     userId: string; email: string; name: string; currency: string;
   }): Promise<CreateCustomerResult> {
-    // Flutterwave doesn't have a standalone "create customer" endpoint;
-    // customer identity is established on first charge. We return a
-    // deterministic customer ID derived from the user ID for tracking.
     return { customerId: `flw_cust_${params.userId}` };
   }
 
   async savePaymentMethod(params: {
     customerId: string; userId: string;
   }): Promise<SavePaymentMethodResult> {
-    // Flutterwave tokenisation is completed via the hosted payment page.
-    // The token is returned in the charge.completed webhook and stored then.
-    // This method returns a redirect URL for the frontend to initiate tokenisation.
+    void params;
     return { clientSecret: undefined };
+  }
+
+  async createHostedPaymentLink(params: {
+    amount: number;
+    currency: string;
+    email: string;
+    name: string;
+    txRef: string;
+    redirectUrl: string;
+    title: string;
+    description: string;
+    meta?: Record<string, unknown>;
+  }): Promise<{ link: string }> {
+    const response = await axios.post(`${FLW_BASE}/payments`, {
+      tx_ref: params.txRef,
+      amount: params.amount,
+      currency: params.currency,
+      redirect_url: params.redirectUrl,
+      payment_options: 'card',
+      customer: {
+        email: params.email,
+        name: params.name,
+      },
+      customizations: {
+        title: params.title,
+        description: params.description,
+      },
+      meta: params.meta,
+    }, { headers: getHeaders() });
+
+    const link = response.data?.data?.link as string | undefined;
+    if (!link) throw new Error('Flutterwave did not return a hosted payment link.');
+    return { link };
+  }
+
+  async verifyTransaction(params: { transactionId: string }): Promise<{
+    transactionId: string;
+    txRef: string;
+    status: string;
+    cardToken?: string;
+    customerEmail: string;
+  }> {
+    const response = await axios.get<FlutterwaveVerifyResponse>(
+      `${FLW_BASE}/transactions/${params.transactionId}/verify`,
+      { headers: getHeaders() },
+    );
+
+    const data = response.data?.data;
+    const txRef = data?.tx_ref ?? '';
+    const status = data?.status ?? '';
+    const customerEmail = data?.customer?.email ?? '';
+
+    if (!txRef || !customerEmail) {
+      throw new Error('Flutterwave verify response was missing transaction ownership details.');
+    }
+
+    return {
+      transactionId: data?.id?.toString() ?? params.transactionId,
+      txRef,
+      status,
+      cardToken: data?.card?.token,
+      customerEmail,
+    };
   }
 
   async chargeContribution(params: {
     customerId: string; paymentMethodId: string;
-    amount: number; currency: string;
+    amount: number; currency: string; countryCode?: string;
     contributionId: string; description: string;
   }): Promise<ChargeResult> {
-    // paymentMethodId is the Flutterwave card token
-    const response = await axios.post(`${FLW_BASE}/charges?type=token`, {
-      token:    params.paymentMethodId,
-      email:    params.customerId, // stored as email in our DB for FLW
+    const response = await axios.post(`${FLW_BASE}/tokenized-charges`, {
+      token: params.paymentMethodId,
+      email: params.customerId,
       currency: params.currency,
-      amount:   params.amount / 100, // FLW uses full units (naira, not kobo)
-      tx_ref:   params.contributionId,
+      country: params.countryCode ?? 'NG',
+      amount: params.amount / 100,
+      tx_ref: params.contributionId,
       narration: params.description,
     }, { headers: getHeaders() });
 
@@ -69,12 +145,12 @@ export class FlutterwaveProvider implements IPaymentProvider {
     recipientName?: string;
   }): Promise<TransferResult> {
     const response = await axios.post(`${FLW_BASE}/transfers`, {
-      account_bank:   params.recipientBankCode ?? '044',
+      account_bank: params.recipientBankCode ?? '044',
       account_number: params.recipientAccountNumber ?? params.recipientAccountId,
-      amount:         params.amount / 100, // full naira units
-      currency:       params.currency,
-      narration:      params.description,
-      reference:      `transfer-${params.rotationId}`,
+      amount: params.amount / 100,
+      currency: params.currency,
+      narration: params.description,
+      reference: `transfer-${params.rotationId}`,
       beneficiary_name: params.recipientName ?? 'PadiHub Member',
     }, { headers: getHeaders() });
 
@@ -90,26 +166,21 @@ export class FlutterwaveProvider implements IPaymentProvider {
   async createSubscription(params: {
     customerId: string; userId: string; email: string; currency: string;
   }): Promise<SubscriptionResult> {
-    // Flutterwave recurring billing is initiated via a payment plan charge.
-    // The plan ID is stored in env; the actual charge happens on the hosted page.
     const planId = process.env.FLUTTERWAVE_PLAN_ID_NG_MONTHLY;
     if (!planId) throw new Error('FLUTTERWAVE_PLAN_ID_NG_MONTHLY environment variable is not set.');
 
     const renewalDate = new Date();
     renewalDate.setMonth(renewalDate.getMonth() + 1);
 
-    // Return a synthetic subscription ID; the real one comes back via webhook
     return {
       subscriptionId: `flw_sub_${params.userId}_${Date.now()}`,
-      status:         'trialing',
+      status: 'trialing',
       renewalDate,
     };
   }
 
   async cancelSubscription(params: { subscriptionId: string }): Promise<{ cancelled: boolean }> {
-    // Extract the Flutterwave subscription ID if it's a real FLW ID
     if (params.subscriptionId.startsWith('flw_sub_')) {
-      // Synthetic ID — mark cancelled locally only
       return { cancelled: true };
     }
     await axios.put(
@@ -140,11 +211,11 @@ export class FlutterwaveProvider implements IPaymentProvider {
     accountNumber: string; splitValue?: number;
   }): Promise<{ subaccountId: string }> {
     const response = await axios.post(`${FLW_BASE}/subaccounts`, {
-      account_bank:    params.bankCode,
-      account_number:  params.accountNumber,
-      business_name:   params.businessName,
-      split_type:      'percentage',
-      split_value:     params.splitValue ?? 0,
+      account_bank: params.bankCode,
+      account_number: params.accountNumber,
+      business_name: params.businessName,
+      split_type: 'percentage',
+      split_value: params.splitValue ?? 0,
       meta: [{ meta_name: 'padihub_user_id', meta_value: params.userId }],
     }, { headers: getHeaders() });
 

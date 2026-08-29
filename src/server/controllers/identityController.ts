@@ -22,6 +22,20 @@ import { ip } from '../lib/reqHelpers.js';
 const stripeIdentity      = new StripeIdentityProvider();
 const flutterwaveIdentity = new FlutterwaveIdentityProvider();
 
+/**
+ * KYC/identity-verification test-mode bypass gate (see section 2.2 of the
+ * architecture doc). Real ID verification is intentionally deferred for this
+ * testing round so the rest of the flow (groups, payments, payouts, trust
+ * score) can be exercised end-to-end without it.
+ *
+ * This MUST be hard-gated behind an explicit env flag AND never be reachable
+ * in production, even if KYC_BYPASS is accidentally left set — the NODE_ENV
+ * check is not optional and is evaluated first.
+ */
+function isKycBypassEnabled(): boolean {
+  return process.env.NODE_ENV !== 'production' && process.env.KYC_BYPASS === 'true';
+}
+
 // ── UK: Start Stripe Identity session ────────────────────────────────────────
 export async function startStripeIdentity(req: Request, res: Response, next: NextFunction) {
   try {
@@ -155,6 +169,39 @@ export async function getIdentityStatus(req: Request, res: Response, next: NextF
 
     const provider = userRows[0].country === 'NG' ? flutterwaveIdentity : stripeIdentity;
     const status = await provider.getVerificationStatus(userId);
-    res.json({ success: true, data: status });
+    res.json({ success: true, data: { ...status, bypass_available: isKycBypassEnabled() } });
+  } catch (e) { next(e); }
+}
+
+// ── POST: Test-mode KYC bypass (never available in production) ────────────────
+export async function bypassIdentityVerification(req: Request, res: Response, next: NextFunction) {
+  try {
+    if (!isKycBypassEnabled()) {
+      throw new AppError(
+        'KYC bypass is disabled. Set KYC_BYPASS=true in a non-production environment to enable it for testing.',
+        403,
+        'KYC_BYPASS_DISABLED',
+      );
+    }
+
+    const userId = req.user!.userId;
+    const userRows = await db.select({ identity_verified: schema.users.identity_verified })
+      .from(schema.users).where(eq(schema.users.id, userId)).limit(1);
+    if (!userRows.length) throw new AppError('User not found.', 404);
+
+    if (!userRows[0].identity_verified) {
+      await db.update(schema.users)
+        .set({ identity_verified: true, identity_verified_at: new Date() })
+        .where(eq(schema.users.id, userId));
+
+      await notificationService.create({
+        userId, type: 'identity_verified',
+        title: 'Identity Verification Bypassed (Test Mode)',
+        message: 'Identity verification was bypassed for testing. This only works outside production.',
+      });
+      await createAuditLog({ userId, action: 'IDENTITY_VERIFICATION_BYPASSED', entity: 'users', entityId: userId, ipAddress: ip(req.ip) });
+    }
+
+    res.json({ success: true, message: 'Identity verification bypassed for testing.', data: { identity_verified: true } });
   } catch (e) { next(e); }
 }

@@ -12,6 +12,11 @@ import { getValidSession, logout } from '@/lib/session';
 // Uses getValidSession() so a stored session whose JWT has already expired is
 // treated as logged-out (cleared) rather than silently showing a stale
 // "logged in" navbar with no re-authentication (see src/lib/session.ts).
+//
+// The trust score is re-fetched from the real backend (/api/users/stats)
+// rather than trusting the value cached in the session at login time, since
+// that value goes stale the moment the user contributes, votes, or gets
+// verified without logging out and back in.
 function useDashboardUser() {
   const [user, setUser] = useState<{ name: string; trust: number; initial: string }>({
     name: '', trust: 0, initial: '',
@@ -28,6 +33,17 @@ function useDashboardUser() {
       trust: session.trust ?? 0,
       initial: name.charAt(0).toUpperCase() || '?',
     });
+
+    let cancelled = false;
+    void window.fetch('/api/users/stats', { headers: { Authorization: 'Bearer ' + session.token } })
+      .then(response => response.ok ? response.json() : null)
+      .then((json: { data?: { trust_score?: number } } | null) => {
+        if (!cancelled && json?.data && typeof json.data.trust_score === 'number') {
+          setUser(current => ({ ...current, trust: json.data!.trust_score! }));
+        }
+      })
+      .catch(() => { /* keep the session's cached value if the refresh fails */ });
+    return () => { cancelled = true; };
   }, []);
   return user;
 }
