@@ -88,47 +88,60 @@ export async function closeConnection(): Promise<void> {
  * column" error that the generic error handler reports as a vague
  * "An unexpected error occurred.", surfacing on both /profile and /dashboard.
  *
- * This list should stay in sync with any new nullable `users` columns added
- * to schema.ts. It intentionally only contains additive, nullable columns —
- * this helper never drops or alters existing columns/data.
+ * This list should stay in sync with any new nullable columns added to
+ * schema.ts on the tables below. It intentionally only contains additive,
+ * nullable columns — this helper never drops or alters existing
+ * columns/data.
  */
-const REQUIRED_USER_COLUMNS: Array<{ column: string; sqlType: string }> = [
-  { column: 'stripe_payment_method_id',   sqlType: 'VARCHAR(100) NULL' },
-  { column: 'flutterwave_card_token',     sqlType: 'VARCHAR(255) NULL' },
-  { column: 'payment_method_verified_at', sqlType: 'TIMESTAMP NULL' },
-  { column: 'payout_verified_at',         sqlType: 'TIMESTAMP NULL' },
-];
+const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }>> = {
+  users: [
+    { column: 'stripe_payment_method_id',   sqlType: 'VARCHAR(100) NULL' },
+    { column: 'flutterwave_card_token',     sqlType: 'VARCHAR(255) NULL' },
+    { column: 'payment_method_verified_at', sqlType: 'TIMESTAMP NULL' },
+    { column: 'payout_verified_at',         sqlType: 'TIMESTAMP NULL' },
+    { column: 'payment_terms_accepted_at',  sqlType: 'TIMESTAMP NULL' },
+  ],
+  savings_groups: [
+    { column: 'payout_day', sqlType: 'INT NULL' },
+  ],
+  contributions: [
+    { column: 'fee_amount', sqlType: 'DECIMAL(12,2) NULL' },
+  ],
+};
 
 /**
  * Idempotent, non-destructive self-heal for the schema drift described
  * above. Runs once at boot: checks `information_schema` for each required
- * column and adds it if missing. Never throws — a failure here is logged
- * but must not prevent the server from starting, since the app should still
- * serve the routes that don't touch the affected columns.
+ * column (across all tables in REQUIRED_COLUMNS) and adds it if missing.
+ * Never throws — a failure here is logged but must not prevent the server
+ * from starting, since the app should still serve the routes that don't
+ * touch the affected columns.
  */
 export async function ensureSchemaSync(): Promise<void> {
-  try {
-    const [rows] = await poolConnection.query(
-      'SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?',
-      [dbConfig.database, 'users'],
-    );
-    const existingColumns = new Set(
-      (rows as Array<{ COLUMN_NAME: string }>).map(row => row.COLUMN_NAME)
-    );
+  for (const [table, requiredColumns] of Object.entries(REQUIRED_COLUMNS)) {
+    try {
+      const [rows] = await poolConnection.query(
+        'SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?',
+        [dbConfig.database, table],
+      );
+      const existingColumns = new Set(
+        (rows as Array<{ COLUMN_NAME: string }>).map(row => row.COLUMN_NAME)
+      );
 
-    for (const { column, sqlType } of REQUIRED_USER_COLUMNS) {
-      if (existingColumns.has(column)) continue;
-      console.warn(`[PadiHub] Schema drift detected: users.${column} is missing — adding it now.`);
-      // column/sqlType come only from the hardcoded list above (never user input),
-      // so building the DDL string here is safe and keeps the name in sync with
-      // the `existingColumns.has(column)` check above (no separate literal to drift).
-      await poolConnection.query(`ALTER TABLE \`users\` ADD COLUMN \`${column}\` ${sqlType}`);
-      console.log(`[PadiHub] ✓ Added missing column users.${column}.`);
+      for (const { column, sqlType } of requiredColumns) {
+        if (existingColumns.has(column)) continue;
+        console.warn(`[PadiHub] Schema drift detected: ${table}.${column} is missing — adding it now.`);
+        // column/sqlType come only from the hardcoded list above (never user input),
+        // so building the DDL string here is safe and keeps the name in sync with
+        // the `existingColumns.has(column)` check above (no separate literal to drift).
+        await poolConnection.query(`ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` ${sqlType}`);
+        console.log(`[PadiHub] ✓ Added missing column ${table}.${column}.`);
+      }
+    } catch (err) {
+      console.error(
+        `[PadiHub] Schema sync check failed for table ${table} — some requests may still return "Unknown column" errors until \`npm run db:push\` is run:`,
+        err instanceof Error ? err.message : err,
+      );
     }
-  } catch (err) {
-    console.error(
-      '[PadiHub] Schema sync check failed — some requests may still return "Unknown column" errors until `npm run db:push` is run:',
-      err instanceof Error ? err.message : err,
-    );
   }
 }

@@ -27,3 +27,25 @@ export const BCRYPT_ROUNDS      = 12;
 export const TRUST_SCORE_INITIAL = 50;
 export const TRUST_SCORE_MAX     = 100;
 export const TRUST_SCORE_MIN     = 0;
+
+/**
+ * Trust Score deltas — the full "calculation algorithm" for how a user's
+ * Trust Score (0-100) responds to payout/contribution success and defaults.
+ * Centralized here (instead of magic numbers at each call site) so the
+ * scoring rules are auditable in one place. See trustScoreService.ts for the
+ * increase/decrease mechanics and clamping to TRUST_SCORE_MIN/MAX.
+ */
+export const TRUST_SCORE_DELTA_CONTRIBUTION_PAID    = 2;  // a contribution was paid on time
+export const TRUST_SCORE_DELTA_CONTRIBUTION_MISSED  = -5; // a contribution default (missed payment)
+export const TRUST_SCORE_DELTA_CYCLE_COMPLETED      = 3;  // successfully received a rotation payout
+export const TRUST_SCORE_DELTA_MEMBER_SUSPENDED     = -10; // kicked out of a group after repeated defaults
+export const TRUST_SCORE_DELTA_IDENTITY_VERIFIED    = 50; // completed KYC/identity verification
+
+/**
+ * Group "initial conditions" defaults applied at group creation when the
+ * creator doesn't explicitly choose a value — see groupService.create().
+ */
+export const GROUP_DEFAULT_STRIKE_THRESHOLD     = 2; // missed contributions before a warning
+export const GROUP_DEFAULT_SUSPENSION_THRESHOLD = 3; // missed contributions before the member is kicked out
+export const GROUP_DEFAULT_VOTING_THRESHOLD     = 51; // % of votes required to pass a group decision
+

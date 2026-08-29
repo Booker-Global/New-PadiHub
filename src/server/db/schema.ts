@@ -29,6 +29,11 @@ export const users = mysqlTable('users', {
   // requires both to be non-null — see paymentEligibilityService.ts.
   payment_method_verified_at:  timestamp('payment_method_verified_at'),
   payout_verified_at:          timestamp('payout_verified_at'),
+  // Server-recorded timestamp of when the user ticked the payment
+  // terms & conditions checkbox (which discloses that Stripe/Flutterwave
+  // processing fees are added to contribution charges) while setting up a
+  // payment method — see paymentController.ts savePaymentMethod handlers.
+  payment_terms_accepted_at:   timestamp('payment_terms_accepted_at'),
   notification_preferences:    json('notification_preferences'),
   account_status:              mysqlEnum('account_status', ['pending_verification', 'active', 'suspended', 'deactivated']).notNull().default('pending_verification'),
   email_verified:              boolean('email_verified').notNull().default(false),
@@ -74,7 +79,12 @@ export const savingsGroups = mysqlTable('savings_groups', {
   country:                  varchar('country', { length: 2 }).notNull(),
   currency:                 varchar('currency', { length: 3 }).notNull(),
   contribution_amount:      decimal('contribution_amount', { precision: 12, scale: 2 }).notNull(),
-  contribution_frequency:   mysqlEnum('contribution_frequency', ['weekly', 'monthly']).notNull(),
+  contribution_frequency:   mysqlEnum('contribution_frequency', ['daily', 'weekly', 'monthly']).notNull(),
+  // Day the payout is collected/processed on. For 'weekly' this is a day of
+  // week (0=Sunday..6=Saturday); for 'monthly' a day of month (1-31, clamped
+  // to the last day of shorter months); ignored for 'daily'. Required at
+  // group-creation time for weekly/monthly groups — see groupController.ts.
+  payout_day:               int('payout_day'),
   maximum_members:          int('maximum_members').notNull().default(10),
   rotation_method:          mysqlEnum('rotation_method', ['manual', 'random']).notNull().default('manual'),
   current_rotation_position: int('current_rotation_position').notNull().default(1),
@@ -128,6 +138,9 @@ export const contributions = mysqlTable('contributions', {
   cycle_number:       int('cycle_number').notNull(),
   amount_due:         decimal('amount_due', { precision: 12, scale: 2 }).notNull(),
   amount_paid:        decimal('amount_paid', { precision: 12, scale: 2 }),
+  // Provider processing fee charged on top of amount_due (not deducted from
+  // the group pot) — see src/server/lib/paymentFees.ts. Null until charged.
+  fee_amount:         decimal('fee_amount', { precision: 12, scale: 2 }),
   due_date:           timestamp('due_date').notNull(),
   paid_date:          timestamp('paid_date'),
   payment_status:     mysqlEnum('payment_status', ['scheduled', 'due', 'paid', 'failed', 'missed']).notNull().default('scheduled'),

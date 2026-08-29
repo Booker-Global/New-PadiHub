@@ -6,6 +6,7 @@ import { AppError } from '../middleware/errorHandler.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { notificationService } from './notificationService.js';
 import { trustScoreService } from './trustScoreService.js';
+import { TRUST_SCORE_DELTA_CYCLE_COMPLETED } from '../lib/constants.js';
 import {
   sendUpcomingPayoutEmail,
   sendPayoutCompleteEmail,
@@ -116,7 +117,7 @@ export const rotationService = {
         title: 'Payout Completed',
         message: `Your payout for cycle ${current.cycle_number} has been completed.`,
       });
-      await trustScoreService.increase(current.recipient_id, 3, 'CYCLE_COMPLETED');
+      await trustScoreService.increase(current.recipient_id, TRUST_SCORE_DELTA_CYCLE_COMPLETED, 'CYCLE_COMPLETED');
 
       // Email payout complete
       const recipientRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, current.recipient_id)).limit(1);

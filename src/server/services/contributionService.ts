@@ -7,6 +7,7 @@ import { createAuditLog } from '../middleware/auditLogger.js';
 import { notificationService } from './notificationService.js';
 import { trustScoreService } from './trustScoreService.js';
 import { membershipService } from './membershipService.js';
+import { TRUST_SCORE_DELTA_CONTRIBUTION_PAID, TRUST_SCORE_DELTA_CONTRIBUTION_MISSED } from '../lib/constants.js';
 import {
   sendContributionSuccessEmail,
   sendContributionFailedEmail,
@@ -70,7 +71,7 @@ export const contributionService = {
       title: 'Contribution Recorded',
       message: `Your contribution for cycle ${c.cycle_number} has been recorded.`,
     });
-    await trustScoreService.increase(c.member_id, 2, 'CONTRIBUTION_PAID');
+    await trustScoreService.increase(c.member_id, TRUST_SCORE_DELTA_CONTRIBUTION_PAID, 'CONTRIBUTION_PAID');
 
     // Email — look up user email and group name
     const userRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, c.member_id)).limit(1);
@@ -134,7 +135,7 @@ export const contributionService = {
       title: 'Missed Contribution',
       message: `You missed your contribution for cycle ${c.cycle_number}. This affects your Trust Score.`,
     });
-    await trustScoreService.decrease(c.member_id, 5, 'CONTRIBUTION_MISSED');
+    await trustScoreService.decrease(c.member_id, TRUST_SCORE_DELTA_CONTRIBUTION_MISSED, 'CONTRIBUTION_MISSED');
 
     const userRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, c.member_id)).limit(1);
     const groupRow = await db.select({ name: schema.savingsGroups.name, currency: schema.savingsGroups.currency }).from(schema.savingsGroups).where(eq(schema.savingsGroups.id, c.group_id)).limit(1);

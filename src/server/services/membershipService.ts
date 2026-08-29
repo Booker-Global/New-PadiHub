@@ -8,6 +8,7 @@ import { notificationService } from './notificationService.js';
 import { trustScoreService } from './trustScoreService.js';
 import { groupService } from './groupService.js';
 import { assertPaymentSetupComplete } from './paymentEligibilityService.js';
+import { TRUST_SCORE_DELTA_MEMBER_SUSPENDED } from '../lib/constants.js';
 import {
   sendMemberRemovedEmail,
   sendInvitationAcceptedEmail,
@@ -150,7 +151,7 @@ export const membershipService = {
         .set({ status: 'suspended' })
         .where(eq(schema.memberships.id, membership.id));
 
-      await trustScoreService.decrease(userId, 10, 'MEMBER_SUSPENDED');
+      await trustScoreService.decrease(userId, TRUST_SCORE_DELTA_MEMBER_SUSPENDED, 'MEMBER_SUSPENDED');
       await createAuditLog({
         userId, action: 'MEMBER_SUSPENDED', entity: 'memberships',
         entityId: membership.id, ipAddress,

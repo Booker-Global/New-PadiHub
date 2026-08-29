@@ -3,14 +3,16 @@ import { z } from 'zod';
 import { groupService } from '../services/groupService.js';
 import { validate } from '../middleware/validate.js';
 import { qsOpt, pp, ip } from '../lib/reqHelpers.js';
+import { payoutDayBounds } from '../lib/payoutSchedule.js';
 
-const createSchema = z.object({
+const baseGroupSchema = z.object({
   name:                   z.string().min(2).max(200),
   description:            z.string().max(1000).optional(),
   country:                z.enum(['GB', 'NG']),
   currency:               z.enum(['GBP', 'NGN']),
   contribution_amount:    z.string().regex(/^\d+(\.\d{1,2})?$/),
-  contribution_frequency: z.enum(['weekly', 'monthly']),
+  contribution_frequency: z.enum(['daily', 'weekly', 'monthly']),
+  payout_day:             z.number().int().min(0).max(31).optional(),
   maximum_members:        z.number().int().min(2).max(50),
   rotation_method:        z.enum(['manual', 'random']),
   strike_threshold:       z.number().int().min(1).optional(),
@@ -19,7 +21,30 @@ const createSchema = z.object({
   allow_payout_swaps:     z.boolean().optional(),
 });
 
-const updateSchema = createSchema.partial().omit({
+function refinePayoutDay(data: { contribution_frequency: 'daily' | 'weekly' | 'monthly'; payout_day?: number }, ctx: z.RefinementCtx) {
+  const bounds = payoutDayBounds(data.contribution_frequency);
+  if (bounds) {
+    if (data.payout_day === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['payout_day'],
+        message: data.contribution_frequency === 'weekly'
+          ? 'payout_day is required for weekly groups (0=Sunday..6=Saturday).'
+          : 'payout_day is required for monthly groups (1-31).',
+      });
+    } else if (data.payout_day < bounds.min || data.payout_day > bounds.max) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['payout_day'],
+        message: `payout_day must be between ${bounds.min} and ${bounds.max} for ${data.contribution_frequency} groups.`,
+      });
+    }
+  }
+}
+
+const createSchema = baseGroupSchema.superRefine(refinePayoutDay);
+
+const updateSchema = baseGroupSchema.partial().omit({
   country: true, currency: true,
   contribution_amount: true, contribution_frequency: true,
 });

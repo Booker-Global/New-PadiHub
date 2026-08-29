@@ -6,7 +6,7 @@ import { AppError } from '../middleware/errorHandler.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { notificationService } from './notificationService.js';
 import { assertPaymentSetupComplete } from './paymentEligibilityService.js';
-import { INVITE_TTL } from '../lib/constants.js';
+import { INVITE_TTL, GROUP_DEFAULT_STRIKE_THRESHOLD, GROUP_DEFAULT_SUSPENSION_THRESHOLD, GROUP_DEFAULT_VOTING_THRESHOLD } from '../lib/constants.js';
 import {
   sendGroupInvitationEmail,
   sendGroupClosedEmail,
@@ -34,7 +34,8 @@ export const groupService = {
   async create(data: {
     name: string; description?: string; leader_id: string;
     country: string; currency: string;
-    contribution_amount: string; contribution_frequency: 'weekly' | 'monthly';
+    contribution_amount: string; contribution_frequency: 'daily' | 'weekly' | 'monthly';
+    payout_day?: number;
     maximum_members: number; rotation_method: 'manual' | 'random';
     strike_threshold?: number; suspension_threshold?: number;
     voting_threshold?: number; allow_payout_swaps?: boolean;
@@ -72,13 +73,14 @@ export const groupService = {
       currency:                 data.currency,
       contribution_amount:      data.contribution_amount,
       contribution_frequency:   data.contribution_frequency,
+      payout_day:               data.payout_day ?? null,
       maximum_members:          data.maximum_members,
       rotation_method:          data.rotation_method,
       current_rotation_position: 1,
       current_cycle:            1,
-      strike_threshold:         data.strike_threshold ?? 2,
-      suspension_threshold:     data.suspension_threshold ?? 3,
-      voting_threshold:         data.voting_threshold ?? 51,
+      strike_threshold:         data.strike_threshold ?? GROUP_DEFAULT_STRIKE_THRESHOLD,
+      suspension_threshold:     data.suspension_threshold ?? GROUP_DEFAULT_SUSPENSION_THRESHOLD,
+      voting_threshold:         data.voting_threshold ?? GROUP_DEFAULT_VOTING_THRESHOLD,
       allow_payout_swaps:       data.allow_payout_swaps ?? true,
       payment_provider:         payment_provider as 'stripe' | 'flutterwave',
       status:                   'active',
