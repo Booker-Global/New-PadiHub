@@ -41,8 +41,8 @@ const sections = [
         text: 'PadiHub does not hold, process, or transfer funds on behalf of members or communities. PadiHub does not provide financial advice, investment recommendations, or regulated financial services. All financial transactions between community members are conducted independently of PadiHub.',
       },
       {
-        subtitle: 'Trust Score™ & Community Karma™',
-        text: 'Trust Score™ and Community Karma™ are reputation metrics calculated from your activity on PadiHub. They are informational tools for community use and do not constitute credit scores, financial assessments, or regulated ratings.',
+        subtitle: 'Trust Score™',
+        text: 'Trust Score™ is a reputation metric calculated from your activity on PadiHub. It is an informational tool for community use and does not constitute a credit score, financial assessment, or regulated rating.',
       },
     ],
   },
@@ -82,7 +82,7 @@ const sections = [
       },
       {
         subtitle: 'Honest Representation',
-        text: 'You must represent yourself honestly on PadiHub. Creating fake accounts, misrepresenting your identity, or manipulating your Trust Score™ or Community Karma™ through dishonest means is prohibited.',
+        text: 'You must represent yourself honestly on PadiHub. Creating fake accounts, misrepresenting your identity, or manipulating your Trust Score™ through dishonest means is prohibited.',
       },
       {
         subtitle: 'Community Governance',
@@ -102,7 +102,7 @@ const sections = [
     content: [
       {
         subtitle: 'PadiHub IP',
-        text: 'PadiHub™, Trust Score™, Community Karma™, PadiHub Passport™, and Community DNA™ are trademarks of PadiHub. The platform, its design, and all original content are protected by copyright and other intellectual property laws.',
+        text: 'PadiHub™, Trust Score™, PadiHub Passport™, and Community DNA™ are trademarks of PadiHub. The platform, its design, and all original content are protected by copyright and other intellectual property laws.',
       },
       {
         subtitle: 'Your Content',

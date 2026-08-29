@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { MotionDiv } from '@/lib/motion-safe';
 import { Link } from 'react-router-dom';
 import {
-  Search, Shield, Star, Crown, AlertTriangle,
+  Search, Shield, Crown, AlertTriangle,
   Clock, UserPlus, Mail, MoreHorizontal,
   TrendingUp, TrendingDown, Award, ArrowLeft
 } from 'lucide-react';
@@ -15,16 +15,16 @@ const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.06 } }
 const communities = ['All Communities', 'Lagos Savers Circle', 'Family First Network', 'Diaspora Builders'];
 
 const members = [
-  { name: 'Amara Okafor',   avatar: 'A', color: '#2EAF6F', trust: 920, karma: 2340, status: 'active',  role: 'member',  contributions: 100, joined: 'Jan 2025', community: 'Lagos Savers Circle',  trend: 'up',   lastActive: '2h ago' },
-  { name: 'Tunde Bello',    avatar: 'T', color: '#F59E0B', trust: 880, karma: 1890, status: 'active',  role: 'leader',  contributions: 95,  joined: 'Feb 2025', community: 'Lagos Savers Circle',  trend: 'up',   lastActive: '5h ago' },
-  { name: 'Chidi Nwosu',    avatar: 'C', color: '#EF4444', trust: 760, karma: 1240, status: 'warning', role: 'member',  contributions: 78,  joined: 'Mar 2025', community: 'Family First Network', trend: 'down', lastActive: '3d ago' },
-  { name: 'Fatima Aliyu',   avatar: 'F', color: '#8B5CF6', trust: 910, karma: 2100, status: 'active',  role: 'member',  contributions: 100, joined: 'Jan 2025', community: 'Family First Network', trend: 'up',   lastActive: '1h ago' },
-  { name: 'Yemi Oladele',   avatar: 'Y', color: '#2eafaf', trust: 840, karma: 1650, status: 'active',  role: 'member',  contributions: 92,  joined: 'Apr 2025', community: 'Diaspora Builders',    trend: 'up',   lastActive: '4h ago' },
-  { name: 'Ngozi Eze',      avatar: 'N', color: '#2EAF6F', trust: 870, karma: 1780, status: 'active',  role: 'member',  contributions: 97,  joined: 'Feb 2025', community: 'Diaspora Builders',    trend: 'up',   lastActive: '1d ago' },
-  { name: 'Emeka Obi',      avatar: 'E', color: '#F59E0B', trust: 720, karma: 980,  status: 'warning', role: 'member',  contributions: 65,  joined: 'May 2025', community: 'Lagos Savers Circle',  trend: 'down', lastActive: '5d ago' },
-  { name: 'Kemi Adeyemi',   avatar: 'K', color: '#8B5CF6', trust: 950, karma: 2890, status: 'active',  role: 'leader',  contributions: 100, joined: 'Jan 2025', community: 'Diaspora Builders',    trend: 'up',   lastActive: '30m ago' },
-  { name: 'Bola Ogundimu',  avatar: 'B', color: '#2eafaf', trust: 800, karma: 1420, status: 'active',  role: 'member',  contributions: 88,  joined: 'Mar 2025', community: 'Family First Network', trend: 'up',   lastActive: '2d ago' },
-  { name: 'Seun Adesanya',  avatar: 'S', color: '#EF4444', trust: 680, karma: 820,  status: 'at-risk', role: 'member',  contributions: 55,  joined: 'Jun 2025', community: 'Family First Network', trend: 'down', lastActive: '7d ago' },
+  { name: 'Amara Okafor',   avatar: 'A', color: '#2EAF6F', trust: 920, status: 'active',  role: 'member',  contributions: 100, joined: 'Jan 2025', community: 'Lagos Savers Circle',  trend: 'up',   lastActive: '2h ago' },
+  { name: 'Tunde Bello',    avatar: 'T', color: '#F59E0B', trust: 880, status: 'active',  role: 'leader',  contributions: 95,  joined: 'Feb 2025', community: 'Lagos Savers Circle',  trend: 'up',   lastActive: '5h ago' },
+  { name: 'Chidi Nwosu',    avatar: 'C', color: '#EF4444', trust: 760, status: 'warning', role: 'member',  contributions: 78,  joined: 'Mar 2025', community: 'Family First Network', trend: 'down', lastActive: '3d ago' },
+  { name: 'Fatima Aliyu',   avatar: 'F', color: '#8B5CF6', trust: 910, status: 'active',  role: 'member',  contributions: 100, joined: 'Jan 2025', community: 'Family First Network', trend: 'up',   lastActive: '1h ago' },
+  { name: 'Yemi Oladele',   avatar: 'Y', color: '#2eafaf', trust: 840, status: 'active',  role: 'member',  contributions: 92,  joined: 'Apr 2025', community: 'Diaspora Builders',    trend: 'up',   lastActive: '4h ago' },
+  { name: 'Ngozi Eze',      avatar: 'N', color: '#2EAF6F', trust: 870, status: 'active',  role: 'member',  contributions: 97,  joined: 'Feb 2025', community: 'Diaspora Builders',    trend: 'up',   lastActive: '1d ago' },
+  { name: 'Emeka Obi',      avatar: 'E', color: '#F59E0B', trust: 720,  status: 'warning', role: 'member',  contributions: 65,  joined: 'May 2025', community: 'Lagos Savers Circle',  trend: 'down', lastActive: '5d ago' },
+  { name: 'Kemi Adeyemi',   avatar: 'K', color: '#8B5CF6', trust: 950, status: 'active',  role: 'leader',  contributions: 100, joined: 'Jan 2025', community: 'Diaspora Builders',    trend: 'up',   lastActive: '30m ago' },
+  { name: 'Bola Ogundimu',  avatar: 'B', color: '#2eafaf', trust: 800, status: 'active',  role: 'member',  contributions: 88,  joined: 'Mar 2025', community: 'Family First Network', trend: 'up',   lastActive: '2d ago' },
+  { name: 'Seun Adesanya',  avatar: 'S', color: '#EF4444', trust: 680,  status: 'at-risk', role: 'member',  contributions: 55,  joined: 'Jun 2025', community: 'Family First Network', trend: 'down', lastActive: '7d ago' },
 ];
 
 const joinRequests = [
@@ -187,13 +187,6 @@ export default function LeaderMembersPage() {
                       <p className="text-sm font-extrabold text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>{m.trust}</p>
                     </div>
                     <p className="text-xs text-gray-400">Trust</p>
-                  </div>
-                  <div className="text-center">
-                    <div className="flex items-center gap-1">
-                      <Star size={11} style={{ color: '#F59E0B' }} />
-                      <p className="text-sm font-extrabold text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>{m.karma.toLocaleString()}</p>
-                    </div>
-                    <p className="text-xs text-gray-400">Karma</p>
                   </div>
                   <div className="text-center">
                     <div className="flex items-center gap-1">

@@ -1,11 +1,11 @@
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { Link } from 'react-router-dom';
 import {
-  Shield, Award, Globe, Users, TrendingUp, Zap, Bell, BarChart2,
+  Shield, Globe, Users, TrendingUp, Zap, Bell, BarChart2,
   ArrowRight, Star, Heart
 } from 'lucide-react';
 
-const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/membership#webpage\",\"name\":\"Become a PadiHub Member — Join Trusted Communities\",\"url\":\"https://padihub.com/membership\",\"description\":\"Join PadiHub and access trusted communities, build your reputation with Trust Score™, earn Community Karma™ and participate in transparent savings ecosystems.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"}}";
+const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/membership#webpage\",\"name\":\"Become a PadiHub Member — Join Trusted Communities\",\"url\":\"https://padihub.com/membership\",\"description\":\"Join PadiHub and access trusted communities, build your reputation with Trust Score™ and participate in transparent savings ecosystems.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"}}";
 
 
 const benefits = [
@@ -13,7 +13,6 @@ const benefits = [
   { icon: Globe,     title: 'Community Marketplace', desc: 'Discover and join verified communities matched to your goals.',               color: '#2eafaf' },
   { icon: TrendingUp,title: 'Savings Groups',        desc: 'Create and participate in structured savings groups with full transparency.',  color: '#8B5CF6' },
   { icon: Shield,    title: 'Trust Score™',          desc: 'Build a portable reputation that grows with every positive action.',          color: '#2EAF6F' },
-  { icon: Award,     title: 'Community Karma™',      desc: 'Earn recognition and rewards for participating and contributing.',            color: '#F59E0B' },
   { icon: Globe,     title: 'PadiHub Passport™',     desc: 'Your portable digital community identity — share it anywhere.',              color: '#2eafaf' },
   { icon: Zap,       title: 'Community DNA™',        desc: 'Deep insights into your community\'s health, values and participation.',      color: '#EF4444' },
   { icon: BarChart2, title: 'Analytics',             desc: 'Track your progress, contributions and community impact over time.',          color: '#8B5CF6' },
@@ -36,7 +35,6 @@ const testimonials = [
     community: 'Lagos Savers Circle',
     quote: 'PadiHub transformed how our community saves together. The Trust Score™ keeps everyone accountable and the transparency is incredible.',
     tier: 'Trusted Member',
-    karma: 'Community Builder',
     initial: 'A',
     color: '#2EAF6F',
   },
@@ -45,7 +43,6 @@ const testimonials = [
     community: 'UK Homeowners Hub',
     quote: 'I\'ve tried other platforms but nothing comes close to PadiHub. The Passport™ feature alone is worth the membership.',
     tier: 'Community Champion',
-    karma: 'Rising Star',
     initial: 'J',
     color: '#2eafaf',
   },
@@ -54,7 +51,6 @@ const testimonials = [
     community: 'Diaspora Builders',
     quote: 'Being able to connect with my community back home while building trust here in the UK is exactly what I needed.',
     tier: 'Verified Member',
-    karma: 'Active Contributor',
     initial: 'F',
     color: '#F59E0B',
   },
@@ -65,7 +61,7 @@ export default function MembershipPage() {
     <>
       <Helmet>
         <title>Become a PadiHub Member — Join Trusted Communities</title>
-        <meta name="description" content="Join PadiHub and access trusted communities, build your reputation with Trust Score™, earn Community Karma™ and participate in transparent savings ecosystems." />
+        <meta name="description" content="Join PadiHub and access trusted communities, build your reputation with Trust Score™ and participate in transparent savings ecosystems." />
         <link rel="canonical" href="https://padihub.com/membership" />
         <meta property="og:title" content="Become a PadiHub Member" />
         <meta property="og:description" content="Join trusted communities, build your reputation and participate in transparent savings ecosystems." />
@@ -165,7 +161,6 @@ export default function MembershipPage() {
                 <p style={{ fontSize: 14, color: '#4B5563', lineHeight: 1.7, fontStyle: 'italic', flex: 1 }}>"{t.quote}"</p>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <span style={{ fontSize: 12, fontWeight: 700, padding: '4px 10px', borderRadius: 999, background: 'rgba(46,175,111,0.1)', color: '#2EAF6F' }}>🛡 {t.tier}</span>
-                  <span style={{ fontSize: 12, fontWeight: 700, padding: '4px 10px', borderRadius: 999, background: 'rgba(245,158,11,0.1)', color: '#F59E0B' }}>⭐ {t.karma}</span>
                 </div>
               </div>
             ))}

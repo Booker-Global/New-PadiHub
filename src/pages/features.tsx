@@ -1,14 +1,13 @@
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { Link } from 'react-router-dom';
-import { Shield, Award, Globe, Users, Sparkles, Vote, Bell, User, PiggyBank, ArrowRight } from 'lucide-react';
+import { Shield, Globe, Users, Sparkles, Vote, Bell, User, PiggyBank, ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
-const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/features#webpage\",\"name\":\"Features — PadiHub Community Savings Platform\",\"url\":\"https://padihub.com/features\",\"description\":\"Explore all PadiHub features — Trust Score™, Community Karma™, Passport™, Savings Groups, Community DNA™ and more.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"}}";
+const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/features#webpage\",\"name\":\"Features — PadiHub Community Savings Platform\",\"url\":\"https://padihub.com/features\",\"description\":\"Explore all PadiHub features — Trust Score™, Passport™, Savings Groups, Community DNA™ and more.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"}}";
 
 
 const features = [
   { icon: Shield, title: 'Trust Score™', desc: 'A living reputation system with 6 tiers — from Explorer to Community Champion. Every contribution builds your score.', color: '#2EAF6F', tag: 'Identity' },
-  { icon: Award, title: 'Community Karma™', desc: '7 levels of recognition. Every positive action earns Karma points, badges and community recognition.', color: '#F59E0B', tag: 'Recognition' },
   { icon: Globe, title: 'PadiHub Passport™', desc: 'Your premium digital identity. Carry your Trust Score™, achievements and community history everywhere.', color: '#2eafaf', tag: 'Identity' },
   { icon: PiggyBank, title: 'Savings Groups', desc: 'Create or join rotating savings groups. Track contributions, celebrate milestones and hold each other accountable.', color: '#8B5CF6', tag: 'Savings' },
   { icon: Sparkles, title: 'Community DNA™', desc: 'Living community intelligence. Understand your community\'s health, participation and growth journey.', color: '#EF4444', tag: 'Insights' },
@@ -23,10 +22,10 @@ export default function FeaturesPage() {
     <>
       <Helmet>
         <title>Features — PadiHub Community Savings Platform</title>
-        <meta name="description" content="Explore all PadiHub features — Trust Score™, Community Karma™, Passport™, Savings Groups, Community DNA™ and more." />
+        <meta name="description" content="Explore all PadiHub features — Trust Score™, Passport™, Savings Groups, Community DNA™ and more." />
         <link rel="canonical" href="https://padihub.com/features" />
               <meta property="og:title" content="Features — PadiHub Community Savings Platform" />
-        <meta property="og:description" content="Explore all PadiHub features — Trust Score™, Community Karma™, Passport™, Savings Groups, Community DNA™ and more." />
+        <meta property="og:description" content="Explore all PadiHub features — Trust Score™, Passport™, Savings Groups, Community DNA™ and more." />
         <meta property="og:type" content="website" />
         <meta property="og:image" content="https://padihub.com/airo-assets/images/og/default" />
         <meta name="twitter:card" content="summary_large_image" />

@@ -216,7 +216,7 @@ export default function LeaveSavingsGroupPage() {
           </div>
           <h2 className="text-xl font-extrabold text-gray-900 mb-2" style={{ fontFamily: 'Nunito, sans-serif' }}>You&apos;ve left the group</h2>
           <p className="text-gray-500 mb-2">Your contribution history remains part of your <strong>PadiHub Passport™</strong>.</p>
-          <p className="text-sm text-gray-400 mb-8">Your Trust Score™ and Community Karma™ are preserved.</p>
+          <p className="text-sm text-gray-400 mb-8">Your Trust Score™ is preserved.</p>
           <Link to="/savings-groups" className="px-6 py-3 rounded-2xl font-bold text-white inline-block hover:opacity-90 transition-all" style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}>
             Back to savings groups
           </Link>
@@ -294,7 +294,6 @@ export default function LeaveSavingsGroupPage() {
               {[
                 { text: 'Your full contribution history is preserved in your Passport™', icon: Shield, color: '#2EAF6F' },
                 { text: 'Your Trust Score™ reflects all contributions made', icon: Shield, color: '#2EAF6F' },
-                { text: 'Your Community Karma™ earned remains on your profile', icon: CheckCircle, color: '#F59E0B' },
               ].map(item => (
                 <div key={item.text} className="flex items-start gap-3 p-3 rounded-2xl" style={{ background: 'rgba(46,175,111,0.05)' }}>
                   <item.icon size={15} style={{ color: item.color, flexShrink: 0, marginTop: 1 }} />

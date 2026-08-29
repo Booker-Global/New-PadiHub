@@ -53,7 +53,7 @@ const plans = [
 
 const features = [
   'Unlimited Communities & Savings Groups',
-  'Trust Score™ & Community Karma™',
+  'Trust Score™',
   'PadiHub Passport™ & Community DNA™',
   'Analytics, Governance & Voting',
   'Priority Support & AI Onboarding',

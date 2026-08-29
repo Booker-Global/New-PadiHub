@@ -43,7 +43,7 @@ export default function RootLayout({ children }: RootLayoutProps) {
       <MotionReadyProvider>
         <Helmet>
           <title>PadiHub — Save Together. Grow Together. Belong.</title>
-          <meta name="description" content="PadiHub is the world's first Community Operating System for savings. Build trust, earn Community Karma™ and reach your goals together." />
+          <meta name="description" content="PadiHub is the world's first Community Operating System for savings. Build trust, save together and reach your goals." />
         </Helmet>
         <ScrollRestoration />
         <Header />

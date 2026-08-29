@@ -213,7 +213,7 @@ function HeroIllustration() {
   const features = [
     { icon: Shield,     label: 'Trust Score™',        sub: 'Built on payment history',   color: '#2EAF6F' },
     { icon: Users,      label: 'Savings Groups',       sub: 'Ajo, Esusu & more',          color: '#F59E0B' },
-    { icon: CheckCircle,label: 'Secure Payouts',       sub: 'Stripe & Flutterwave',       color: '#2eafaf' },
+    { icon: CheckCircle,label: 'Secure Payouts',       sub: 'Secure processing',          color: '#2eafaf' },
     { icon: TrendingUp, label: 'Full Transparency',    sub: 'Every contribution tracked', color: '#8B5CF6' },
   ];
   return (
@@ -281,7 +281,7 @@ export default function HomePage() {
     <>
       <Helmet>
         <title>PadiHub — Save Together. Grow Together. Belong.</title>
-        <meta name="description" content="PadiHub is a Community Operating System for savings. Build trust, join savings groups, earn Community Karma™ and reach your goals together." />
+        <meta name="description" content="PadiHub is a Community Operating System for savings. Build trust, join savings groups and reach your goals together." />
         <link rel="canonical" href="https://padihub.com/" />
         <meta property="og:title" content="PadiHub — Save Together. Grow Together. Belong." />
         <meta property="og:description" content="The world's most trusted community savings platform. Join 10,000+ members saving smarter together." />
@@ -531,7 +531,7 @@ export default function HomePage() {
               </div>
               <h3 style={{ color: '#111827', fontWeight: 700, fontSize: 18, marginBottom: 8, fontFamily: 'Nunito, sans-serif' }}>Secure Payments</h3>
               <p style={{ color: '#6B7280', fontSize: 14, lineHeight: 1.6 }}>
-                UK members pay via Stripe. Nigerian members pay via Flutterwave. Payouts are processed automatically when all contributions are received.
+                Members pay through secure, region-appropriate payment flows. Payouts are processed automatically when all contributions are received.
               </p>
             </div>
 
@@ -619,7 +619,7 @@ export default function HomePage() {
                 </div>
                 <p style={{ fontSize: 13, color: '#6B7280', marginBottom: 24 }}>or <strong>{plan.annual}/year</strong> — <span style={{ color: plan.color }}>{plan.save}</span></p>
                 <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 2rem', display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {['Unlimited Savings Groups', 'Trust Score™ System', 'Secure Payments (Stripe / Flutterwave)', 'Rotation Tracking', 'Payment Reminders', 'Group Management Tools'].map(f => (
+                  {['Unlimited Savings Groups', 'Trust Score™ System', 'Secure payment processing', 'Rotation Tracking', 'Payment Reminders', 'Group Management Tools'].map(f => (
                     <li key={f} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, color: '#374151' }}>
                       <CheckCircle size={15} style={{ color: plan.color, flexShrink: 0 }} /> {f}
                     </li>

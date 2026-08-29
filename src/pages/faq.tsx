@@ -6,17 +6,17 @@ import { Link } from 'react-router-dom';
 import { ChevronDown, ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
-const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/faq#webpage\",\"name\":\"FAQ — PadiHub Frequently Asked Questions\",\"url\":\"https://padihub.com/faq\",\"description\":\"Answers to the most common questions about PadiHub — Trust Score™, pricing, savings groups, Community Karma™ and more.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"}}";
+const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/faq#webpage\",\"name\":\"FAQ — PadiHub Frequently Asked Questions\",\"url\":\"https://padihub.com/faq\",\"description\":\"Answers to the most common questions about PadiHub — Trust Score™, pricing, savings groups and more.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"}}";
 
 const faqs = [
   { q: 'How do I join a savings group?', a: 'You can join a group by accepting an invitation link from a group leader, or by browsing available groups after you subscribe. Once you request to join, the group leader will approve your membership.' },
   { q: 'How do I create a savings group?', a: 'After subscribing, go to My Groups and click "Create Group". Our step-by-step wizard will guide you through setting up your group name, contribution amount, group size, rotation rules and inviting members.' },
-  { q: 'How do payments work?', a: 'Each month (or week, depending on your group\'s schedule), every member contributes the agreed amount. PadiHub uses Stripe for UK members and Flutterwave for Nigerian members to process payments securely.' },
+  { q: 'How do payments work?', a: 'Each month (or week, depending on your group\'s schedule), every member contributes the agreed amount. PadiHub uses secure, region-appropriate payment processing for contributions.' },
   { q: 'What happens if I miss a payment?', a: 'If you miss a payment, your Trust Score will be affected. Your group leader sets the grace period (24–72 hours) and the maximum number of missed payments before a member is removed. You\'ll receive reminders before your payment is due.' },
   { q: 'What is Trust Score™?', a: 'Trust Score™ is your reputation on PadiHub. It\'s based on your payment history — successful on-time payments increase your score, while late or missed payments reduce it. A higher Trust Score makes it easier to join new groups.' },
   { q: 'How much does PadiHub cost?', a: 'PadiHub costs £4.99/month (or £49.99/year) in the UK, and ₦3,500/month (or ₦35,000/year) in Nigeria. All plans include a 30-day free trial and you can cancel anytime.' },
   { q: 'Can I cancel my subscription?', a: 'Yes, you can cancel anytime from your Settings page. There are no cancellation fees. Your access continues until the end of your current billing period.' },
-  { q: 'Is PadiHub secure?', a: 'Yes. PadiHub uses Stripe and Flutterwave — both industry-leading payment processors — to handle all transactions. We never store your card details. All data is encrypted in transit and at rest.' },
+  { q: 'Is PadiHub secure?', a: 'Yes. PadiHub uses secure payment processing to handle all transactions. We never store your card details. All data is encrypted in transit and at rest.' },
   { q: 'Is PadiHub a bank?', a: 'No. PadiHub is not a bank, wallet or financial institution. We provide the platform and tools that help groups of people save together. We do not hold or manage your funds.' },
   { q: 'Is PadiHub available outside the UK and Nigeria?', a: 'Currently PadiHub is optimised for UK and Nigerian members. We\'re actively expanding to other markets. If you\'re outside these regions, you can still join — you\'ll see both pricing options.' },
 ];
@@ -28,10 +28,10 @@ export default function FAQPage() {
     <>
       <Helmet>
         <title>FAQ — PadiHub Frequently Asked Questions</title>
-        <meta name="description" content="Answers to the most common questions about PadiHub — Trust Score™, pricing, savings groups, Community Karma™ and more." />
+        <meta name="description" content="Answers to the most common questions about PadiHub — Trust Score™, pricing, savings groups and more." />
         <link rel="canonical" href="https://padihub.com/faq" />
               <meta property="og:title" content="FAQ — PadiHub Frequently Asked Questions" />
-        <meta property="og:description" content="Answers to the most common questions about PadiHub — Trust Score™, pricing, savings groups, Community Karma™ and more." />
+        <meta property="og:description" content="Answers to the most common questions about PadiHub — Trust Score™, pricing, savings groups and more." />
         <meta property="og:type" content="website" />
         <meta property="og:image" content="https://padihub.com/airo-assets/images/og/default" />
         <meta name="twitter:card" content="summary_large_image" />

@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { ReactNode } from 'react';
-import { Shield, Users, Award, TrendingUp } from 'lucide-react';
+import { Shield, Users, TrendingUp } from 'lucide-react';
 
 interface AuthLayoutProps {
   children: ReactNode;
@@ -13,7 +13,6 @@ interface AuthLayoutProps {
 const pillars = [
   { icon: Shield, label: 'Trust Score™', desc: 'Build your community reputation' },
   { icon: Users, label: 'Savings Groups', desc: 'Save together, grow together' },
-  { icon: Award, label: 'Community Karma™', desc: 'Earn recognition for every action' },
   { icon: TrendingUp, label: 'Progress Tracking', desc: 'Celebrate every milestone' },
 ];
 

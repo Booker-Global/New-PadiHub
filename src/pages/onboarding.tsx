@@ -4,7 +4,7 @@ import { Helmet } from '@dr.pogodin/react-helmet';
 import { AnimatePresence } from 'motion/react';
 import { MotionDiv } from '@/lib/motion-safe';
 import {
-  ArrowRight, ArrowLeft, CheckCircle, Globe, Shield, Award,
+  ArrowRight, ArrowLeft, CheckCircle, Globe, Shield,
   Camera, Bell, Smartphone, Mail, Check, Star, Zap, Users
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -50,7 +50,7 @@ const plans = {
       period: '/month',
       saving: null,
       recommended: false,
-      features: ['All communities', 'Marketplace access', 'Trust Score™', 'Community Karma™', 'Passport™', 'Analytics'],
+      features: ['All communities', 'Marketplace access', 'Trust Score™', 'Passport™', 'Analytics'],
     },
     {
       key: 'UK_ANNUAL',
@@ -59,7 +59,7 @@ const plans = {
       period: '/year',
       saving: 'Save £9.89 (17%)',
       recommended: true,
-      features: ['All communities', 'Marketplace access', 'Trust Score™', 'Community Karma™', 'Passport™', 'Analytics'],
+      features: ['All communities', 'Marketplace access', 'Trust Score™', 'Passport™', 'Analytics'],
     },
   ],
   NG: [
@@ -70,7 +70,7 @@ const plans = {
       period: '/month',
       saving: null,
       recommended: false,
-      features: ['All communities', 'Marketplace access', 'Trust Score™', 'Community Karma™', 'Passport™', 'Analytics'],
+      features: ['All communities', 'Marketplace access', 'Trust Score™', 'Passport™', 'Analytics'],
     },
     {
       key: 'NG_ANNUAL',
@@ -79,7 +79,7 @@ const plans = {
       period: '/year',
       saving: 'Save ₦7,000 (17%)',
       recommended: true,
-      features: ['All communities', 'Marketplace access', 'Trust Score™', 'Community Karma™', 'Passport™', 'Analytics'],
+      features: ['All communities', 'Marketplace access', 'Trust Score™', 'Passport™', 'Analytics'],
     },
   ],
 };
@@ -139,7 +139,6 @@ function OnboardingShell({ children, step, totalSteps }: { children: React.React
           <div className="flex flex-col gap-6 mb-12">
             {[
               { icon: Shield, label: 'Trust Score™', desc: 'Build your community reputation', color: '#2EAF6F' },
-              { icon: Award,  label: 'Community Karma™', desc: 'Earn recognition for positive participation', color: '#F59E0B' },
               { icon: Globe,  label: 'PadiHub Passport™', desc: 'Your portable digital community identity', color: '#2eafaf' },
               { icon: Users,  label: 'Savings Groups', desc: 'Save together, grow together', color: '#8B5CF6' },
             ].map(f => (
@@ -271,11 +270,10 @@ export default function OnboardingPage() {
 
                 <div className="grid grid-cols-2 gap-3 mb-8">
                   {[
-                    { icon: Shield, title: 'Trust Score™',    desc: 'Build your reputation',       color: '#2EAF6F' },
-                    { icon: Award,  title: 'Karma™',          desc: 'Earn recognition',             color: '#F59E0B' },
-                    { icon: Globe,  title: 'Passport™',       desc: 'Your digital identity',        color: '#2eafaf' },
-                    { icon: Zap,    title: 'Savings Groups',  desc: 'Save together',                color: '#8B5CF6' },
-                  ].map(f => (
+                     { icon: Shield, title: 'Trust Score™',    desc: 'Build your reputation',       color: '#2EAF6F' },
+                     { icon: Globe,  title: 'Passport™',       desc: 'Your digital identity',        color: '#2eafaf' },
+                     { icon: Zap,    title: 'Savings Groups',  desc: 'Save together',                color: '#8B5CF6' },
+                   ].map(f => (
                     <div key={f.title} className="rounded-2xl p-4 text-left" style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
                       <div className="w-9 h-9 rounded-xl flex items-center justify-center mb-2" style={{ background: `${f.color}15` }}>
                         <f.icon size={17} style={{ color: f.color }} />
@@ -634,11 +632,10 @@ export default function OnboardingPage() {
                 {/* Preview cards */}
                 <div className="grid grid-cols-2 gap-3 mb-8">
                   {[
-                    { icon: Shield, label: 'Trust Score™',    value: '0 / 1000',  color: '#2EAF6F', desc: 'Start building' },
-                    { icon: Award,  label: 'Karma™',          value: '0 pts',     color: '#F59E0B', desc: 'Earn your first' },
-                    { icon: Globe,  label: 'Passport™',       value: 'Active',    color: '#2eafaf', desc: 'Share it' },
-                    { icon: Star,   label: 'Communities',     value: '0 joined',  color: '#8B5CF6', desc: 'Explore now' },
-                  ].map(c => (
+                     { icon: Shield, label: 'Trust Score™',    value: '0 / 1000',  color: '#2EAF6F', desc: 'Start building' },
+                     { icon: Globe,  label: 'Passport™',       value: 'Active',    color: '#2eafaf', desc: 'Share it' },
+                     { icon: Star,   label: 'Communities',     value: '0 joined',  color: '#8B5CF6', desc: 'Explore now' },
+                   ].map(c => (
                     <div key={c.label} className="rounded-2xl p-4 text-left" style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
                       <div className="w-8 h-8 rounded-xl flex items-center justify-center mb-2" style={{ background: `${c.color}15` }}>
                         <c.icon size={15} style={{ color: c.color }} />

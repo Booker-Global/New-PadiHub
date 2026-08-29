@@ -120,7 +120,7 @@ export default function ConnectPayoutPage() {
         setActionError(
           profile?.country === 'NG'
             ? 'Your payout account has not been verified yet. Please check your account details and try again.'
-            : 'Stripe has not finished verifying your payout account yet — this can take a few minutes after onboarding. Try verifying again shortly.',
+            : 'Your payout account is still being verified — this can take a few minutes after onboarding. Try verifying again shortly.',
         );
       }
     } catch (verifyError) {
@@ -132,11 +132,11 @@ export default function ConnectPayoutPage() {
 
   useEffect(() => {
     if (searchParams.get('stripe_connected') === '1') {
-      setActionNotice('Your Stripe payout account is connected. Verifying with Stripe…');
+      setActionNotice('Your payout account is connected. Verifying now…');
       setActionError('');
       void handleVerify();
     } else if (searchParams.get('stripe_refresh') === '1') {
-      setActionError('Stripe onboarding was not completed. Please try connecting again.');
+      setActionError('Payout onboarding was not completed. Please try connecting again.');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
@@ -181,14 +181,14 @@ export default function ConnectPayoutPage() {
       }
 
       if (profile?.country === 'NG') {
-        setActionNotice('Your Flutterwave payout account is connected. You can now receive payouts.');
+        setActionNotice('Your payout account is connected. You can now receive payouts.');
         await loadProfile();
         return;
       }
 
       const onboardingUrl = json?.data?.onboardingUrl;
       if (!onboardingUrl) {
-        throw new Error('Stripe did not return an onboarding link.');
+        throw new Error('The payout service did not return an onboarding link.');
       }
       window.location.assign(onboardingUrl);
     } catch (connectError) {
@@ -259,7 +259,7 @@ export default function ConnectPayoutPage() {
                 <div className="flex items-center justify-between gap-3 mb-4">
                   <div>
                     <p className="text-xs text-gray-500 mb-1">Payout provider</p>
-                    <p className="font-bold text-gray-900">{profile?.country === 'NG' ? 'Flutterwave (NG)' : 'Stripe Connect (GB)'}</p>
+                    <p className="font-bold text-gray-900">{profile?.country === 'NG' ? 'Payout account (Nigeria)' : 'Payout account (UK)'}</p>
                   </div>
                   <span
                     className="text-xs font-bold px-3 py-1 rounded-full"
@@ -285,7 +285,7 @@ export default function ConnectPayoutPage() {
                       <AlertTriangle size={18} style={{ color: '#F59E0B', flexShrink: 0 }} />
                       <p className="text-sm text-gray-700">
                         A payout destination is on file but hasn&apos;t been verified yet
-                        {profile?.country === 'NG' ? '.' : ' — Stripe may still be checking your details.'}
+                        {profile?.country === 'NG' ? '.' : ' — verification may still be in progress.'}
                         {' '}You need a verified payout destination before you can join a group.
                       </p>
                     </div>
@@ -360,7 +360,7 @@ export default function ConnectPayoutPage() {
                     ) : (
                       <div className="space-y-4">
                         <div className="rounded-2xl p-3 bg-white text-sm text-gray-600" style={{ border: '1px solid #E5E7EB' }}>
-                          Stripe will open a secure onboarding flow to verify your identity and bank details for payouts.
+                          A secure onboarding flow will verify your identity and bank details for payouts.
                         </div>
                         <button
                           onClick={() => void handleConnect()}
@@ -368,7 +368,7 @@ export default function ConnectPayoutPage() {
                           className="w-full py-3 rounded-2xl font-bold text-white inline-flex items-center justify-center gap-2 transition-all disabled:cursor-not-allowed disabled:opacity-60"
                           style={{ background: 'linear-gradient(135deg, #2eafaf, #1f8f8f)' }}
                         >
-                          {connectLoading ? 'Opening onboarding…' : 'Connect with Stripe'}
+                          {connectLoading ? 'Opening onboarding…' : 'Connect payout account'}
                           {!connectLoading && <ExternalLink size={16} />}
                         </button>
                       </div>

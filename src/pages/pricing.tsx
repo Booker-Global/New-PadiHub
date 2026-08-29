@@ -9,7 +9,7 @@ const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@i
 const features = [
   'Unlimited Savings Groups',
   'Trust Score™',
-  'Secure Payments (Stripe / Flutterwave)',
+  'Secure payment processing',
   'Rotation Tracking',
   'Payment Reminders',
   'Group Management Tools',

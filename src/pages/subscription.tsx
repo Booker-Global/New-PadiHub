@@ -58,7 +58,7 @@ export default function SubscriptionPage() {
           <MotionDiv variants={fadeUp} className="rounded-3xl p-6 bg-white mb-6" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
             <h3 className="font-extrabold text-gray-900 mb-4" style={{ fontFamily: 'Nunito, sans-serif' }}>What's included</h3>
             <div className="grid grid-cols-2 gap-2">
-              {['Full Community Access', 'Trust Score™', 'Community Karma™', 'PadiHub Passport™', 'Unlimited Savings Groups', 'Community DNA™', 'Governance & Voting', 'Priority Support'].map(f => (
+              {['Full Community Access', 'Trust Score™', 'PadiHub Passport™', 'Unlimited Savings Groups', 'Community DNA™', 'Governance & Voting', 'Priority Support'].map(f => (
                 <div key={f} className="flex items-center gap-2 text-sm text-gray-600">
                   <CheckCircle size={14} style={{ color: '#2EAF6F' }} /> {f}
                 </div>

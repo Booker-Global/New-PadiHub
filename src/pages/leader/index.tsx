@@ -14,9 +14,9 @@ const fadeUp = { hidden: { opacity: 0, y: 16 }, visible: { opacity: 1, y: 0, tra
 const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.07 } } };
 
 const communities = [
-  { name: 'Lagos Savers Circle',  members: 15, health: 95, contributions: 94, karma: 2340, trust: 920, color: '#2EAF6F', initial: 'L', pending: 2, proposals: 1 },
-  { name: 'Family First Network', members: 19, health: 82, contributions: 78, karma: 1890, trust: 847, color: '#F59E0B', initial: 'F', pending: 4, proposals: 2 },
-  { name: 'Diaspora Builders',    members: 28, health: 88, contributions: 91, karma: 3100, trust: 905, color: '#8B5CF6', initial: 'D', pending: 1, proposals: 0 },
+  { name: 'Lagos Savers Circle',  members: 15, health: 95, contributions: 94, trust: 920, color: '#2EAF6F', initial: 'L', pending: 2, proposals: 1 },
+  { name: 'Family First Network', members: 19, health: 82, contributions: 78, trust: 847, color: '#F59E0B', initial: 'F', pending: 4, proposals: 2 },
+  { name: 'Diaspora Builders',    members: 28, health: 88, contributions: 91, trust: 905, color: '#8B5CF6', initial: 'D', pending: 1, proposals: 0 },
 ];
 
 const urgentActions = [

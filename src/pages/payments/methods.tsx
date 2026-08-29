@@ -117,7 +117,7 @@ export default function AddPaymentMethodPage() {
   useEffect(() => {
     if (!needsStripeCard || !cardMountRef.current) return;
     if (!STRIPE_PUBLISHABLE_KEY) {
-      setActionError('Stripe is not configured for this environment. Add VITE_STRIPE_PUBLISHABLE_KEY and try again.');
+      setActionError('Card payments are not configured for this environment. Please try again later.');
       return;
     }
 
@@ -129,7 +129,7 @@ export default function AddPaymentMethodPage() {
         const stripe = await loadStripe(STRIPE_PUBLISHABLE_KEY);
         if (!stripe || !cardMountRef.current || !isMounted) {
           if (!stripe && isMounted) {
-            setActionError('Stripe could not be loaded. Please refresh and try again.');
+            setActionError('The card payment form could not be loaded. Please refresh and try again.');
           }
           return;
         }
@@ -152,7 +152,7 @@ export default function AddPaymentMethodPage() {
         cardElementRef.current = mountedCard;
       } catch (mountError) {
         if (!isMounted) return;
-        setActionError(mountError instanceof Error ? mountError.message : 'Could not load Stripe card entry.');
+        setActionError(mountError instanceof Error ? mountError.message : 'Could not load the card entry form.');
       }
     };
 
@@ -177,9 +177,9 @@ export default function AddPaymentMethodPage() {
 
     if (!transactionId || !txRef) {
       if (checkoutStatus && checkoutStatus !== 'successful') {
-        setActionError('Flutterwave checkout did not complete. Try again to save your card.');
+        setActionError('The secure checkout did not complete. Try again to save your card.');
       } else {
-        setActionError('Flutterwave did not return the transaction details needed to save your card. Please try again.');
+        setActionError('The secure checkout did not return the details needed to save your card. Please try again.');
       }
       return;
     }
@@ -195,7 +195,7 @@ export default function AddPaymentMethodPage() {
 
       setSetupLoading(true);
       setActionError('');
-      setActionNotice('Verifying your Flutterwave payment method…');
+      setActionNotice('Verifying your payment method…');
 
       try {
         const response = await window.fetch('/api/payments/save-flutterwave-token', {
@@ -208,7 +208,7 @@ export default function AddPaymentMethodPage() {
         });
         const json = await response.json().catch(() => null) as ApiResponse<null> | null;
         if (!response.ok) {
-          throw new Error(getErrorMessage(json, 'Could not save your Flutterwave card token.'));
+          throw new Error(getErrorMessage(json, 'Could not save your card.'));
         }
 
         if (cancelled) return;
@@ -217,7 +217,7 @@ export default function AddPaymentMethodPage() {
       } catch (saveError) {
         if (cancelled) return;
         setActionNotice('');
-        setActionError(saveError instanceof Error ? saveError.message : 'Could not save your Flutterwave card token.');
+        setActionError(saveError instanceof Error ? saveError.message : 'Could not save your card.');
       } finally {
         if (!cancelled) setSetupLoading(false);
       }
@@ -243,7 +243,7 @@ export default function AddPaymentMethodPage() {
     const stripe = stripeRef.current;
     const cardElement = cardElementRef.current;
     if (!stripe || !cardElement) {
-      setActionError('The Stripe card form is still loading. Please wait a moment and try again.');
+      setActionError('The card form is still loading. Please wait a moment and try again.');
       return;
     }
 
@@ -261,12 +261,12 @@ export default function AddPaymentMethodPage() {
       });
       const setupJson = await setupResponse.json().catch(() => null) as ApiResponse<StripeSetupIntentResponse> | null;
       if (!setupResponse.ok) {
-        throw new Error(getErrorMessage(setupJson, 'Could not start Stripe payment method setup.'));
+        throw new Error(getErrorMessage(setupJson, 'Could not start payment method setup.'));
       }
 
       const clientSecret = setupJson?.data?.clientSecret;
       if (!clientSecret) {
-        throw new Error('Stripe did not return a setup client secret.');
+        throw new Error('The payment service did not return the setup details.');
       }
 
       const confirmation = await stripe.confirmCardSetup(clientSecret, {
@@ -279,13 +279,13 @@ export default function AddPaymentMethodPage() {
       });
 
       if (confirmation.error) {
-        throw new Error(confirmation.error.message || 'Stripe could not save your card.');
+        throw new Error(confirmation.error.message || 'Could not save your card.');
       }
 
       const paymentMethod = confirmation.setupIntent?.payment_method;
       const paymentMethodId = typeof paymentMethod === 'string' ? paymentMethod : paymentMethod?.id;
       if (!paymentMethodId) {
-        throw new Error('Stripe did not return a payment method ID.');
+        throw new Error('The payment service did not return a payment method ID.');
       }
 
       const saveResponse = await window.fetch('/api/payments/confirm-setup-intent', {
@@ -298,7 +298,7 @@ export default function AddPaymentMethodPage() {
       });
       const saveJson = await saveResponse.json().catch(() => null) as ApiResponse<null> | null;
       if (!saveResponse.ok) {
-        throw new Error(getErrorMessage(saveJson, 'Could not save your Stripe payment method.'));
+        throw new Error(getErrorMessage(saveJson, 'Could not save your payment method.'));
       }
 
       setActionNotice('Payment method saved. Your recurring contributions can now be charged automatically.');
@@ -337,17 +337,17 @@ export default function AddPaymentMethodPage() {
       });
       const json = await response.json().catch(() => null) as ApiResponse<FlutterwavePaymentLinkResponse> | null;
       if (!response.ok) {
-        throw new Error(getErrorMessage(json, 'Could not start Flutterwave checkout.'));
+        throw new Error(getErrorMessage(json, 'Could not start secure checkout.'));
       }
 
       const link = json?.data?.link;
       if (!link) {
-        throw new Error('Flutterwave did not return a checkout link.');
+        throw new Error('The payment service did not return a checkout link.');
       }
 
       window.location.assign(link);
     } catch (setupError) {
-      setActionError(setupError instanceof Error ? setupError.message : 'Could not start Flutterwave checkout.');
+      setActionError(setupError instanceof Error ? setupError.message : 'Could not start secure checkout.');
       setSetupLoading(false);
     }
   };
@@ -413,7 +413,7 @@ export default function AddPaymentMethodPage() {
                 <div className="flex items-center justify-between gap-3 mb-4">
                   <div>
                     <p className="text-xs text-gray-500 mb-1">Payment provider</p>
-                    <p className="font-bold text-gray-900">{profile?.country === 'NG' ? 'Flutterwave (NG)' : 'Stripe (GB)'}</p>
+                    <p className="font-bold text-gray-900">{profile?.country === 'NG' ? 'Card payment (Nigeria)' : 'Card payment (UK)'}</p>
                   </div>
                   <span
                     className="text-xs font-bold px-3 py-1 rounded-full"
@@ -453,7 +453,7 @@ export default function AddPaymentMethodPage() {
                     {profile?.country === 'NG' ? (
                       <div className="space-y-4">
                         <div className="rounded-2xl p-3 bg-white text-sm text-gray-600" style={{ border: '1px solid #E5E7EB' }}>
-                          Flutterwave will open a secure hosted checkout to verify and tokenise your card for future contribution charges.
+                          A secure hosted checkout will open to verify and tokenise your card for future contribution charges.
                         </div>
                         <button
                           onClick={() => void handleFlutterwaveSetup()}
@@ -477,7 +477,7 @@ export default function AddPaymentMethodPage() {
                           style={{ background: 'linear-gradient(135deg, #2eafaf, #1f8f8f)' }}
                         >
                           <CreditCard size={16} />
-                          {setupLoading ? 'Saving card…' : 'Save card with Stripe'}
+                          {setupLoading ? 'Saving card…' : 'Save card'}
                         </button>
                       </div>
                     )}

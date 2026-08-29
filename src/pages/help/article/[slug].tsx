@@ -3,7 +3,7 @@ import { MotionDiv } from '@/lib/motion-safe';
 import { Link, useParams } from 'react-router-dom';
 import {
   Clock, ThumbsUp, ThumbsDown, BookOpen,
-  ChevronRight, Shield, Star, PiggyBank, Users, Globe,
+  ChevronRight, Shield, PiggyBank, Users, Globe,
   CheckCircle, AlertTriangle, Zap, MessageSquare
 } from 'lucide-react';
 import { useState } from 'react';
@@ -30,24 +30,8 @@ const articles: Record<string, {
       { heading: 'What decreases your score?', body: 'Missing contributions, failing to vote on governance proposals, extended inactivity and receiving negative peer feedback can reduce your Trust Score™. The impact is proportional — one missed contribution will not dramatically affect a strong score.', type: 'warning' },
     ],
     related: [
-      { title: 'What is Community Karma™?',             slug: 'what-is-community-karma' },
       { title: 'Understanding your PadiHub Passport™',  slug: 'understanding-passport' },
       { title: 'What happens if I miss a contribution?', slug: 'missed-contribution' },
-    ],
-  },
-  'what-is-community-karma': {
-    title: 'What is Community Karma™?',
-    category: 'Karma™', readTime: '3 min read', updated: '10 Jun 2025',
-    icon: Star, color: '#F59E0B',
-    sections: [
-      { heading: 'What is Community Karma™?', body: 'Community Karma™ is PadiHub\'s achievement and recognition system. It measures your positive contributions to the community ecosystem — not just financial contributions, but participation, leadership and community spirit.' },
-      { heading: 'How do you earn Karma™?', body: 'You earn Karma™ by contributing on time (+50 per contribution), participating in governance votes (+25 per vote), welcoming new members (+30 per welcome), completing community milestones (+100–500), earning achievement badges (+50–1000), and receiving peer recognition (+10–100).' },
-      { heading: 'Karma™ Levels', body: 'Karma™ has seven levels: Seed (0–499), Sprout (500–1,499), Grower (1,500–2,999), Pillar (3,000–5,999), Champion (6,000–9,999), Guardian (10,000–19,999), and Legend (20,000+). Higher levels unlock exclusive community privileges.', type: 'info' },
-      { heading: 'Karma™ vs Trust Score™', body: 'Trust Score™ measures reliability and reputation. Community Karma™ measures participation and community contribution. Both are important — Trust Score™ affects your ability to join groups, while Karma™ affects your recognition and privileges within them.' },
-    ],
-    related: [
-      { title: 'How does Trust Score™ work?',           slug: 'how-trust-score-works' },
-      { title: 'Understanding your PadiHub Passport™',  slug: 'understanding-passport' },
     ],
   },
   'create-savings-group': {
@@ -71,14 +55,13 @@ const articles: Record<string, {
     category: 'Passport™', readTime: '3 min read', updated: '5 Jun 2025',
     icon: Globe, color: '#EF4444',
     sections: [
-      { heading: 'What is PadiHub Passport™?', body: 'Your PadiHub Passport™ is your verified community identity — a portable, shareable record of your Trust Score™, Community Karma™, communities, achievements and leadership roles within the PadiHub ecosystem.' },
-      { heading: 'What does it contain?', body: 'Your Passport™ includes your verified display name and unique Passport ID, current Trust Score™ and tier, Community Karma™ level and total, communities you belong to and lead, achievements and badges earned, and your contribution history summary.' },
+      { heading: 'What is PadiHub Passport™?', body: 'Your PadiHub Passport™ is your verified community identity — a portable, shareable record of your Trust Score™, communities, achievements and leadership roles within the PadiHub ecosystem.' },
+      { heading: 'What does it contain?', body: 'Your Passport™ includes your verified display name and unique Passport ID, current Trust Score™ and tier, communities you belong to and lead, achievements and badges earned, and your contribution history summary.' },
       { heading: 'Sharing your Passport™', body: 'You can share your Passport™ publicly via a unique link, or keep it private. Sharing your Passport™ helps build trust when joining new communities or applying for leadership roles.', type: 'tip' },
       { heading: 'Passport™ verification', body: 'Your Passport™ is automatically verified when you complete identity verification and maintain an active membership. Verified Passports™ display a verification badge and are trusted by community leaders.', type: 'info' },
     ],
     related: [
       { title: 'How does Trust Score™ work?',    slug: 'how-trust-score-works' },
-      { title: 'What is Community Karma™?',       slug: 'what-is-community-karma' },
     ],
   },
   'missed-contribution': {
@@ -126,7 +109,6 @@ const fallbackArticle: {
   ],
   related: [
     { title: 'How does Trust Score™ work?', slug: 'how-trust-score-works' },
-    { title: 'What is Community Karma™?',   slug: 'what-is-community-karma' },
   ],
 };
 

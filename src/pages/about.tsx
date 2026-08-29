@@ -1,6 +1,6 @@
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { Link } from 'react-router-dom';
-import { Shield, Users, TrendingUp, Heart, ArrowRight, Globe, Award, Zap, CheckCircle } from 'lucide-react';
+import { Shield, Users, TrendingUp, Heart, ArrowRight, Globe, Zap, CheckCircle } from 'lucide-react';
 
 const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/about#webpage\",\"name\":\"About PadiHub — Our Mission & Story\",\"url\":\"https://padihub.com/about\",\"description\":\"PadiHub was built to make community savings accessible, transparent and rewarding for everyone. Learn about our mission, values and the team behind it.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"}}";
 
@@ -43,12 +43,6 @@ const values = [
     desc: 'Loneliness is a global crisis. PadiHub creates genuine belonging — communities where people know each other, trust each other and grow together.',
     color: '#EF4444',
   },
-  {
-    icon: Award,
-    title: 'Achievement Recognised',
-    desc: 'Positive participation deserves recognition. Community Karma™ and our badge system ensure that every contribution, vote and act of community leadership is celebrated.',
-    color: '#F59E0B',
-  },
 ];
 
 const team = [
@@ -63,7 +57,7 @@ const team = [
 const milestones = [
   { year: '2022', title: 'The idea',          desc: 'PadiHub was conceived after our founders experienced the pain of disorganised community savings first-hand.' },
   { year: '2023', title: 'Building in public', desc: 'We spent a year talking to 500+ community leaders across the UK and Nigeria to understand their real needs.' },
-  { year: '2024', title: 'Beta launch',        desc: 'PadiHub launched in private beta with 50 communities. Trust Score™ and Community Karma™ were born.' },
+  { year: '2024', title: 'Beta launch',        desc: 'PadiHub launched in private beta with 50 communities and introduced Trust Score™.' },
   { year: '2025', title: 'Scale',              desc: 'We grew to 1,200+ communities across the UK and Nigeria. £2.4M+ in community savings coordinated.' },
   { year: '2026', title: 'The future',         desc: 'PadiHub Passport™ and Community DNA™ launch. We\'re building the world\'s most trusted community infrastructure.' },
 ];
@@ -157,7 +151,6 @@ export default function AboutPage() {
             <div className="r-grid-2">
               {[
                 { icon: Shield, label: 'Trust Score™',    desc: 'Reputation that travels with you',     color: '#2EAF6F' },
-                { icon: Award,  label: 'Karma™',          desc: 'Recognition for positive participation', color: '#F59E0B' },
                 { icon: Globe,  label: 'Passport™',       desc: 'Your portable community identity',     color: '#2eafaf' },
                 { icon: Zap,    label: 'Governance',      desc: 'Democratic community decisions',       color: '#8B5CF6' },
               ].map((f, i) => (
