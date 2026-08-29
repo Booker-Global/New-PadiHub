@@ -407,9 +407,11 @@ export const dailyJobs = [
   monthlyGenerateContributionSchedule,
   monthlyAdvanceRotation,
   dailyContributionReminders,
+  // Flip scheduled → due *before* auto-charging so a contribution that
+  // becomes due today gets charged today, not delayed until tomorrow's run.
+  dailyTrustScoreUpdates,
   dailyAutoChargeDueContributions,
   dailyOverdueCheck,
-  dailyTrustScoreUpdates,
   dailyFailedPaymentCheck,
   dailyNotificationCleanup,
 ];

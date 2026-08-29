@@ -23,10 +23,10 @@ const benefits = [
 ];
 
 const stats = [
-  { value: '1,200+', label: 'Verified communities', color: '#2EAF6F' },
-  { value: '18,000+', label: 'Active members',      color: '#F59E0B' },
-  { value: '96%',    label: 'Contribution success', color: '#2eafaf' },
-  { value: '4.9★',   label: 'Member satisfaction',  color: '#8B5CF6' },
+  { value: 'Structured groups', label: 'Set clear contribution and payout rules together.', color: '#2EAF6F' },
+  { value: 'Portable trust', label: 'Trust Score™ follows you between communities.',        color: '#F59E0B' },
+  { value: 'Full transparency', label: 'Every contribution and payout is tracked in real time.', color: '#2eafaf' },
+  { value: 'Secure payments', label: 'Verified payment methods and payout destinations.',    color: '#8B5CF6' },
 ];
 
 const testimonials = [
@@ -79,7 +79,7 @@ export default function MembershipPage() {
         <div style={{ position: 'absolute', bottom: 0, right: 0, width: 320, height: 320, borderRadius: '50%', filter: 'blur(60px)', opacity: 0.1, background: '#F59E0B', pointerEvents: 'none' }} />
         <div style={{ maxWidth: '64rem', margin: '0 auto', padding: '0 1.25rem', textAlign: 'center', position: 'relative' }}>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '8px 16px', borderRadius: 999, marginBottom: 24, fontSize: 13, fontWeight: 700, background: 'rgba(46,175,111,0.15)', border: '1px solid rgba(46,175,111,0.25)', color: '#2EAF6F' }}>
-            <Shield size={14} /> Trusted by 18,000+ members
+            <Shield size={14} /> Built for trusted, transparent savings groups
           </div>
           <h1 style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0,0,0,0)', whiteSpace: 'nowrap' }}>Become a PadiHub Member</h1>
           <h2 style={{ fontSize: 'clamp(1.75rem, 6vw, 3.5rem)', fontWeight: 800, color: '#fff', marginBottom: 24, fontFamily: 'Nunito, sans-serif', lineHeight: 1.15 }}>

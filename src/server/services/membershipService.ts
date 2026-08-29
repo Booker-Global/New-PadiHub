@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -126,12 +126,19 @@ export const membershipService = {
       const removedName = `${userRow[0].first_name} ${userRow[0].last_name}`;
       const otherMembers = await db.select().from(schema.memberships)
         .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')));
+      const otherMemberIds = otherMembers.map(other => other.user_id).filter(id => id !== memberId);
+      const otherUserEmailsById = new Map(
+        otherMemberIds.length
+          ? (await db.select({ id: schema.users.id, email: schema.users.email })
+              .from(schema.users).where(inArray(schema.users.id, otherMemberIds)))
+              .map(row => [row.id, row.email] as const)
+          : [],
+      );
       for (const other of otherMembers) {
         if (other.user_id === memberId) continue;
-        const otherUserRow = await db.select({ email: schema.users.email })
-          .from(schema.users).where(eq(schema.users.id, other.user_id)).limit(1);
-        if (otherUserRow.length) {
-          await sendGroupMemberSuspendedNotificationEmail(otherUserRow[0].email, group.name, removedName);
+        const otherEmail = otherUserEmailsById.get(other.user_id);
+        if (otherEmail) {
+          await sendGroupMemberSuspendedNotificationEmail(otherEmail, group.name, removedName);
         }
         await notificationService.create({
           userId: other.user_id, type: 'group_member_suspended',
@@ -198,12 +205,19 @@ export const membershipService = {
         const suspendedName = `${suspendedUserRow[0].first_name} ${suspendedUserRow[0].last_name}`;
         const otherMembers = await db.select().from(schema.memberships)
           .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')));
+        const otherMemberIds = otherMembers.map(other => other.user_id).filter(id => id !== userId);
+        const otherUserEmailsById = new Map(
+          otherMemberIds.length
+            ? (await db.select({ id: schema.users.id, email: schema.users.email })
+                .from(schema.users).where(inArray(schema.users.id, otherMemberIds)))
+                .map(row => [row.id, row.email] as const)
+            : [],
+        );
         for (const other of otherMembers) {
           if (other.user_id === userId) continue;
-          const otherUserRow = await db.select({ email: schema.users.email })
-            .from(schema.users).where(eq(schema.users.id, other.user_id)).limit(1);
-          if (otherUserRow.length) {
-            await sendGroupMemberSuspendedNotificationEmail(otherUserRow[0].email, group.name, suspendedName);
+          const otherEmail = otherUserEmailsById.get(other.user_id);
+          if (otherEmail) {
+            await sendGroupMemberSuspendedNotificationEmail(otherEmail, group.name, suspendedName);
           }
           await notificationService.create({
             userId: other.user_id, type: 'group_member_suspended',

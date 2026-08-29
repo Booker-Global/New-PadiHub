@@ -97,7 +97,7 @@ export default function ConnectPayoutPage() {
   );
   const isPayoutVerified = Boolean(profile?.payout_verified_at);
 
-  const handleVerify = async () => {
+  const handleVerify = useCallback(async () => {
     const session = getValidSession();
     if (!session?.token) return;
 
@@ -128,7 +128,7 @@ export default function ConnectPayoutPage() {
     } finally {
       setVerifyLoading(false);
     }
-  };
+  }, [loadProfile, profile?.country]);
 
   useEffect(() => {
     if (searchParams.get('stripe_connected') === '1') {
@@ -138,8 +138,11 @@ export default function ConnectPayoutPage() {
     } else if (searchParams.get('stripe_refresh') === '1') {
       setActionError('Payout onboarding was not completed. Please try connecting again.');
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
+    // Only re-run when the URL search params change, not on every
+    // handleVerify identity change (which updates once profile loads) — an
+    // eslint-disable would otherwise be needed here, so we depend on the
+    // param values directly instead of the whole searchParams object/handler.
+  }, [searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleConnect = async () => {
     if (!termsAccepted) {

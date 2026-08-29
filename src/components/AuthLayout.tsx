@@ -124,7 +124,7 @@ export default function AuthLayout({ children, title, subtitle, step, totalSteps
               Belong.
             </h2>
             <p style={{ color: '#9CA3AF', fontSize: 15, lineHeight: 1.6, marginBottom: 40, maxWidth: 360 }}>
-              Join 10,000+ members building trust, saving smarter and celebrating every milestone together.
+              Join a community built on transparency — save smarter and celebrate every milestone together.
             </p>
 
             <div className="auth-pillars-grid">
