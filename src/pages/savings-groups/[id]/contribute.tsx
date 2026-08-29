@@ -76,6 +76,10 @@ interface ChargeResult {
   status: 'succeeded' | 'pending' | 'failed';
 }
 
+const STRIPE_PUBLISHABLE_KEY = (
+  import.meta.env as Record<string, string | undefined>
+).VITE_STRIPE_PUBLISHABLE_KEY?.trim() || '';
+
 const actionableStatusRank: Record<Contribution['payment_status'], number> = {
   due: 0,
   failed: 1,
@@ -144,9 +148,6 @@ export default function ContributionConfirmPage() {
   const cardMountRef = useRef<HTMLDivElement | null>(null);
   const stripeRef = useRef<Stripe | null>(null);
   const cardElementRef = useRef<StripeCardElement | null>(null);
-  const stripePublishableKey = (
-    import.meta.env as Record<string, string | undefined>
-  ).VITE_STRIPE_PUBLISHABLE_KEY?.trim() || '';
 
   const loadData = useCallback(async () => {
     if (!id) {
@@ -238,7 +239,7 @@ export default function ContributionConfirmPage() {
 
   useEffect(() => {
     if (!needsStripePaymentMethod || !cardMountRef.current) return;
-    if (!stripePublishableKey) {
+    if (!STRIPE_PUBLISHABLE_KEY) {
       setActionError('Stripe is not configured for this environment. Add VITE_STRIPE_PUBLISHABLE_KEY and try again.');
       return;
     }
@@ -248,7 +249,7 @@ export default function ContributionConfirmPage() {
 
     const mountCard = async () => {
       try {
-        const stripe = await loadStripe(stripePublishableKey);
+        const stripe = await loadStripe(STRIPE_PUBLISHABLE_KEY);
         if (!stripe || !cardMountRef.current || !isMounted) {
           if (!stripe && isMounted) {
             setActionError('Stripe could not be loaded. Please refresh and try again.');
@@ -286,7 +287,7 @@ export default function ContributionConfirmPage() {
       cardElementRef.current = null;
       stripeRef.current = null;
     };
-  }, [needsStripePaymentMethod, stripePublishableKey]);
+  }, [needsStripePaymentMethod]);
 
   useEffect(() => {
     const setupProvider = searchParams.get('setup_provider');
@@ -298,9 +299,11 @@ export default function ContributionConfirmPage() {
       return;
     }
 
-    if (!transactionId) {
+    if (!transactionId || !txRef) {
       if (checkoutStatus && checkoutStatus !== 'successful') {
         setActionError('Flutterwave checkout did not complete. Try again to save your card.');
+      } else {
+        setActionError('Flutterwave did not return the transaction details needed to save your card. Please try again.');
       }
       return;
     }
@@ -667,7 +670,7 @@ export default function ContributionConfirmPage() {
                         </div>
                         <button
                           onClick={() => void handleStripeSetup()}
-                          disabled={setupLoading || !stripePublishableKey}
+                          disabled={setupLoading || !STRIPE_PUBLISHABLE_KEY}
                           className="w-full py-3 rounded-2xl font-bold text-white transition-all disabled:cursor-not-allowed disabled:opacity-60"
                           style={{ background: 'linear-gradient(135deg, #2eafaf, #1f8f8f)' }}
                         >

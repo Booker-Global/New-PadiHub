@@ -9,7 +9,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
-import { getPaymentProvider, getStripeProvider, getFlutterwaveProvider } from '../integrations/payments/PaymentProviderFactory.js';
+import { getStripeProvider, getFlutterwaveProvider } from '../integrations/payments/PaymentProviderFactory.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
 
 const FLUTTERWAVE_SETUP_TX_REF_PREFIX = 'padihub-flw-setup';
@@ -44,14 +44,23 @@ async function getContributionContext(userId: string, contributionId: string) {
   };
 }
 
-function getBaseAppUrl(req: Request) {
-  const candidate = req.headers.origin ?? process.env.APP_URL ?? process.env.VITE_PUBLIC_URL ?? 'https://padihub.com';
+function getBaseAppUrl() {
+  const candidate = process.env.APP_URL ?? process.env.VITE_PUBLIC_URL ?? 'https://padihub.com';
 
   try {
     return new URL(candidate).origin;
   } catch {
     return 'https://padihub.com';
   }
+}
+
+function buildFlutterwaveSetupTxRef(userId: string, contributionId: string) {
+  return `${FLUTTERWAVE_SETUP_TX_REF_PREFIX}__${userId}__${contributionId}__${randomUUID()}`;
+}
+
+function isFlutterwaveSetupTxRefOwnedByUser(txRef: string, userId: string) {
+  const [prefix, ownerUserId] = txRef.split('__');
+  return prefix === FLUTTERWAVE_SETUP_TX_REF_PREFIX && ownerUserId === userId;
 }
 
 function getFlutterwaveSetupAmount() {
@@ -121,6 +130,10 @@ export const paymentController = {
         throw new AppError('Only card payment methods can be saved for contributions.', 400, 'INVALID_PAYMENT_METHOD');
       }
 
+      if (!customerId) {
+        throw new AppError('Stripe did not attach this payment method to your customer record. Start setup again.', 400, 'PAYMENT_METHOD_NOT_ATTACHED');
+      }
+
       if (customerId !== user.stripe_customer_id) {
         throw new AppError('This payment method is not attached to your Stripe customer record.', 403, 'PAYMENT_METHOD_MISMATCH');
       }
@@ -162,8 +175,8 @@ export const paymentController = {
       }
 
       const verificationAmount = getFlutterwaveSetupAmount();
-      const txRef = `${FLUTTERWAVE_SETUP_TX_REF_PREFIX}-${userId}-${contribution.id}-${randomUUID()}`;
-      const redirectUrl = new URL(`/savings-groups/${group.id}/contribute`, getBaseAppUrl(req));
+      const txRef = buildFlutterwaveSetupTxRef(userId, contribution.id);
+      const redirectUrl = new URL(`/savings-groups/${group.id}/contribute`, getBaseAppUrl());
       redirectUrl.searchParams.set('setup_provider', 'flutterwave');
       redirectUrl.searchParams.set('contribution_id', contribution.id);
 
@@ -214,17 +227,18 @@ export const paymentController = {
       const userId = req.user!.userId;
       const { transaction_id, tx_ref } = req.body as { transaction_id?: string | number; tx_ref?: string };
       if (!transaction_id) throw new AppError('transaction_id is required.', 400);
+      if (!tx_ref) throw new AppError('tx_ref is required.', 400);
 
       const user = await getUserOrThrow(userId);
       const result = await getFlutterwaveProvider().verifyTransaction({
         transactionId: transaction_id.toString(),
       });
 
-      if (!result.txRef.startsWith(`${FLUTTERWAVE_SETUP_TX_REF_PREFIX}-${userId}-`)) {
+      if (!isFlutterwaveSetupTxRefOwnedByUser(result.txRef, userId)) {
         throw new AppError('This Flutterwave transaction does not belong to your payment-method setup flow.', 403, 'PAYMENT_METHOD_MISMATCH');
       }
 
-      if (tx_ref && tx_ref !== result.txRef) {
+      if (tx_ref !== result.txRef) {
         throw new AppError('The Flutterwave transaction reference does not match the verified transaction.', 403, 'PAYMENT_METHOD_MISMATCH');
       }
 
@@ -261,7 +275,6 @@ export const paymentController = {
       res.json({
         success: true,
         data: {
-          flutterwave_card_token: result.cardToken,
           transaction_id: result.transactionId,
           tx_ref: result.txRef,
         },
@@ -322,8 +335,9 @@ export const paymentController = {
         throw new AppError('This contribution has already been paid.', 409, 'CONTRIBUTION_ALREADY_PAID');
       }
 
-      const providerCountry = group.payment_provider === 'flutterwave' ? 'NG' : 'GB';
-      const provider = getPaymentProvider(providerCountry);
+      const provider = group.payment_provider === 'flutterwave'
+        ? getFlutterwaveProvider()
+        : getStripeProvider();
       const customerId = group.payment_provider === 'flutterwave'
         ? user.email
         : (user.stripe_customer_id ?? '');
@@ -345,6 +359,7 @@ export const paymentController = {
         paymentMethodId,
         amount:         amountInSmallestUnit,
         currency:       group.currency,
+        countryCode:    group.country,
         contributionId: contribution_id,
         description:    `PadiHub contribution — ${group.name} cycle ${contribution.cycle_number}`,
       });

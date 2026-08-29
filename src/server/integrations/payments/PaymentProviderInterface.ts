@@ -55,6 +55,7 @@ export interface IPaymentProvider {
     paymentMethodId: string;
     amount: number;          // in smallest currency unit (pence / kobo)
     currency: string;
+    countryCode?: string;
     contributionId: string;  // used as idempotency key
     description: string;
   }): Promise<ChargeResult>;

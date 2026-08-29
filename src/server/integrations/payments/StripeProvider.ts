@@ -57,7 +57,7 @@ export class StripeProvider implements IPaymentProvider {
 
   async chargeContribution(params: {
     customerId: string; paymentMethodId: string;
-    amount: number; currency: string;
+    amount: number; currency: string; countryCode?: string;
     contributionId: string; description: string;
   }): Promise<ChargeResult> {
     const stripe = getStripe();

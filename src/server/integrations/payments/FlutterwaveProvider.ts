@@ -115,14 +115,14 @@ export class FlutterwaveProvider implements IPaymentProvider {
 
   async chargeContribution(params: {
     customerId: string; paymentMethodId: string;
-    amount: number; currency: string;
+    amount: number; currency: string; countryCode?: string;
     contributionId: string; description: string;
   }): Promise<ChargeResult> {
     const response = await axios.post(`${FLW_BASE}/tokenized-charges`, {
       token: params.paymentMethodId,
       email: params.customerId,
       currency: params.currency,
-      country: 'NG',
+      country: params.countryCode ?? 'NG',
       amount: params.amount / 100,
       tx_ref: params.contributionId,
       narration: params.description,
