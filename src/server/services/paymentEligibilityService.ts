@@ -15,6 +15,9 @@ import { getStripeProvider } from '../integrations/payments/PaymentProviderFacto
 type EligibilityUser = {
   id: string;
   country: string;
+  email_verified: boolean;
+  identity_verified: boolean;
+  subscription_tier: 'pro' | 'elite' | null;
   stripe_payment_method_id: string | null;
   stripe_connected_account_id: string | null;
   flutterwave_card_token: string | null;
@@ -52,6 +55,9 @@ export async function getPaymentEligibility(userId: string) {
   const rows = await db.select({
     id:                           schema.users.id,
     country:                      schema.users.country,
+    email_verified:               schema.users.email_verified,
+    identity_verified:            schema.users.identity_verified,
+    subscription_tier:            schema.users.subscription_tier,
     stripe_payment_method_id:     schema.users.stripe_payment_method_id,
     stripe_connected_account_id:  schema.users.stripe_connected_account_id,
     flutterwave_card_token:       schema.users.flutterwave_card_token,
@@ -74,30 +80,43 @@ export async function getPaymentEligibility(userId: string) {
     ? (hasPayout && Boolean(user.payout_verified_at))
     : await refreshStripePayoutVerification(user);
 
+  const emailVerified = Boolean(user.email_verified);
+  const identityVerified = Boolean(user.identity_verified);
+  const subscriptionTierSelected = user.subscription_tier === 'pro' || user.subscription_tier === 'elite';
+
   return {
+    emailVerified,
+    identityVerified,
+    subscriptionTierSelected,
+    subscriptionTier: user.subscription_tier,
     hasPaymentMethod,
     paymentMethodVerified,
     hasPayout,
     payoutVerified,
-    ready: paymentMethodVerified && payoutVerified,
+    ready: emailVerified && identityVerified && subscriptionTierSelected && paymentMethodVerified && payoutVerified,
   };
 }
 
 /**
- * Throws a 403 PAYMENT_SETUP_REQUIRED error unless the user has BOTH a
- * verified payment method and a verified payout destination. Call before
- * allowing a user to create or join a savings group.
+ * Throws a 403 error unless the user has completed EVERY onboarding step
+ * required before creating or joining a savings group: verified email,
+ * verified identity, a chosen subscription tier, a verified payment method,
+ * and a verified payout destination. Call before allowing a user to create
+ * or join a savings group.
  */
 export async function assertPaymentSetupComplete(userId: string): Promise<void> {
   const eligibility = await getPaymentEligibility(userId);
   if (eligibility.ready) return;
 
   const missing: string[] = [];
+  if (!eligibility.emailVerified) missing.push('a verified email address');
+  if (!eligibility.identityVerified) missing.push('identity verification (/verify-identity)');
+  if (!eligibility.subscriptionTierSelected) missing.push('a chosen subscription plan (/onboarding)');
   if (!eligibility.paymentMethodVerified) missing.push('a verified payment method (/payments/methods)');
   if (!eligibility.payoutVerified) missing.push('a verified payout destination (/payments/payout)');
 
   throw new AppError(
-    `Before joining or creating a group, add and verify ${missing.join(' and ')}.`,
+    `Before joining or creating a group, complete: ${missing.join('; ')}.`,
     403,
     'PAYMENT_SETUP_REQUIRED',
   );

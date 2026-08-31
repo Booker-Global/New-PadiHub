@@ -7,13 +7,15 @@ import {
 
 const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/membership#webpage\",\"name\":\"Become a PadiHub Member — Join Trusted Communities\",\"url\":\"https://padihub.com/membership\",\"description\":\"Join PadiHub and access trusted communities, build your reputation with Trust Score™ and participate in transparent savings ecosystems.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"}}";
 
+// Hidden until we have real member testimonials to publish.
+const SHOW_MEMBER_VOICES = false;
+
 
 const benefits = [
-  { icon: Users,     title: 'Access Communities',    desc: 'Join unlimited trusted savings communities across the UK and Nigeria.',       color: '#2EAF6F' },
+  { icon: Users,     title: 'Access Communities',    desc: 'Join trusted savings communities across the UK and Nigeria within your plan limits.', color: '#2EAF6F' },
   { icon: Globe,     title: 'Community Marketplace', desc: 'Discover and join verified communities matched to your goals.',               color: '#2eafaf' },
   { icon: TrendingUp,title: 'Savings Groups',        desc: 'Create and participate in structured savings groups with full transparency.',  color: '#8B5CF6' },
   { icon: Shield,    title: 'Trust Score™',          desc: 'Build a portable reputation that grows with every positive action.',          color: '#2EAF6F' },
-  { icon: Globe,     title: 'PadiHub Passport™',     desc: 'Your portable digital community identity — share it anywhere.',              color: '#2eafaf' },
   { icon: Zap,       title: 'Community DNA™',        desc: 'Deep insights into your community\'s health, values and participation.',      color: '#EF4444' },
   { icon: BarChart2, title: 'Analytics',             desc: 'Track your progress, contributions and community impact over time.',          color: '#8B5CF6' },
   { icon: Users,     title: 'Governance',            desc: 'Participate in democratic community decisions and elections.',                color: '#2EAF6F' },
@@ -41,7 +43,7 @@ const testimonials = [
   {
     name: 'James Thornton',
     community: 'UK Homeowners Hub',
-    quote: 'I\'ve tried other platforms but nothing comes close to PadiHub. The Passport™ feature alone is worth the membership.',
+    quote: 'I\'ve tried other platforms but nothing comes close to PadiHub. The transparency and group structure make it easy to stay committed.',
     tier: 'Community Champion',
     initial: 'J',
     color: '#2eafaf',
@@ -72,6 +74,17 @@ export default function MembershipPage() {
 
         <script type="application/ld+json">{_jsonLd}</script>
 </Helmet>
+      <style>{`
+        .membership-stats-grid { display: grid; grid-template-columns: 1fr; gap: 1.5rem; }
+        @media (min-width: 640px) { .membership-stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+        @media (min-width: 1024px) { .membership-stats-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+        .membership-stat-card { min-width: 0; }
+        .membership-stat-value { line-height: 1.15; word-break: break-word; }
+        .membership-pillars { display: flex; flex-direction: column; gap: 1rem; }
+        @media (min-width: 640px) { .membership-pillars { flex-direction: row; flex-wrap: wrap; justify-content: center; } }
+        .membership-pill { width: 100%; justify-content: center; text-align: center; }
+        @media (min-width: 640px) { .membership-pill { width: auto; } }
+      `}</style>
 
       {/* Hero */}
       <section style={{ position: 'relative', overflow: 'hidden', padding: '7rem 0', background: 'linear-gradient(135deg, #0F172A, #1A1A2E)' }}>
@@ -99,17 +112,16 @@ export default function MembershipPage() {
               Browse communities
             </Link>
           </div>
-          <p style={{ color: '#6B7280', fontSize: 13, marginTop: 24 }}>30-day free trial · No card required · Cancel anytime</p>
         </div>
       </section>
 
       {/* Stats */}
       <section style={{ padding: '3.5rem 0', background: '#fff', borderBottom: '1px solid #F3F4F6' }}>
         <div style={{ maxWidth: '64rem', margin: '0 auto', padding: '0 1.25rem' }}>
-          <div className="r-grid-stats">
+          <div className="membership-stats-grid">
             {stats.map((s, i) => (
-              <div key={i} style={{ textAlign: 'center' }}>
-                <p style={{ fontSize: 'clamp(1.75rem, 4vw, 2.5rem)', fontWeight: 800, color: s.color, fontFamily: 'Nunito, sans-serif', marginBottom: 4 }}>{s.value}</p>
+              <div key={i} className="membership-stat-card" style={{ textAlign: 'center' }}>
+                <p className="membership-stat-value" style={{ fontSize: 'clamp(1.75rem, 4vw, 2.5rem)', fontWeight: 800, color: s.color, fontFamily: 'Nunito, sans-serif', marginBottom: 4 }}>{s.value}</p>
                 <p style={{ fontSize: 13, color: '#6B7280' }}>{s.label}</p>
               </div>
             ))}
@@ -139,46 +151,47 @@ export default function MembershipPage() {
         </div>
       </section>
 
-      {/* Testimonials */}
-      <section style={{ padding: '5rem 0', background: '#fff' }}>
-        <div style={{ maxWidth: '72rem', margin: '0 auto', padding: '0 1.25rem' }}>
-          <div style={{ textAlign: 'center', marginBottom: 56 }}>
-            <p style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#2EAF6F', marginBottom: 12 }}>Member voices</p>
-            <h2 style={{ fontSize: 'clamp(1.5rem, 4vw, 2.25rem)', fontWeight: 800, color: '#111827', fontFamily: 'Nunito, sans-serif' }}>Trusted by real communities</h2>
-          </div>
-          <div className="r-grid-3">
-            {testimonials.map((t, i) => (
-              <div key={i} style={{ borderRadius: 24, padding: 24, display: 'flex', flexDirection: 'column', gap: 16, background: '#F9FAFB', border: '1px solid #F3F4F6' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                  <div style={{ width: 48, height: 48, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 900, color: '#fff', flexShrink: 0, background: `linear-gradient(135deg, ${t.color}, ${t.color}99)` }}>
-                    {t.initial}
+      {SHOW_MEMBER_VOICES && (
+        <section style={{ padding: '5rem 0', background: '#fff' }}>
+          <div style={{ maxWidth: '72rem', margin: '0 auto', padding: '0 1.25rem' }}>
+            <div style={{ textAlign: 'center', marginBottom: 56 }}>
+              <p style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#2EAF6F', marginBottom: 12 }}>Member voices</p>
+              <h2 style={{ fontSize: 'clamp(1.5rem, 4vw, 2.25rem)', fontWeight: 800, color: '#111827', fontFamily: 'Nunito, sans-serif' }}>Trusted by real communities</h2>
+            </div>
+            <div className="r-grid-3">
+              {testimonials.map((t, i) => (
+                <div key={i} style={{ borderRadius: 24, padding: 24, display: 'flex', flexDirection: 'column', gap: 16, background: '#F9FAFB', border: '1px solid #F3F4F6' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div style={{ width: 48, height: 48, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 900, color: '#fff', flexShrink: 0, background: `linear-gradient(135deg, ${t.color}, ${t.color}99)` }}>
+                      {t.initial}
+                    </div>
+                    <div>
+                      <p style={{ fontWeight: 700, color: '#111827', fontSize: 14 }}>{t.name}</p>
+                      <p style={{ fontSize: 12, color: '#9CA3AF' }}>{t.community}</p>
+                    </div>
                   </div>
-                  <div>
-                    <p style={{ fontWeight: 700, color: '#111827', fontSize: 14 }}>{t.name}</p>
-                    <p style={{ fontSize: 12, color: '#9CA3AF' }}>{t.community}</p>
+                  <p style={{ fontSize: 14, color: '#4B5563', lineHeight: 1.7, fontStyle: 'italic', flex: 1 }}>"{t.quote}"</p>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, padding: '4px 10px', borderRadius: 999, background: 'rgba(46,175,111,0.1)', color: '#2EAF6F' }}>🛡 {t.tier}</span>
                   </div>
                 </div>
-                <p style={{ fontSize: 14, color: '#4B5563', lineHeight: 1.7, fontStyle: 'italic', flex: 1 }}>"{t.quote}"</p>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 12, fontWeight: 700, padding: '4px 10px', borderRadius: 999, background: 'rgba(46,175,111,0.1)', color: '#2EAF6F' }}>🛡 {t.tier}</span>
-                </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
+      )}
 
       {/* Four pillars */}
       <section style={{ padding: '3rem 0', background: '#F9FAFB', borderTop: '1px solid #F3F4F6' }}>
         <div style={{ maxWidth: '48rem', margin: '0 auto', padding: '0 1.25rem' }}>
-          <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 16 }}>
+          <div className="membership-pillars">
             {[
               { label: 'Trust',        color: '#2EAF6F', icon: Shield },
               { label: 'Transparency', color: '#2eafaf', icon: Globe },
               { label: 'Community',    color: '#8B5CF6', icon: Users },
               { label: 'Progress',     color: '#F59E0B', icon: TrendingUp },
             ].map(pill => (
-              <div key={pill.label} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 20px', borderRadius: 999, background: `${pill.color}10`, border: `1px solid ${pill.color}25` }}>
+              <div key={pill.label} className="membership-pill" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 20px', borderRadius: 999, background: `${pill.color}10`, border: `1px solid ${pill.color}25` }}>
                 <pill.icon size={15} style={{ color: pill.color }} />
                 <span style={{ fontWeight: 700, color: '#1F2937', fontSize: 14 }}>{pill.label}</span>
               </div>
@@ -192,13 +205,13 @@ export default function MembershipPage() {
         <div style={{ position: 'absolute', top: 0, right: 0, width: 320, height: 320, borderRadius: '50%', filter: 'blur(60px)', opacity: 0.15, background: '#2EAF6F', pointerEvents: 'none' }} />
         <div style={{ maxWidth: '48rem', margin: '0 auto', padding: '0 1.25rem', textAlign: 'center', position: 'relative' }}>
           <h2 style={{ fontSize: 'clamp(1.5rem, 4vw, 2.5rem)', fontWeight: 800, color: '#fff', marginBottom: 16, fontFamily: 'Nunito, sans-serif' }}>Ready to join?</h2>
-          <p style={{ color: '#D1D5DB', fontSize: 17, marginBottom: 32 }}>Start your 30-day free trial today. No card required.</p>
+          <p style={{ color: '#D1D5DB', fontSize: 17, marginBottom: 32 }}>Choose the membership plan that fits your community goals and start saving together.</p>
           <div className="r-flex-center">
             <Link to="/pricing" style={{ padding: '14px 32px', borderRadius: 16, fontWeight: 700, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, textDecoration: 'none', background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', boxShadow: '0 4px 20px rgba(46,175,111,0.4)' }}>
               See membership plans <ArrowRight size={18} />
             </Link>
             <Link to="/get-started" style={{ padding: '14px 32px', borderRadius: 16, fontWeight: 700, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', textDecoration: 'none', border: '1px solid rgba(255,255,255,0.2)' }}>
-              Start free trial
+              Get started
             </Link>
           </div>
         </div>

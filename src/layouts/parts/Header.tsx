@@ -2,6 +2,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { Menu, X, LayoutDashboard, LogOut, FileText } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
+import { logout as sessionLogout } from '@/lib/session';
 
 // Auth state is always deferred — never read localStorage during SSR/first render.
 // `isMounted` starts false so the first client render is identical to the SSR
@@ -30,11 +31,13 @@ function useAuthUser() {
 }
 
 function handleLogout() {
-  try {
-    localStorage.removeItem('padihub_user');
-    sessionStorage.removeItem('padihub_session');
-  } catch { /* ignore */ }
-  window.location.href = '/';
+  // Uses the shared session helper (calls the backend logout endpoint for
+  // audit logging, then clears both storages) — see src/lib/session.ts —
+  // instead of clearing storage directly, so this stays in sync with the
+  // dashboard's logout button.
+  void sessionLogout().finally(() => {
+    window.location.href = '/';
+  });
 }
 
 export default function Header() {

@@ -65,10 +65,6 @@ const sections = [
         text: 'When you join a community, your profile information, Trust Score™, and contribution history are visible to other members of that community. Community leaders have additional visibility into member activity.',
       },
       {
-        subtitle: 'PadiHub Passport™',
-        text: 'If you choose to share your PadiHub Passport™, the information it contains (Trust Score™, communities, achievements) will be accessible to anyone with the share link.',
-      },
-      {
         subtitle: 'Service Providers',
         text: 'We share information with trusted third-party service providers who help us operate PadiHub, including cloud hosting, email delivery, and analytics services. These providers are contractually bound to protect your data.',
       },
@@ -122,7 +118,7 @@ const sections = [
       },
       {
         subtitle: 'Objection & Restriction',
-        text: 'You have the right to object to certain processing of your data and to request that we restrict processing in certain circumstances. Contact us at privacy@padihub.com to exercise these rights.',
+        text: 'You have the right to object to certain processing of your data and to request that we restrict processing in certain circumstances. Contact us at hello@padihub.com to exercise these rights.',
       },
       {
         subtitle: 'UK & Nigeria Residents',
@@ -178,11 +174,11 @@ const sections = [
     content: [
       {
         subtitle: 'Privacy Team',
-        text: 'If you have questions about this Privacy Policy or how we handle your personal information, please contact our Privacy Team at privacy@padihub.com.',
+        text: 'If you have questions about this Privacy Policy or how we handle your personal information, please contact our Privacy Team at hello@padihub.com.',
       },
       {
         subtitle: 'Data Protection Officer',
-        text: 'Our Data Protection Officer can be reached at dpo@padihub.com. For UK residents, you also have the right to lodge a complaint with the Information Commissioner\'s Office (ICO).',
+        text: 'Our Data Protection Officer can be reached at hello@padihub.com. For UK residents, you also have the right to lodge a complaint with the Information Commissioner\'s Office (ICO).',
       },
     ],
   },
@@ -305,7 +301,7 @@ export default function PrivacyPage() {
               <div
                 className="mt-8 rounded-3xl p-6 text-center" style={{ background: 'linear-gradient(135deg, #0F172A, #1A1A2E)' }}>
                 <p className="text-white font-bold mb-2" style={{ fontFamily: 'Nunito, sans-serif' }}>Questions about your privacy?</p>
-                <p className="text-gray-400 text-sm mb-4">Our team is here to help. Reach us at privacy@padihub.com</p>
+                <p className="text-gray-400 text-sm mb-4">Our team is here to help. Reach us at hello@padihub.com</p>
                 <div className="r-flex-center">
                   <Link to="/contact" className="px-6 py-3 rounded-2xl text-sm font-bold text-white transition-all hover:opacity-90"
                     style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}>

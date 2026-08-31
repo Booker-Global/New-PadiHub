@@ -4,6 +4,9 @@ import { Shield, Users, TrendingUp, Heart, ArrowRight, Globe, Zap, CheckCircle }
 
 const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/about#webpage\",\"name\":\"About PadiHub — Our Mission & Story\",\"url\":\"https://padihub.com/about\",\"description\":\"PadiHub was built to make community savings accessible, transparent and rewarding for everyone. Learn about our mission, values and the team behind it.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"}}";
 
+// Hidden until real team profiles are ready to publish.
+const SHOW_TEAM_SECTION = false;
+
 
 const stats = [
   { value: 'Transparent groups', label: 'Track contributions, payouts and shared records in one place.', color: '#2EAF6F' },
@@ -52,14 +55,6 @@ const team = [
   { name: 'Kwame Asante',    role: 'Head of Product',         location: 'Accra & London', initial: 'K', color: '#8B5CF6' },
   { name: 'Priya Sharma',    role: 'Head of Trust & Safety',  location: 'London',         initial: 'P', color: '#EF4444' },
   { name: 'Emeka Obi',       role: 'Head of Engineering',     location: 'Lagos',          initial: 'E', color: '#2EAF6F' },
-];
-
-const milestones = [
-  { year: '2022', title: 'The idea', desc: 'PadiHub was conceived after our founders experienced the pain of disorganised community savings first-hand.' },
-  { year: '2023', title: 'Listening first', desc: 'We spent time learning how community organisers and members keep savings groups running, and where trust can break down.' },
-  { year: '2024', title: 'Designing the platform', desc: 'We shaped the early product around contribution tracking, shared rules, and transparent payouts.' },
-  { year: '2025', title: 'Preparing for launch', desc: 'We refined the core experience so groups can start with clear expectations and better visibility.' },
-  { year: '2026', title: 'The future', desc: 'PadiHub Passport™ and Community DNA™ continue to guide how we build trusted community infrastructure.' },
 ];
 
 export default function AboutPage() {
@@ -151,7 +146,6 @@ export default function AboutPage() {
             <div className="r-grid-2">
               {[
                 { icon: Shield, label: 'Trust Score™',    desc: 'Reputation that travels with you',     color: '#2EAF6F' },
-                { icon: Globe,  label: 'Passport™',       desc: 'Your portable community identity',     color: '#2eafaf' },
                 { icon: Zap,    label: 'Governance',      desc: 'Democratic community decisions',       color: '#8B5CF6' },
               ].map((f, i) => (
                 <div key={i} style={{ borderRadius: 24, padding: 20, background: `${f.color}08`, border: `1px solid ${f.color}20` }}>
@@ -160,35 +154,6 @@ export default function AboutPage() {
                   </div>
                   <p style={{ fontWeight: 700, color: '#111827', fontSize: 14, marginBottom: 4 }}>{f.label}</p>
                   <p style={{ fontSize: 12, color: '#6B7280', lineHeight: 1.5 }}>{f.desc}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Timeline */}
-      <section style={{ padding: '5rem 0', background: '#F9FAFB' }}>
-        <div style={{ maxWidth: '48rem', margin: '0 auto', padding: '0 1.25rem' }}>
-          <div style={{ textAlign: 'center', marginBottom: 56 }}>
-            <p style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#2EAF6F', marginBottom: 12 }}>Our Journey</p>
-            <h2 style={{ fontSize: 'clamp(1.5rem, 4vw, 2.25rem)', fontWeight: 800, color: '#111827', fontFamily: 'Nunito, sans-serif' }}>From idea to infrastructure</h2>
-          </div>
-          <div className="about-timeline" style={{ position: 'relative' }}>
-            <div className="about-timeline-line" style={{ position: 'absolute', top: 0, bottom: 0, width: 2, background: 'linear-gradient(180deg, #2EAF6F, #F59E0B)' }} />
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 32 }}>
-              {milestones.map((m, i) => (
-                <div key={i} className="about-timeline-item" style={{ display: 'flex', gap: 16, position: 'relative' }}>
-                  <div className="about-timeline-dot" style={{ position: 'absolute', top: 4, width: 24, height: 24, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid #fff', background: 'linear-gradient(135deg, #2EAF6F, #F59E0B)' }}>
-                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#fff' }} />
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0, borderRadius: 24, padding: 20, background: '#fff', border: '1px solid #F3F4F6', boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }}>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                      <span style={{ fontSize: 12, fontWeight: 700, padding: '4px 12px', borderRadius: 999, background: 'rgba(46,175,111,0.1)', color: '#2EAF6F' }}>{m.year}</span>
-                      <h3 style={{ fontWeight: 800, color: '#111827', fontFamily: 'Nunito, sans-serif', wordBreak: 'break-word' }}>{m.title}</h3>
-                    </div>
-                    <p style={{ fontSize: 13, color: '#6B7280', lineHeight: 1.6 }}>{m.desc}</p>
-                  </div>
                 </div>
               ))}
             </div>
@@ -217,30 +182,31 @@ export default function AboutPage() {
         </div>
       </section>
 
-      {/* Team */}
-      <section style={{ padding: '5rem 0', background: '#F9FAFB' }}>
-        <div style={{ maxWidth: '72rem', margin: '0 auto', padding: '0 1.25rem' }}>
-          <div style={{ textAlign: 'center', marginBottom: 56 }}>
-            <p style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#2EAF6F', marginBottom: 12 }}>The People</p>
-            <h2 style={{ fontSize: 'clamp(1.5rem, 4vw, 2.25rem)', fontWeight: 800, color: '#111827', marginBottom: 16, fontFamily: 'Nunito, sans-serif' }}>Meet the team</h2>
-            <p style={{ color: '#6B7280', maxWidth: '36rem', margin: '0 auto' }}>A diverse team across the UK and Nigeria, united by a shared belief in the power of community.</p>
-          </div>
-          <div className="r-grid-3">
-            {team.map((member, i) => (
-              <div key={i} style={{ borderRadius: 24, padding: 24, background: '#fff', textAlign: 'center', border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
-                <div style={{ width: 64, height: 64, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, fontWeight: 900, color: '#fff', margin: '0 auto 16px', background: `linear-gradient(135deg, ${member.color}, ${member.color}99)`, flexShrink: 0 }}>
-                  {member.initial}
+      {SHOW_TEAM_SECTION && (
+        <section style={{ padding: '5rem 0', background: '#F9FAFB' }}>
+          <div style={{ maxWidth: '72rem', margin: '0 auto', padding: '0 1.25rem' }}>
+            <div style={{ textAlign: 'center', marginBottom: 56 }}>
+              <p style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#2EAF6F', marginBottom: 12 }}>The People</p>
+              <h2 style={{ fontSize: 'clamp(1.5rem, 4vw, 2.25rem)', fontWeight: 800, color: '#111827', marginBottom: 16, fontFamily: 'Nunito, sans-serif' }}>Meet the team</h2>
+              <p style={{ color: '#6B7280', maxWidth: '36rem', margin: '0 auto' }}>A diverse team across the UK and Nigeria, united by a shared belief in the power of community.</p>
+            </div>
+            <div className="r-grid-3">
+              {team.map((member, i) => (
+                <div key={i} style={{ borderRadius: 24, padding: 24, background: '#fff', textAlign: 'center', border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
+                  <div style={{ width: 64, height: 64, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, fontWeight: 900, color: '#fff', margin: '0 auto 16px', background: `linear-gradient(135deg, ${member.color}, ${member.color}99)`, flexShrink: 0 }}>
+                    {member.initial}
+                  </div>
+                  <h3 style={{ fontWeight: 800, color: '#111827', marginBottom: 4, fontFamily: 'Nunito, sans-serif' }}>{member.name}</h3>
+                  <p style={{ fontSize: 13, fontWeight: 600, color: member.color, marginBottom: 4 }}>{member.role}</p>
+                  <p style={{ fontSize: 12, color: '#9CA3AF', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+                    <Globe size={11} /> {member.location}
+                  </p>
                 </div>
-                <h3 style={{ fontWeight: 800, color: '#111827', marginBottom: 4, fontFamily: 'Nunito, sans-serif' }}>{member.name}</h3>
-                <p style={{ fontSize: 13, fontWeight: 600, color: member.color, marginBottom: 4 }}>{member.role}</p>
-                <p style={{ fontSize: 12, color: '#9CA3AF', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
-                  <Globe size={11} /> {member.location}
-                </p>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
+      )}
 
       {/* Four pillars */}
       <section style={{ padding: '3rem 0', background: '#fff', borderTop: '1px solid #F3F4F6' }}>
@@ -269,7 +235,7 @@ export default function AboutPage() {
           <p style={{ color: '#D1D5DB', fontSize: 17, marginBottom: 32 }}>Bring your group together with transparent records, secure payment flows, and tools designed for trust.</p>
           <div className="r-flex-center">
             <Link to="/get-started" style={{ padding: '14px 32px', borderRadius: 16, fontWeight: 700, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, textDecoration: 'none', background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', boxShadow: '0 4px 20px rgba(46,175,111,0.4)' }}>
-              Get started free <ArrowRight size={18} />
+              Get started <ArrowRight size={18} />
             </Link>
             <Link to="/savings-groups" style={{ padding: '14px 32px', borderRadius: 16, fontWeight: 700, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, textDecoration: 'none', border: '1px solid rgba(255,255,255,0.2)' }}>
               Browse communities

@@ -25,6 +25,6 @@ export const EMAIL_VERIFY_TTL   = 24 * 60 * 60 * 1000; // 24 hours
 export const PASSWORD_RESET_TTL = 2  * 60 * 60 * 1000; // 2 hours
 export const INVITE_TTL         = 7  * 24 * 60 * 60 * 1000; // 7 days
 export const BCRYPT_ROUNDS      = 12;
-export const TRUST_SCORE_INITIAL = 50;
+export const TRUST_SCORE_INITIAL = 0;
 export const TRUST_SCORE_MAX     = 100;
 export const TRUST_SCORE_MIN     = 0;

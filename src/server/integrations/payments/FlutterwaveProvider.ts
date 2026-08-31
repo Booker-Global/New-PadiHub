@@ -164,17 +164,25 @@ export class FlutterwaveProvider implements IPaymentProvider {
   }
 
   async createSubscription(params: {
-    customerId: string; userId: string; email: string; currency: string;
+    customerId: string; userId: string; email: string; currency: string; tier?: 'pro' | 'elite';
   }): Promise<SubscriptionResult> {
-    const planId = process.env.FLUTTERWAVE_PLAN_ID_NG_MONTHLY;
-    if (!planId) throw new Error('FLUTTERWAVE_PLAN_ID_NG_MONTHLY environment variable is not set.');
+    // Pro Group (₦5,000/mo) and Elite Group (₦10,000/mo) map to separate
+    // Flutterwave payment plans — see SUBSCRIPTION_TIERS in
+    // src/server/lib/constants.ts for the tier definitions.
+    const planId = params.tier === 'elite'
+      ? process.env.FLUTTERWAVE_PLAN_ID_NG_ELITE_MONTHLY
+      : process.env.FLUTTERWAVE_PLAN_ID_NG_MONTHLY;
+    if (!planId) {
+      throw new Error(`${params.tier === 'elite' ? 'FLUTTERWAVE_PLAN_ID_NG_ELITE_MONTHLY' : 'FLUTTERWAVE_PLAN_ID_NG_MONTHLY'} environment variable is not set.`);
+    }
 
     const renewalDate = new Date();
     renewalDate.setMonth(renewalDate.getMonth() + 1);
 
     return {
+      // No free trial is offered — subscriptions are active (billed) immediately.
       subscriptionId: `flw_sub_${params.userId}_${Date.now()}`,
-      status: 'trialing',
+      status: 'active',
       renewalDate,
     };
   }

@@ -187,7 +187,7 @@ export default function Footer() {
             <nav aria-label="Footer community links">
               {[
                 { to: '/trust',          label: 'Trust Score™' },
-                { to: '/savings-groups', label: 'Savings Groups' },
+                { to: '/groups/search',  label: 'Savings Groups' },
               ].map(({ to, label }) => (
                 <Link key={to} to={to}>{label}</Link>
               ))}
@@ -199,7 +199,7 @@ export default function Footer() {
             <p className="ftr-col-head">Support</p>
             <nav aria-label="Footer support links">
               {[
-                { to: '/help',    label: 'Help Centre' },
+                { to: '/help',    label: 'Help' },
                 { to: '/about',   label: 'About' },
                 { to: '/contact', label: 'Contact' },
                 { to: '/faq',     label: 'FAQ' },

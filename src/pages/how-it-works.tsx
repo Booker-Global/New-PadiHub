@@ -6,6 +6,11 @@ import { Button } from '@/components/ui/button';
 
 const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/how-it-works#webpage\",\"name\":\"How PadiHub Works — Rotating Savings Made Simple\",\"url\":\"https://padihub.com/how-it-works\",\"description\":\"Learn how PadiHub works — register, subscribe, create or join a savings group, contribute monthly and receive your payout. Six simple steps.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"}}";
 
+const planDetails = [
+  'Pro Group: £4.99/month (UK) or ₦5,000/month (Nigeria). Create ONE savings group; be a member of up to 5 groups total.',
+  'Elite Group: £9.99/month (UK) or ₦10,000/month (Nigeria). Create up to SEVEN savings groups; be a member of up to 10 groups total.',
+];
+
 
 const stepsMeta = [
   {
@@ -29,6 +34,36 @@ const stepsMeta = [
 ];
 
 export default function HowItWorksPage() {
+  const steps = how_it_works.steps.map(step => {
+    if (step.title === 'Register') {
+      return {
+        ...step,
+        details: step.details.flatMap((detail, detailIndex) => detailIndex === 1
+          ? [detail, 'Verify your identity']
+          : [detail]),
+      };
+    }
+
+    if (step.title === 'Subscribe') {
+      return {
+        ...step,
+        desc: 'Choose the monthly plan that matches how you want to save and grow with your community.',
+        details: [...planDetails, 'Cancel anytime'],
+      };
+    }
+
+    if (step.title === 'Contribute Monthly') {
+      return {
+        ...step,
+        details: step.details.map((detail, detailIndex) => detailIndex === 1
+          ? 'Pay securely'
+          : detail),
+      };
+    }
+
+    return step;
+  });
+
   return (
     <>
       <Helmet>
@@ -72,7 +107,7 @@ export default function HowItWorksPage() {
       <section style={{ padding: '6rem 0', background: '#fff' }}>
         <div style={{ maxWidth: '64rem', margin: '0 auto', padding: '0 1.5rem' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4rem' }}>
-            {how_it_works.steps.map((step, i) => {
+            {steps.map((step, i) => {
               const Icon = stepsMeta[i].icon;
               return (
                 <div key={i} className="hiw-step">

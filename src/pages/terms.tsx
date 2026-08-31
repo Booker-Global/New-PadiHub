@@ -1,8 +1,20 @@
+import { useEffect, useState } from 'react';
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { Link } from 'react-router-dom';
 import { FileText, Shield, Users, AlertTriangle, ChevronRight } from 'lucide-react';
+import { getValidSession } from '@/lib/session';
 
 const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/terms#webpage\",\"name\":\"Terms of Service — PadiHub\",\"url\":\"https://padihub.com/terms\",\"description\":\"PadiHub's Terms of Service — the rules and agreements that govern your use of the world's trusted Community Savings Infrastructure Platform.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"}}";
+
+type TermsRegion = 'UK' | 'NG';
+type GeoResponse = { region?: 'UK' | 'NG' | 'BOTH' };
+type ProfileResponse = { success?: boolean; data?: { country?: string | null } };
+
+function normalizeProfileCountry(country?: string | null): TermsRegion | null {
+  if (country === 'NG') return 'NG';
+  if (country === 'GB' || country === 'UK') return 'UK';
+  return null;
+}
 
 
 const sections = [
@@ -54,11 +66,9 @@ const sections = [
     content: [
       {
         subtitle: 'Subscription Plans',
-        text: 'PadiHub offers paid membership plans for the United Kingdom (£4.99/month or £49.99/year) and Nigeria (₦3,500/month or ₦35,000/year). Prices are subject to change with 30 days\' notice.',
-      },
-      {
-        subtitle: 'Free Trial',
-        text: 'New members receive a 30-day free trial. You will not be charged during the trial period. You may cancel at any time before the trial ends without charge.',
+        text: (region: TermsRegion) => region === 'NG'
+          ? 'PadiHub offers exactly two monthly-only subscription tiers with no annual option and no free trial: Pro Group at ₦5,000/month, and Elite Group at ₦10,000/month. Pro Group lets a member create ONE savings group and be a member of up to 5 groups total. Elite Group lets a member create up to SEVEN savings groups and be a member of up to 10 groups total.'
+          : 'PadiHub offers exactly two monthly-only subscription tiers with no annual option and no free trial: Pro Group at £4.99/month, and Elite Group at £9.99/month. Pro Group lets a member create ONE savings group and be a member of up to 5 groups total. Elite Group lets a member create up to SEVEN savings groups and be a member of up to 10 groups total.',
       },
       {
         subtitle: 'Cancellation',
@@ -102,7 +112,7 @@ const sections = [
     content: [
       {
         subtitle: 'PadiHub IP',
-        text: 'PadiHub™, Trust Score™, PadiHub Passport™, and Community DNA™ are trademarks of PadiHub. The platform, its design, and all original content are protected by copyright and other intellectual property laws.',
+        text: 'PadiHub™, Trust Score™, and Community DNA™ are trademarks of PadiHub. The platform, its design, and all original content are protected by copyright and other intellectual property laws.',
       },
       {
         subtitle: 'Your Content',
@@ -179,6 +189,7 @@ const sections = [
     title: '9. Identity Verification Fee (UK Users)',
     icon: AlertTriangle,
     color: '#F59E0B',
+    region: 'UK' as TermsRegion,
     content: [
       {
         subtitle: 'One-Time Fee',
@@ -186,11 +197,11 @@ const sections = [
       },
       {
         subtitle: 'How It Appears on Your Invoice',
-        text: 'The fee will appear on your invoice as "Identity Verification Fee (one-time)". It is added automatically when you initiate identity verification and will be collected together with your first subscription payment.',
+        text: 'The fee will appear on your invoice as "Identity Verification Fee (one-time)". It is added automatically when you initiate identity verification and will be collected together with your first monthly subscription payment.',
       },
       {
         subtitle: 'First Invoice Total',
-        text: 'Your first month\'s invoice will total £6.49 (£4.99 subscription + £1.50 identity verification fee). All subsequent monthly invoices will be £4.99. Annual plan pricing is unaffected by this fee.',
+        text: 'Your first invoice will include your selected monthly plan plus the £1.50 identity verification fee. If you subscribe to Pro Group, your first invoice total will be £6.49. If you subscribe to Elite Group, your first invoice total will be £11.49. There is no annual billing option and no free trial.',
       },
       {
         subtitle: 'Non-Refundable',
@@ -203,6 +214,7 @@ const sections = [
     title: '10. Identity Verification Fee (Nigerian Users)',
     icon: Shield,
     color: '#2eafaf',
+    region: 'NG' as TermsRegion,
     content: [
       {
         subtitle: 'No Charge for Nigerian Users',
@@ -210,7 +222,7 @@ const sections = [
       },
       {
         subtitle: 'Standard Subscription Pricing',
-        text: 'Nigerian users pay the standard subscription fee of ₦3,500/month or ₦35,000/year. No identity verification surcharge is applied at any point.',
+        text: 'Nigerian users can subscribe to Pro Group at ₦5,000/month or Elite Group at ₦10,000/month. Pro Group lets a member create ONE savings group and be a member of up to 5 groups total. Elite Group lets a member create up to SEVEN savings groups and be a member of up to 10 groups total. There is no annual billing option, no free trial, and no identity verification surcharge.',
       },
     ],
   },
@@ -242,17 +254,52 @@ const sections = [
     content: [
       {
         subtitle: 'Legal Team',
-        text: 'For questions about these Terms of Service, please contact our Legal Team at legal@padihub.com.',
+        text: 'For questions about these Terms of Service, please contact our Legal Team at hello@padihub.com.',
       },
       {
         subtitle: 'General Support',
-        text: 'For general support and account questions, visit our Help Centre at padihub.com/help or contact support@padihub.com.',
+        text: 'For general support and account questions, visit our Help Centre at padihub.com/help or contact hello@padihub.com.',
       },
     ],
   },
 ];
 
+function renumberTitle(title: string, position: number) {
+  return title.replace(/^\d+\./, `${position}.`);
+}
+
 export default function TermsPage() {
+  const [region, setRegion] = useState<TermsRegion>('UK');
+
+  useEffect(() => {
+    let active = true;
+    const session = getValidSession();
+
+    const geoRequest = window.fetch('/api/geo')
+      .then(response => response.ok ? response.json() as Promise<GeoResponse> : null)
+      .catch(() => null);
+
+    const profileRequest = session?.token
+      ? window.fetch('/api/users/profile', { headers: { Authorization: 'Bearer ' + session.token } })
+        .then(response => response.ok ? response.json() as Promise<ProfileResponse> : null)
+        .catch(() => null)
+      : Promise.resolve<ProfileResponse | null>(null);
+
+    void Promise.all([geoRequest, profileRequest]).then(([geo, profile]) => {
+      if (!active) return;
+      const profileRegion = normalizeProfileCountry(profile?.data?.country);
+      setRegion(profileRegion ?? (geo?.region === 'NG' ? 'NG' : 'UK'));
+    });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const visibleSections = sections
+    .filter(section => !('region' in section) || section.region === region)
+    .map((section, index) => ({ ...section, title: renumberTitle(section.title, index + 1) }));
+
   return (
     <>
       <Helmet>
@@ -320,7 +367,7 @@ export default function TermsPage() {
               <div className="sticky top-24 rounded-3xl p-6 bg-white" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
                 <h2 className="text-sm font-extrabold text-gray-900 mb-4 uppercase tracking-wider" style={{ fontFamily: 'Nunito, sans-serif' }}>Contents</h2>
                 <nav className="flex flex-col gap-1">
-                  {sections.map(s => (
+                  {visibleSections.map(s => (
                     <a key={s.id} href={`#${s.id}`}
                       className="flex items-center gap-2 py-2 px-3 rounded-xl text-xs font-semibold text-gray-500 hover:text-gray-900 hover:bg-gray-50 transition-colors">
                       <ChevronRight size={12} />
@@ -334,7 +381,7 @@ export default function TermsPage() {
             {/* Main content */}
             <main className="flex-1 min-w-0">
               <div className="flex flex-col gap-8">
-                {sections.map((section) => (
+                {visibleSections.map((section) => (
                   <div key={section.id} id={section.id}
                    
                     className="rounded-3xl p-6 bg-white" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
@@ -349,7 +396,7 @@ export default function TermsPage() {
                       {section.content.map((item, i) => (
                         <div key={i}>
                           <h3 className="text-sm font-bold text-gray-900 mb-1">{item.subtitle}</h3>
-                          <p className="text-sm text-gray-600 leading-relaxed">{item.text}</p>
+                          <p className="text-sm text-gray-600 leading-relaxed">{typeof item.text === 'function' ? item.text(region) : item.text}</p>
                         </div>
                       ))}
                     </div>
@@ -361,7 +408,7 @@ export default function TermsPage() {
               <div
                 className="mt-8 rounded-3xl p-6 text-center" style={{ background: 'linear-gradient(135deg, #0F172A, #1A1A2E)' }}>
                 <p className="text-white font-bold mb-2" style={{ fontFamily: 'Nunito, sans-serif' }}>Questions about these terms?</p>
-                <p className="text-gray-400 text-sm mb-4">Our team is happy to clarify anything. Reach us at legal@padihub.com</p>
+                <p className="text-gray-400 text-sm mb-4">Our team is happy to clarify anything. Reach us at hello@padihub.com</p>
                 <div className="r-flex-center">
                   <Link to="/contact" className="px-6 py-3 rounded-2xl text-sm font-bold text-white transition-all hover:opacity-90"
                     style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}>

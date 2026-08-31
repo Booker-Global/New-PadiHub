@@ -8,22 +8,72 @@ import { validate } from '../middleware/validate.js';
 import { pp } from '../lib/reqHelpers.js';
 import { notificationService } from '../services/notificationService.js';
 import {
+  sendSupportTicketSubmissionEmail,
   sendSupportTicketReceivedEmail,
   sendSupportTicketUpdatedEmail,
   sendSupportTicketClosedEmail,
 } from '../integrations/email/emailService.js';
 
+const supportCategories = ['payments', 'groups', 'subscriptions', 'technical', 'general'] as const;
+const supportPriorities = ['low', 'medium', 'high', 'urgent'] as const;
+
+type SupportCategory = typeof supportCategories[number];
+type SupportPriority = typeof supportPriorities[number];
+
+const supportCategoryLabels: Record<SupportCategory, string> = {
+  payments: 'Payments',
+  groups: 'Savings groups',
+  subscriptions: 'Subscription',
+  technical: 'Technical support',
+  general: 'General question',
+};
+
 const createSchema = z.object({
   subject:     z.string().min(5).max(255),
-  category:    z.enum(['payments', 'groups', 'subscriptions', 'technical', 'general']),
+  category:    z.enum(supportCategories),
   description: z.string().min(10),
-  priority:    z.enum(['low', 'medium', 'high', 'urgent']).optional(),
+  priority:    z.enum(supportPriorities).optional(),
+});
+
+const publicCreateSchema = z.object({
+  firstName: z.string().min(1).max(100),
+  lastName:  z.string().min(1).max(100),
+  email:     z.string().email(),
+  subject:   z.string().min(1).max(255),
+  category:  z.enum(supportCategories),
+  message:   z.string().min(10).max(5000),
+  priority:  z.enum(supportPriorities).optional(),
 });
 
 const updateSchema = z.object({
   description: z.string().min(10).optional(),
-  priority:    z.enum(['low', 'medium', 'high', 'urgent']).optional(),
+  priority:    z.enum(supportPriorities).optional(),
 });
+
+function ticketRefFromId(id: string): string {
+  return `TKT-${id.slice(0, 8).toUpperCase()}`;
+}
+
+async function notifySupportInbox(data: {
+  ticketRef: string;
+  requester: { firstName: string; lastName: string; email: string; userId?: string };
+  subject: string;
+  category: SupportCategory;
+  priority: SupportPriority;
+  message: string;
+}) {
+  await sendSupportTicketSubmissionEmail({
+    ticketRef: data.ticketRef,
+    firstName: data.requester.firstName,
+    lastName: data.requester.lastName,
+    email: data.requester.email,
+    subject: data.subject,
+    ticketAbout: supportCategoryLabels[data.category],
+    priority: data.priority,
+    message: data.message,
+    userId: data.requester.userId,
+  });
+}
 
 export const supportController = {
   list: async (req: Request, res: Response, next: NextFunction) => {
@@ -54,22 +104,67 @@ export const supportController = {
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const id        = uuidv4();
-        const ticketRef = `TKT-${id.slice(0, 8).toUpperCase()}`;
+        const ticketRef = ticketRefFromId(id);
+        const priority  = (req.body.priority as SupportPriority | undefined) ?? 'medium';
         await db.insert(schema.supportTickets).values({
           id,
           user_id:     req.user!.userId,
           subject:     req.body.subject as string,
-          category:    req.body.category as 'payments',
+          category:    req.body.category as SupportCategory,
           description: req.body.description as string,
-          priority:    (req.body.priority as 'medium' | undefined) ?? 'medium',
+          priority,
           status:      'open',
         });
 
-        const userRow = await db.select({ email: schema.users.email })
+        const userRow = await db.select({
+          email: schema.users.email,
+          first_name: schema.users.first_name,
+          last_name: schema.users.last_name,
+        })
           .from(schema.users).where(eq(schema.users.id, req.user!.userId)).limit(1);
         if (userRow.length) {
+          await notifySupportInbox({
+            ticketRef,
+            requester: {
+              firstName: userRow[0].first_name,
+              lastName: userRow[0].last_name,
+              email: userRow[0].email,
+              userId: req.user!.userId,
+            },
+            subject: req.body.subject as string,
+            category: req.body.category as SupportCategory,
+            priority,
+            message: req.body.description as string,
+          });
           await sendSupportTicketReceivedEmail(userRow[0].email, ticketRef, req.body.subject as string);
         }
+
+        res.status(201).json({ success: true, data: { id, ticketRef } });
+      } catch (e) { next(e); }
+    },
+  ],
+
+  createPublic: [
+    validate(publicCreateSchema),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const id = uuidv4();
+        const ticketRef = ticketRefFromId(id);
+        const priority = (req.body.priority as SupportPriority | undefined) ?? 'medium';
+
+        await notifySupportInbox({
+          ticketRef,
+          requester: {
+            firstName: req.body.firstName as string,
+            lastName: req.body.lastName as string,
+            email: req.body.email as string,
+          },
+          subject: req.body.subject as string,
+          category: req.body.category as SupportCategory,
+          priority,
+          message: req.body.message as string,
+        });
+        await sendSupportTicketReceivedEmail(req.body.email as string, ticketRef, req.body.subject as string);
 
         res.status(201).json({ success: true, data: { id, ticketRef } });
       } catch (e) { next(e); }

@@ -13,6 +13,12 @@ const createSchema = z.object({
 
 const castSchema = z.object({ decision: z.enum(['approve', 'reject']) });
 
+const proposeSwapSchema = z.object({
+  group_id: z.string().uuid(),
+  target_member_id: z.string().uuid(),
+  note: z.string().max(500).optional(),
+});
+
 export const voteController = {
   list: async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -20,6 +26,20 @@ export const voteController = {
       res.json({ success: true, data });
     } catch (e) { next(e); }
   },
+
+  /** POST /api/votes/payout-swap — propose swapping rotation position with another member */
+  proposeSwap: [
+    validate(proposeSwapSchema),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const body = req.body as z.infer<typeof proposeSwapSchema>;
+        const id = await voteService.proposePayoutSwap(
+          body.group_id, req.user!.userId, body.target_member_id, body.note, ip(req.ip),
+        );
+        res.status(201).json({ success: true, data: { id } });
+      } catch (e) { next(e); }
+    },
+  ],
 
   create: [
     validate(createSchema),

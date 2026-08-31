@@ -29,13 +29,13 @@ export const membershipController = {
     validate(joinSchema),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        await membershipService.join(
+        const data = await membershipService.join(
           req.user!.userId,
           req.body.group_id,
           req.body.invite_token,
           ip(req.ip),
         );
-        res.status(201).json({ success: true, message: 'Joined group successfully.' });
+        res.status(201).json({ success: true, message: data.message, data });
       } catch (e) { next(e); }
     },
   ],
@@ -44,6 +44,22 @@ export const membershipController = {
     try {
       await membershipService.leave(req.user!.userId, pp(req.params.id), ip(req.ip));
       res.json({ success: true, message: 'Left group successfully.' });
+    } catch (e) { next(e); }
+  },
+
+  /** POST /api/memberships/:id/approve — group leader approves a pending join request */
+  approve: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await membershipService.approveJoinRequest(req.user!.userId, pp(req.params.id), ip(req.ip));
+      res.json({ success: true, data });
+    } catch (e) { next(e); }
+  },
+
+  /** POST /api/memberships/:id/reject — group leader rejects a pending join request */
+  reject: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      await membershipService.rejectJoinRequest(req.user!.userId, pp(req.params.id), ip(req.ip));
+      res.json({ success: true, message: 'Join request rejected.' });
     } catch (e) { next(e); }
   },
 

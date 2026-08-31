@@ -118,10 +118,12 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
     { column: 'stripe_identity_session_id',  sqlType: 'VARCHAR(255) NULL' },
     { column: 'bvn_verification_reference',  sqlType: 'VARCHAR(255) NULL' },
     { column: 'last_login_at',               sqlType: 'TIMESTAMP NULL' },
+    { column: 'subscription_tier',           sqlType: "ENUM('pro','elite') NULL" },
   ],
   savings_groups: [
-    { column: 'description', sqlType: 'TEXT NULL' },
-    { column: 'payout_day',  sqlType: 'INT NULL' },
+    { column: 'description',     sqlType: 'TEXT NULL' },
+    { column: 'payout_day',      sqlType: 'INT NULL' },
+    { column: 'min_trust_score', sqlType: 'INT NOT NULL DEFAULT 0' },
   ],
   contributions: [
     { column: 'amount_paid',        sqlType: 'DECIMAL(12,2) NULL' },

@@ -14,6 +14,7 @@ const baseGroupSchema = z.object({
   contribution_frequency: z.enum(['daily', 'weekly', 'monthly']),
   payout_day:             z.number().int().min(0).max(31).optional(),
   maximum_members:        z.number().int().min(2).max(50),
+  min_trust_score:        z.number().int().min(0).max(100).optional(),
   rotation_method:        z.enum(['manual', 'random']),
   strike_threshold:       z.number().int().min(1).optional(),
   suspension_threshold:   z.number().int().min(1).optional(),
@@ -55,6 +56,23 @@ export const groupController = {
   list: async (req: Request, res: Response, next: NextFunction) => {
     try {
       const data = await groupService.list({ status: qsOpt(req.query.status) });
+      res.json({ success: true, data });
+    } catch (e) { next(e); }
+  },
+
+  /**
+   * GET /api/groups/search — public (no auth) group discovery, always scoped
+   * to a single country so members only see groups they're eligible to join
+   * (per requirement: "Users should only be able to see groups in their
+   * location (UK or Nigeria) when searching"). The frontend resolves the
+   * country from the visitor's IP (see /api/geo) or, if logged in, from
+   * their profile country.
+   */
+  search: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const countryParam = (qsOpt(req.query.country) ?? 'GB').toUpperCase();
+      const country = countryParam === 'NG' ? 'NG' : 'GB';
+      const data = await groupService.search(country, qsOpt(req.query.query));
       res.json({ success: true, data });
     } catch (e) { next(e); }
   },

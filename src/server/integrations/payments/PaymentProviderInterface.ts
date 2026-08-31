@@ -78,6 +78,7 @@ export interface IPaymentProvider {
     userId: string;
     email: string;
     currency: string;
+    tier?: 'pro' | 'elite'; // which SUBSCRIPTION_TIERS plan to bill — defaults to 'pro'
   }): Promise<SubscriptionResult>;
 
   /** Cancel a subscription */

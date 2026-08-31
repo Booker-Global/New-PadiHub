@@ -1,12 +1,16 @@
 import { v4 as uuidv4 } from 'uuid';
-import { eq } from 'drizzle-orm';
+import { eq, and, count } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { notificationService } from './notificationService.js';
 import { assertPaymentSetupComplete } from './paymentEligibilityService.js';
-import { INVITE_TTL, GROUP_DEFAULT_STRIKE_THRESHOLD, GROUP_DEFAULT_SUSPENSION_THRESHOLD, GROUP_DEFAULT_VOTING_THRESHOLD } from '../lib/constants.js';
+import {
+  INVITE_TTL, GROUP_DEFAULT_STRIKE_THRESHOLD, GROUP_DEFAULT_SUSPENSION_THRESHOLD,
+  GROUP_DEFAULT_VOTING_THRESHOLD, GROUP_DEFAULT_MIN_TRUST_SCORE,
+  SUBSCRIPTION_TIERS, isSubscriptionTierKey,
+} from '../lib/constants.js';
 import {
   sendGroupInvitationEmail,
   sendGroupClosedEmail,
@@ -31,6 +35,76 @@ export const groupService = {
     return rows[0];
   },
 
+  /** How many active groups a user currently leads. */
+  async countGroupsLed(userId: string): Promise<number> {
+    const rows = await db.select({ value: count() }).from(schema.memberships)
+      .where(and(
+        eq(schema.memberships.user_id, userId),
+        eq(schema.memberships.role, 'leader'),
+        eq(schema.memberships.status, 'active'),
+      ));
+    return rows[0]?.value ?? 0;
+  },
+
+  /** How many groups a user is currently an active or pending member of. */
+  async countGroupsJoined(userId: string): Promise<number> {
+    const rows = await db.select({ value: count() }).from(schema.memberships)
+      .where(and(
+        eq(schema.memberships.user_id, userId),
+        eq(schema.memberships.status, 'active'),
+      ));
+    const pendingRows = await db.select({ value: count() }).from(schema.memberships)
+      .where(and(
+        eq(schema.memberships.user_id, userId),
+        eq(schema.memberships.status, 'pending'),
+      ));
+    return (rows[0]?.value ?? 0) + (pendingRows[0]?.value ?? 0);
+  },
+
+  /**
+   * Search publicly discoverable groups — always scoped to the visitor's own
+   * country (UK or Nigeria) so members only ever see groups they're actually
+   * eligible to join. Anonymous visitors can call this too (search itself
+   * doesn't require an account — only *requesting to join* does).
+   */
+  async search(country: string, query?: string) {
+    const rows = await db.select({
+      id:                     schema.savingsGroups.id,
+      name:                   schema.savingsGroups.name,
+      description:            schema.savingsGroups.description,
+      country:                schema.savingsGroups.country,
+      currency:               schema.savingsGroups.currency,
+      contribution_amount:    schema.savingsGroups.contribution_amount,
+      contribution_frequency: schema.savingsGroups.contribution_frequency,
+      maximum_members:        schema.savingsGroups.maximum_members,
+      min_trust_score:        schema.savingsGroups.min_trust_score,
+      created_at:             schema.savingsGroups.created_at,
+    })
+      .from(schema.savingsGroups)
+      .where(and(
+        eq(schema.savingsGroups.status, 'active'),
+        eq(schema.savingsGroups.country, country),
+      ));
+
+    const memberCounts = await db.select({
+      group_id: schema.memberships.group_id,
+      value:    count(),
+    }).from(schema.memberships)
+      .where(eq(schema.memberships.status, 'active'))
+      .groupBy(schema.memberships.group_id);
+    const memberCountByGroup = Object.fromEntries(memberCounts.map(m => [m.group_id, m.value]));
+
+    const normalizedQuery = query?.trim().toLowerCase();
+    return rows
+      .filter(g => !normalizedQuery || g.name.toLowerCase().includes(normalizedQuery))
+      .map(g => ({
+        ...g,
+        member_count:    memberCountByGroup[g.id] ?? 0,
+        spots_remaining: Math.max(0, g.maximum_members - (memberCountByGroup[g.id] ?? 0)),
+      }))
+      .filter(g => g.spots_remaining > 0);
+  },
+
   async create(data: {
     name: string; description?: string; leader_id: string;
     country: string; currency: string;
@@ -39,11 +113,13 @@ export const groupService = {
     maximum_members: number; rotation_method: 'manual' | 'random';
     strike_threshold?: number; suspension_threshold?: number;
     voting_threshold?: number; allow_payout_swaps?: boolean;
+    min_trust_score?: number;
   }, ipAddress?: string) {
     // Identity verification is required to create a group
     const leaderRows = await db.select({
       identity_verified: schema.users.identity_verified,
       country: schema.users.country,
+      subscription_tier: schema.users.subscription_tier,
     }).from(schema.users).where(eq(schema.users.id, data.leader_id)).limit(1);
 
     if (leaderRows.length && !leaderRows[0].identity_verified) {
@@ -58,8 +134,22 @@ export const groupService = {
     }
 
     // The group creator is the group's first member, so the same
-    // payment-method + payout-destination gate applies to them too.
+    // onboarding-completeness gate (email + identity + subscription tier +
+    // payment method + payout destination) applies to them too.
     await assertPaymentSetupComplete(data.leader_id);
+
+    const tier = leaderRows[0]?.subscription_tier;
+    if (!isSubscriptionTierKey(tier)) {
+      throw new AppError('Select a subscription plan before creating a group.', 403, 'SUBSCRIPTION_TIER_NOT_SELECTED');
+    }
+    const groupsLed = await this.countGroupsLed(data.leader_id);
+    if (groupsLed >= SUBSCRIPTION_TIERS[tier].maxGroupsCreate) {
+      throw new AppError(
+        `Your ${SUBSCRIPTION_TIERS[tier].name} plan allows you to create up to ${SUBSCRIPTION_TIERS[tier].maxGroupsCreate} group${SUBSCRIPTION_TIERS[tier].maxGroupsCreate === 1 ? '' : 's'}. Upgrade your plan to create more.`,
+        403,
+        'GROUP_CREATE_LIMIT_REACHED',
+      );
+    }
 
     const id = uuidv4();
     const payment_provider = assignProvider(data.country);
@@ -75,6 +165,7 @@ export const groupService = {
       contribution_frequency:   data.contribution_frequency,
       payout_day:               data.payout_day ?? null,
       maximum_members:          data.maximum_members,
+      min_trust_score:          data.min_trust_score ?? GROUP_DEFAULT_MIN_TRUST_SCORE,
       rotation_method:          data.rotation_method,
       current_rotation_position: 1,
       current_cycle:            1,
@@ -108,7 +199,7 @@ export const groupService = {
   },
 
   async update(groupId: string, leaderId: string, data: Partial<{
-    name: string; description: string; maximum_members: number;
+    name: string; description: string; maximum_members: number; min_trust_score: number;
     strike_threshold: number; suspension_threshold: number;
     voting_threshold: number; allow_payout_swaps: boolean;
   }>, ipAddress?: string) {

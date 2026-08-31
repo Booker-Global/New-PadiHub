@@ -18,6 +18,7 @@ const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.06 } }
 
 const quickActions = [
   { label: 'Edit Profile', icon: Edit, color: '#2EAF6F', link: '/profile/edit' },
+  { label: 'Find Groups', icon: Users, color: '#2EAF6F', link: '/groups/search' },
   { label: 'Trust Score™', icon: Shield, color: '#8B5CF6', link: '/trust' },
   { label: 'Payments', icon: CreditCard, color: '#EF4444', link: '/payments/methods' },
   { label: 'Notifications', icon: Bell, color: '#2eafaf', link: '/notifications' },
@@ -466,9 +467,6 @@ export default function ProfilePage() {
                   <span className="text-xs font-bold px-2 py-0.5 rounded-full whitespace-nowrap" style={{ background: 'rgba(46,175,111,0.2)', color: '#2EAF6F' }}>
                     {profile.email_verified || profile.identity_verified ? '✓ Verified' : 'Verification pending'}
                   </span>
-                  <span className="text-xs font-bold px-2 py-0.5 rounded-full whitespace-nowrap" style={{ background: 'rgba(245,158,11,0.2)', color: '#F59E0B' }}>
-                    {country} · {currency}
-                  </span>
                   <span className="hidden sm:inline text-xs font-bold px-2 py-0.5 rounded-full" style={{ background: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.4)' }}>
                     {accountStatus}
                   </span>
@@ -476,15 +474,15 @@ export default function ProfilePage() {
               </div>
             </div>
 
-            <div className="relative grid grid-cols-3 gap-3 mt-5">
+            <div className="relative grid grid-cols-3 gap-2 sm:gap-3 mt-5">
               {[
                 { label: 'Trust Score™', value: String(profile.trust_score ?? 0), color: '#2EAF6F' },
                 { label: 'Country', value: country === 'Not set' ? '—' : country, color: '#F59E0B' },
                 { label: 'Currency', value: currency === 'Not set' ? '—' : currency, color: '#8B5CF6' },
               ].map((item) => (
-                <div key={item.label} className="rounded-2xl p-3 text-center" style={{ background: 'rgba(255,255,255,0.05)' }}>
-                  <p className="text-xl font-black" style={{ color: item.color, fontFamily: 'Nunito, sans-serif' }}>{item.value}</p>
-                  <p className="text-xs" style={{ color: 'rgba(255,255,255,0.35)' }}>{item.label}</p>
+                <div key={item.label} className="rounded-2xl p-2 sm:p-3 text-center min-w-0" style={{ background: 'rgba(255,255,255,0.05)' }}>
+                  <p className="text-sm sm:text-xl font-black truncate" style={{ color: item.color, fontFamily: 'Nunito, sans-serif' }} title={item.value}>{item.value}</p>
+                  <p className="text-[10px] sm:text-xs" style={{ color: 'rgba(255,255,255,0.35)' }}>{item.label}</p>
                 </div>
               ))}
             </div>

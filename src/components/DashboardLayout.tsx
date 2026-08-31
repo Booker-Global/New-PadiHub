@@ -19,13 +19,13 @@ import { getValidSession, logout } from '@/lib/session';
 // that value goes stale the moment the user contributes, votes, or gets
 // verified without logging out and back in.
 function useDashboardUser() {
-  const [user, setUser] = useState<{ name: string; trust: number; initial: string }>({
-    name: '', trust: 0, initial: '',
+  const [user, setUser] = useState<{ name: string; trust: number; initial: string; tier: 'pro' | 'elite' | null; country: string | null }>({
+    name: '', trust: 0, initial: '', tier: null, country: null,
   });
   useEffect(() => {
     const session = getValidSession();
     if (!session) {
-      setUser({ name: '', trust: 0, initial: '' });
+      setUser({ name: '', trust: 0, initial: '', tier: null, country: null });
       return;
     }
     const name = session.name || '';
@@ -33,14 +33,21 @@ function useDashboardUser() {
       name,
       trust: session.trust ?? 0,
       initial: name.charAt(0).toUpperCase() || '?',
+      tier: null,
+      country: null,
     });
 
     let cancelled = false;
     void window.fetch('/api/users/stats', { headers: { Authorization: 'Bearer ' + session.token } })
       .then(response => response.ok ? response.json() : null)
-      .then((json: { data?: { trust_score?: number } } | null) => {
-        if (!cancelled && json?.data && typeof json.data.trust_score === 'number') {
-          setUser(current => ({ ...current, trust: json.data!.trust_score! }));
+      .then((json: { data?: { trust_score?: number; subscription_tier?: 'pro' | 'elite' | null; country?: string } } | null) => {
+        if (!cancelled && json?.data) {
+          setUser(current => ({
+            ...current,
+            trust: typeof json.data!.trust_score === 'number' ? json.data!.trust_score! : current.trust,
+            tier: json.data!.subscription_tier ?? null,
+            country: json.data!.country ?? null,
+          }));
         }
       })
       .catch(() => { /* keep the session's cached value if the refresh fails */ });
@@ -219,7 +226,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const handleLogout = async () => {
     setProfileOpen(false);
     await logout();
-    navigate('/login', { replace: true });
+    navigate('/', { replace: true });
   };
 
   const quickActions = [
@@ -293,11 +300,16 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
           <div className="flex items-center gap-2 ml-auto flex-shrink-0">
 
             {/* Subscription status badge */}
-            <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold"
-              style={{ background: 'rgba(46,175,111,0.1)', color: '#2EAF6F', border: '1px solid rgba(46,175,111,0.2)' }}>
-              <Zap size={11} fill="#2EAF6F" />
-              <span>Pro · UK</span>
-            </div>
+            {dashUser.tier && (
+              <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold"
+                style={{ background: 'rgba(46,175,111,0.1)', color: '#2EAF6F', border: '1px solid rgba(46,175,111,0.2)' }}>
+                <Zap size={11} fill="#2EAF6F" />
+                <span>
+                  {dashUser.tier === 'elite' ? 'Elite' : 'Pro'}
+                  {dashUser.country ? ` · ${dashUser.country === 'NG' ? 'NG' : 'UK'}` : ''}
+                </span>
+              </div>
+            )}
 
             {/* Quick Actions */}
             <div className="relative" ref={quickRef}>

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { MotionDiv } from '@/lib/motion-safe';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useParams, useSearchParams } from 'react-router-dom';
 import { ChevronLeft, PiggyBank, Users, Shield, Calendar, CheckCircle, ArrowRight, AlertTriangle, RefreshCw } from 'lucide-react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { SkeletonPage } from '@/components/ui/loading-skeleton';
@@ -42,6 +42,11 @@ function getErrorMessage<T>(json: ApiResponse<T> | null, fallback: string) {
     ? Object.values(json.errors).flat().find((value): value is string => Boolean(value))
     : undefined;
   return firstFieldError || json?.message || fallback;
+}
+
+function requiresIdentityVerification(message: string) {
+  const normalized = message.toLowerCase();
+  return normalized.includes('/verify-identity') || normalized.includes('identity verification');
 }
 
 function formatCurrency(amount: string | number, currency: 'GBP' | 'NGN') {
@@ -89,6 +94,7 @@ function describePayoutSchedule(frequency: SavingsGroup['contribution_frequency'
 
 export default function JoinSavingsGroupPage() {
   const { id } = useParams<{ id: string }>();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
   const [group, setGroup] = useState<SavingsGroup | null>(null);
   const [memberCount, setMemberCount] = useState(0);
@@ -98,7 +104,9 @@ export default function JoinSavingsGroupPage() {
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState('');
   const [needsPaymentSetup, setNeedsPaymentSetup] = useState(false);
+  const [needsIdentityVerification, setNeedsIdentityVerification] = useState(false);
   const [notFound, setNotFound] = useState(false);
+  const verificationReturnPath = `${location.pathname}${location.search}`;
 
   const inviteToken = useMemo(
     () => searchParams.get('invite_token') || searchParams.get('invite') || searchParams.get('token') || undefined,
@@ -172,6 +180,7 @@ export default function JoinSavingsGroupPage() {
     setSubmitting(true);
     setError('');
     setNeedsPaymentSetup(false);
+    setNeedsIdentityVerification(false);
 
     try {
       const response = await window.fetch('/api/memberships', {
@@ -188,8 +197,10 @@ export default function JoinSavingsGroupPage() {
 
       const json = await response.json() as ApiResponse<null>;
       if (!response.ok) {
-        setError(getErrorMessage(json, 'Could not join this group.'));
+        const message = getErrorMessage(json, 'Could not join this group.');
+        setError(message);
         setNeedsPaymentSetup(json.code === 'PAYMENT_SETUP_REQUIRED');
+        setNeedsIdentityVerification(json.code === 'PAYMENT_SETUP_REQUIRED' && requiresIdentityVerification(message));
         return;
       }
 
@@ -341,7 +352,10 @@ export default function JoinSavingsGroupPage() {
             <p className="text-xs mt-1" style={{ color: '#92400E' }}>
               You need a verified payment method (to contribute) and a verified payout destination (to receive your payout when it&apos;s your turn) before you can join a group.
             </p>
-            <div className="flex gap-3 mt-3">
+            <div className="flex gap-3 mt-3 flex-wrap">
+              {needsIdentityVerification && (
+                <Link to={`/verify-identity?next=${encodeURIComponent(verificationReturnPath)}`} className="text-xs font-bold underline" style={{ color: '#92400E' }}>Verify your identity</Link>
+              )}
               <Link to="/payments/methods" className="text-xs font-bold underline" style={{ color: '#92400E' }}>Add payment method</Link>
               <Link to="/payments/payout" className="text-xs font-bold underline" style={{ color: '#92400E' }}>Connect payout destination</Link>
             </div>

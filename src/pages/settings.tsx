@@ -11,7 +11,7 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { SkeletonPage } from '@/components/ui/loading-skeleton';
 import { SuccessToast, useSuccessToast } from '@/components/ui/success-toast';
-import { getValidSession, logout } from '@/lib/session';
+import { clearStoredSession, getValidSession, logout } from '@/lib/session';
 
 const fadeUp = { hidden: { opacity: 0, y: 16 }, visible: { opacity: 1, y: 0, transition: { duration: 0.4, ease: 'easeOut' as const } } };
 const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.06 } } };
@@ -146,6 +146,8 @@ export default function SettingsPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showLogoutDialog, setShowLogoutDialog] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deletingAccount, setDeletingAccount] = useState(false);
   const { toastState, show: showToast, hide: hideToast } = useSuccessToast();
 
   useEffect(() => {
@@ -309,6 +311,47 @@ export default function SettingsPage() {
     })();
   };
 
+  const handleDeleteConfirm = async () => {
+    if (deletingAccount) return;
+
+    const session = getValidSession();
+    if (!session?.token) {
+      const message = 'Your session has expired. Please sign in again.';
+      setDeleteError(message);
+      showToast('Could not delete account', message, 'badge');
+      return;
+    }
+
+    setDeletingAccount(true);
+    setDeleteError(null);
+
+    try {
+      const response = await globalThis.fetch('/api/users/profile', {
+        method: 'DELETE',
+        headers: {
+          Authorization: 'Bearer ' + session.token,
+        },
+      });
+
+      const payload = await response.json().catch(() => null) as ApiResponse<null> | null;
+      if (!response.ok || !payload?.success) {
+        throw new Error(getApiErrorMessage(payload, 'Unable to delete your account right now.'));
+      }
+
+      setShowDeleteDialog(false);
+      clearStoredSession();
+      navigate('/', { replace: true });
+    } catch (error) {
+      const message = error instanceof Error && error.message
+        ? error.message
+        : 'Unable to delete your account right now.';
+      setDeleteError(message);
+      showToast('Could not delete account', message, 'badge');
+    } finally {
+      setDeletingAccount(false);
+    }
+  };
+
   if (loading) {
     return (
       <DashboardLayout>
@@ -435,7 +478,7 @@ export default function SettingsPage() {
               </button>
             </SettingRow>
             <SettingRow icon={Trash2} label="Delete account" description="Permanently delete your account and all data" color="#EF4444">
-              <button onClick={() => setShowDeleteDialog(true)} className="text-sm font-semibold text-red-500 hover:text-red-700 transition-colors" type="button">
+              <button onClick={() => { setDeleteError(null); setShowDeleteDialog(true); }} className="text-sm font-semibold text-red-500 hover:text-red-700 transition-colors" type="button">
                 Delete
               </button>
             </SettingRow>
@@ -457,12 +500,18 @@ export default function SettingsPage() {
       <ConfirmDialog
         open={showDeleteDialog}
         title="Delete your account?"
-        description="This will permanently delete your account, Trust Score™ and all group data. This cannot be undone."
-        confirmLabel="Yes, delete"
+        description={deleteError
+          ? `This will permanently delete your account, Trust Score™ and all group data. ${deleteError}`
+          : 'This will permanently delete your account, Trust Score™ and all group data. This cannot be undone.'}
+        confirmLabel={deletingAccount ? 'Deleting…' : 'Yes, delete'}
         cancelLabel="Keep my account"
         variant="danger"
-        onConfirm={() => setShowDeleteDialog(false)}
-        onCancel={() => setShowDeleteDialog(false)}
+        onConfirm={() => { void handleDeleteConfirm(); }}
+        onCancel={() => {
+          if (deletingAccount) return;
+          setDeleteError(null);
+          setShowDeleteDialog(false);
+        }}
       />
 
       <ConfirmDialog

@@ -1,5 +1,11 @@
 import type { Request, Response, NextFunction } from 'express';
+import { z } from 'zod';
 import { subscriptionService } from '../services/subscriptionService.js';
+import { validate } from '../middleware/validate.js';
+
+const planSchema = z.object({
+  tier: z.enum(['pro', 'elite']),
+});
 
 export const subscriptionController = {
   get: async (req: Request, res: Response, next: NextFunction) => {
@@ -8,6 +14,28 @@ export const subscriptionController = {
       res.json({ success: true, data });
     } catch (e) { next(e); }
   },
+
+  /** POST /api/subscriptions/select-plan — onboarding: choose Pro Group or Elite Group */
+  selectPlan: [
+    validate(planSchema),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const data = await subscriptionService.selectPlan(req.user!.userId, req.body.tier);
+        res.json({ success: true, data });
+      } catch (e) { next(e); }
+    },
+  ],
+
+  /** POST /api/subscriptions/switch-plan — change tier after onboarding */
+  switchPlan: [
+    validate(planSchema),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const data = await subscriptionService.switchPlan(req.user!.userId, req.body.tier);
+        res.json({ success: true, data });
+      } catch (e) { next(e); }
+    },
+  ],
 
   cancel: async (req: Request, res: Response, next: NextFunction) => {
     try {

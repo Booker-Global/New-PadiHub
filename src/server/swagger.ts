@@ -11,7 +11,7 @@ const spec = {
     title:       'PadiHub API',
     version:     '1.0.0',
     description: 'PadiHub — Save Together. Grow Together. Belong. REST API documentation.',
-    contact:     { name: 'PadiHub Support', email: 'support@padihub.com' },
+    contact:     { name: 'PadiHub Support', email: 'hello@padihub.com' },
   },
   servers: [
     { url: '/api', description: 'Current server' },
@@ -270,6 +270,9 @@ const spec = {
     '/support': {
       get:  { tags: ['Support'], summary: 'List own support tickets', responses: { '200': { description: 'Tickets' } } },
       post: { tags: ['Support'], summary: 'Create support ticket', responses: { '201': { description: 'Ticket created' } } },
+    },
+    '/support/public': {
+      post: { tags: ['Support'], summary: 'Create public support ticket', security: [], responses: { '201': { description: 'Ticket created' } } },
     },
     '/support/{id}': {
       get: { tags: ['Support'], summary: 'Get single ticket', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], responses: { '200': { description: 'Ticket detail' } } },
