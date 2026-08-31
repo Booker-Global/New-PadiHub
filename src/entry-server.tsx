@@ -1,9 +1,19 @@
 import { StrictMode, Suspense } from 'react';
 import { renderToString } from 'react-dom/server';
 import { HelmetProvider } from '@dr.pogodin/react-helmet';
-// MotionConfig lets us inject `initial: false` globally so every motion.*
-// element in the SSR tree skips inline style injection — the only reliable
-// way to prevent React hydration error #418 across all pages.
+// NOTE: MotionConfig has no `initial` prop — it cannot globally default
+// `initial={false}` for descendant motion.* elements (confirmed against the
+// installed framer-motion types; passing it is a type error and has no
+// runtime effect on SSR output). The only mechanism that actually suppresses
+// inline "hidden" styles during renderToString — and therefore the only
+// real defence against React hydration error #418 — is passing
+// `initial={false}` directly on each motion component, which is exactly
+// what MotionDiv/MotionSection/MotionCircle/MotionProgressBar in
+// src/lib/motion-safe.tsx already do by default. Every animated element in
+// this app renders through those wrappers (no raw motion.* usage exists
+// outside motion-safe.tsx), so MotionConfig here is kept only as a shared
+// context provider for any future direct motion.* usage — not as an
+// initial-state override.
 // Import from 'motion/react' (NOT 'framer-motion') so Vite's optimizeDeps
 // pre-bundles it as ESM and the CJS filter-props.mjs chunk never reaches
 // the browser bundle.
@@ -73,15 +83,18 @@ export async function render(url: string): Promise<RenderResult> {
   const router = createStaticRouter(routeTree, context);
   const helmetContext: { helmet?: HelmetServerState } = {};
 
-  // SSR_MOTION_CONFIG: initial=false suppresses inline style injection on every
-  // motion.* element in the tree. Without this, Motion writes opacity/transform
-  // inline styles during renderToString; the client then hydrates against those
-  // styles and immediately animates away — React sees the diff and throws #418.
-  // Using the public <MotionConfig> component (not the internal MotionConfigContext)
-  // avoids importing framer-motion's CJS internals into the browser bundle.
+  // SSR_MOTION_CONFIG: MotionConfig has no `initial` prop to suppress
+  // inline style injection tree-wide — that protection comes from every
+  // animated element rendering through MotionDiv/MotionSection/etc.
+  // (src/lib/motion-safe.tsx), which pass `initial={false}` directly and
+  // are what actually prevent React hydration error #418. MotionConfig is
+  // kept here only as the shared context provider for any future direct
+  // motion.* usage. Using the public <MotionConfig> component (not the
+  // internal MotionConfigContext) avoids importing framer-motion's CJS
+  // internals into the browser bundle.
   const html = renderToString(
     <StrictMode>
-      <MotionConfig initial={false}>
+      <MotionConfig>
         <HelmetProvider context={helmetContext}>
           <StaticRouterProvider router={router} context={context} />
         </HelmetProvider>
