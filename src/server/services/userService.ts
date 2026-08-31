@@ -259,7 +259,7 @@ export const userService = {
       }
     }
 
-    await sendAccountDeletedEmail(user.email, getDeletedDisplayName(user));
+    const accountHolderName = getDeletedDisplayName(user);
 
     const dependencyCounts = {
       savings_groups_leader: await countRows(
@@ -380,11 +380,17 @@ export const userService = {
       },
     });
 
+    await sendAccountDeletedEmail(user.email, accountHolderName);
+
     return { hardDeleted };
   },
 
   async deactivate(userId: string, ipAddress?: string) {
-    return this.deleteAccount(userId, ipAddress);
+    await db.update(schema.users)
+      .set({ active: false, account_status: 'deactivated' })
+      .where(eq(schema.users.id, userId));
+    await createAuditLog({ userId, action: 'ACCOUNT_DEACTIVATED', entity: 'users', entityId: userId, ipAddress });
+    return true;
   },
 
   async updatePreferences(userId: string, preferences: Record<string, unknown>) {
