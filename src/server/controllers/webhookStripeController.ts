@@ -12,6 +12,8 @@ import { getStripeProvider } from '../integrations/payments/PaymentProviderFacto
 import { contributionService } from '../services/contributionService.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { notificationService } from '../services/notificationService.js';
+import { isSubscriptionTierKey } from '../lib/constants.js';
+import { planCode } from '../services/subscriptionService.js';
 
 export async function stripeWebhookHandler(req: Request, res: Response, next: NextFunction) {
   const signature = req.headers['stripe-signature'] as string;
@@ -78,6 +80,24 @@ async function handleStripeEvent(event: Stripe.Event) {
         await db.update(schema.subscriptions)
           .set({ billing_status: 'active' })
           .where(eq(schema.subscriptions.provider_subscription_id, subIdStr));
+
+        // A mid-cycle downgrade request keeps the member on their current
+        // tier's limits until this renewal — apply it now that the renewal
+        // invoice has actually been paid. See subscriptionService's
+        // switchPlan for where pending_tier is set.
+        const subRows = await db.select().from(schema.subscriptions)
+          .where(eq(schema.subscriptions.provider_subscription_id, subIdStr)).limit(1);
+        const sub = subRows[0];
+        if (sub?.pending_tier && isSubscriptionTierKey(sub.pending_tier)) {
+          const userRows = await db.select({ id: schema.users.id, country: schema.users.country, subscription_tier: schema.users.subscription_tier })
+            .from(schema.users).where(eq(schema.users.id, sub.user_id)).limit(1);
+          if (userRows.length && sub.pending_tier !== userRows[0].subscription_tier) {
+            const previousTier = userRows[0].subscription_tier;
+            await db.update(schema.users).set({ subscription_tier: sub.pending_tier }).where(eq(schema.users.id, sub.user_id));
+            await db.update(schema.subscriptions).set({ plan: planCode(userRows[0].country, sub.pending_tier), pending_tier: null }).where(eq(schema.subscriptions.id, sub.id));
+            await createAuditLog({ userId: sub.user_id, action: 'SUBSCRIPTION_TIER_SWITCHED', entity: 'subscriptions', entityId: sub.id, metadata: { from: previousTier, to: sub.pending_tier, appliedAtRenewal: true } });
+          }
+        }
       }
 
       await createAuditLog({
