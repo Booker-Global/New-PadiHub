@@ -41,7 +41,7 @@ export default function SubscriptionPage() {
       <h1 className="sr-only">Subscription & Billing — PadiHub</h1>
       <div className="p-4 sm:p-6 max-w-3xl mx-auto">
         <MotionDiv initial="hidden" animate="visible" variants={stagger}>
-          <MotionDiv as="h1" variants={fadeUp} className="text-2xl font-extrabold text-gray-900 mb-6" style={{ fontFamily: 'Nunito, sans-serif' }}>
+          <MotionDiv variants={fadeUp} className="text-2xl font-extrabold text-gray-900 mb-6" style={{ fontFamily: 'Nunito, sans-serif' }}>
             Subscription & Billing
           </MotionDiv>
 

@@ -298,11 +298,39 @@ function HeroIllustration({ region }: { region: Region }) {
   );
 }
 
+type HomeTier = {
+  key: 'pro' | 'elite';
+  name: string;
+  price: string;
+  tagline: string;
+  color: string;
+  recommended?: boolean;
+};
+
+// Mirrors the Pro/Elite tier data on /pricing (src/pages/pricing.tsx) so the
+// homepage teaser stays in sync with the actual two-tier subscription model
+// instead of a stale flat single-price-per-country card.
+const homeTiersByRegion: Record<'UK' | 'NG', HomeTier[]> = {
+  UK: [
+    { key: 'pro', name: 'Pro Group', price: '£4.99', tagline: 'Create 1 group · Join up to 5', color: '#2EAF6F' },
+    { key: 'elite', name: 'Elite Group', price: '£9.99', tagline: 'Create up to 7 groups · Join up to 10', color: '#F59E0B', recommended: true },
+  ],
+  NG: [
+    { key: 'pro', name: 'Pro Group', price: '₦5,000', tagline: 'Create 1 group · Join up to 5', color: '#2EAF6F' },
+    { key: 'elite', name: 'Elite Group', price: '₦10,000', tagline: 'Create up to 7 groups · Join up to 10', color: '#F59E0B', recommended: true },
+  ],
+};
+
 // ── Main Page ────────────────────────────────────────────────────────────────
 export default function HomePage() {
   const pricingRegion = usePricingRegion();
   const authUser = useAuthUser();
   const regionalCopy = regionCopy[pricingRegion];
+  // The teaser must always show exactly one region's tiers (per location),
+  // never both at once — fall back the transient 'BOTH' hook state to 'UK'
+  // (matching the UK-first fallback already used on /pricing) until geo
+  // resolves client-side.
+  const homeTiers = homeTiersByRegion[pricingRegion === 'NG' ? 'NG' : 'UK'];
   return (
     <>
       <Helmet>
@@ -407,32 +435,35 @@ export default function HomePage() {
               </div>
             </div>
 
-            {/* Right column — the decorative HeroIllustration stays desktop-only
-                (hidden on mobile via display:none, shown via the .hero-right media
-                query above). The logged-in member's DashboardPreview is real,
-                functional content (their groups, trust score, due contributions),
-                not decoration, so it must always render — including on mobile and
-                tablet — instead of being hidden by the same desktop-only rule. */}
-            <div
-              className="hero-right"
-              style={{
-                display: authUser.isMounted && authUser.isLoggedIn ? 'flex' : 'none',
-                flexShrink: 0, boxSizing: 'border-box', minWidth: 0, width: '100%',
-              }}
-            >
-              {/* Gate on isMounted so the first client render matches the SSR output
-                  (both render nothing here, since isLoggedIn starts false). After
-                  hydration, isMounted flips true and we swap to DashboardPreview if
-                  the user is logged in. Without this gate, React 19 detects a
-                  server/client DOM mismatch and throws hydration error #418. */}
-              {authUser.isMounted && authUser.isLoggedIn && (
+            {/* Right column — exactly ONE `.hero-right` element is ever rendered.
+                Previously both the DashboardPreview container and the decorative
+                HeroIllustration container shared the `.hero-right` class *and*
+                were both always mounted (one just visually empty), so at
+                desktop widths the `.hero-right { display: flex !important; }`
+                media-query rule forced BOTH on-screen simultaneously whenever a
+                visitor was logged out — hero-left (52%) plus two 48%-wide
+                hero-right boxes squeezed into one row, crushing the heading
+                text down to a sliver and wrapping it word-by-word/letter-by-
+                letter. Rendering a single element side-steps that entirely.
+                The logged-in member's DashboardPreview is real, functional
+                content (their groups, trust score, due contributions), so it
+                must always render — including on mobile and tablet — while the
+                decorative illustration stays desktop-only (hidden on mobile via
+                display:none, shown via the .hero-right media query above). */}
+            {authUser.isMounted && authUser.isLoggedIn ? (
+              <div
+                className="hero-right"
+                style={{ display: 'flex', flexShrink: 0, boxSizing: 'border-box', minWidth: 0, width: '100%' }}
+              >
                 <DashboardPreview name={authUser.name} trust={authUser.trust} token={authUser.token} />
-              )}
-            </div>
-
-            {/* Decorative illustration — desktop-only, shown only for logged-out
-                visitors via the same .hero-right media query (never real user data). */}
-            {!(authUser.isMounted && authUser.isLoggedIn) && (
+              </div>
+            ) : (
+              // Gate on isMounted so the first client render matches the SSR
+              // output (both render this decorative, desktop-only-visible
+              // branch, since isLoggedIn starts false). After hydration,
+              // isMounted flips true and we swap to DashboardPreview if the
+              // user is logged in. Without this gate, React 19 detects a
+              // server/client DOM mismatch and throws hydration error #418.
               <div className="hero-right" style={{ display: 'none', flexShrink: 0, boxSizing: 'border-box', minWidth: 0 }}>
                 <HeroIllustration region={pricingRegion} />
               </div>
@@ -643,8 +674,8 @@ export default function HomePage() {
       {/* ── PRICING TEASER ───────────────────────────────────────────────── */}
       <section style={{ padding: '5rem 0', background: '#fff' }}>
         <style>{`
-          @media (min-width: 768px) {
-            .pricing-grid-both { grid-template-columns: repeat(2, 1fr) !important; }
+          @media (min-width: 640px) {
+            .home-pricing-grid { grid-template-columns: repeat(2, 1fr) !important; }
           }
         `}</style>
         <div style={{ maxWidth: '64rem', margin: '0 auto', padding: '0 1.25rem' }}>
@@ -654,21 +685,21 @@ export default function HomePage() {
             <p style={{ color: '#6B7280', fontSize: 16 }}>{regionalCopy.pricing}</p>
           </div>
 
-          <div className={pricingRegion === 'BOTH' ? 'pricing-grid-both' : ''} style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '2rem', maxWidth: pricingRegion === 'BOTH' ? undefined : '32rem', margin: pricingRegion === 'BOTH' ? undefined : '0 auto' }}>
-            {[
-              { region: '🇬🇧 United Kingdom', monthly: '£4.99', annual: '£49.99', save: 'Save £9.89/yr', color: '#2EAF6F', show: pricingRegion !== 'NG' },
-              { region: '🇳🇬 Nigeria',         monthly: '₦3,500', annual: '₦35,000', save: 'Save ₦7,000/yr', color: '#F59E0B', show: pricingRegion !== 'UK' },
-            ].filter(p => p.show).map(plan => (
-              <div key={plan.region} style={{ borderRadius: 24, padding: '2rem', position: 'relative', overflow: 'hidden', border: `2px solid ${plan.color}40`, background: `${plan.color}08`, boxSizing: 'border-box' }}>
+          <div className="home-pricing-grid" style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '2rem', maxWidth: '48rem', margin: '0 auto' }}>
+            {homeTiers.map(plan => (
+              <div key={plan.key} style={{ borderRadius: 24, padding: '2rem', position: 'relative', overflow: 'hidden', border: `2px solid ${plan.color}40`, background: `${plan.color}08`, boxSizing: 'border-box' }}>
                 <div style={{ position: 'absolute', top: 0, right: 0, width: 128, height: 128, borderRadius: '50%', filter: 'blur(40px)', opacity: 0.1, background: plan.color, pointerEvents: 'none' }} />
-                <p style={{ fontSize: 16, fontWeight: 700, color: '#374151', marginBottom: 16 }}>{plan.region}</p>
+                {plan.recommended && (
+                  <p style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.08em', color: plan.color, marginBottom: 8 }}>Most popular</p>
+                )}
+                <p style={{ fontSize: 16, fontWeight: 700, color: '#374151', marginBottom: 16 }}>{plan.name}</p>
                 <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, marginBottom: 4 }}>
-                  <span style={{ fontSize: 44, fontWeight: 900, color: plan.color, fontFamily: 'Nunito, sans-serif', lineHeight: 1 }}>{plan.monthly}</span>
+                  <span style={{ fontSize: 44, fontWeight: 900, color: plan.color, fontFamily: 'Nunito, sans-serif', lineHeight: 1 }}>{plan.price}</span>
                   <span style={{ color: '#9CA3AF', fontSize: 13, marginBottom: 4 }}>/month</span>
                 </div>
-                <p style={{ fontSize: 13, color: '#6B7280', marginBottom: 24 }}>or <strong>{plan.annual}/year</strong> — <span style={{ color: plan.color }}>{plan.save}</span></p>
+                <p style={{ fontSize: 13, color: '#6B7280', marginBottom: 24 }}>{plan.tagline}</p>
                 <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 2rem', display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {['Unlimited Savings Groups', 'Trust Score™ System', 'Secure payment processing', 'Rotation Tracking', 'Payment Reminders', 'Group Management Tools'].map(f => (
+                  {['Trust Score™ System', 'Secure payment processing', 'Rotation Tracking', 'Payment Reminders'].map(f => (
                     <li key={f} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, color: '#374151' }}>
                       <CheckCircle size={15} style={{ color: plan.color, flexShrink: 0 }} /> {f}
                     </li>
@@ -680,6 +711,9 @@ export default function HomePage() {
               </div>
             ))}
           </div>
+          <p style={{ textAlign: 'center', color: '#9CA3AF', fontSize: 13, marginTop: 24 }}>
+            <Link to="/pricing" style={{ color: '#2EAF6F', fontWeight: 700, textDecoration: 'none' }}>See full pricing details →</Link>
+          </p>
         </div>
       </section>
 

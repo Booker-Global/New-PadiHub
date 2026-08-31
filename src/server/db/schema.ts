@@ -225,6 +225,12 @@ export const subscriptions = mysqlTable('subscriptions', {
   plan:                    varchar('plan', { length: 100 }).notNull().default('free'),
   billing_status:          mysqlEnum('billing_status', ['active', 'past_due', 'cancelled', 'trialing']).notNull().default('trialing'),
   renewal_date:            timestamp('renewal_date'),
+  // A downgrade requested mid-cycle keeps the member on their current tier's
+  // price/limits until the next renewal (no proration refund); this holds
+  // the tier they'll move to at that point. Applied and cleared by the
+  // renewal job (scheduledJobs.ts) / Stripe invoice.payment_succeeded
+  // webhook (webhookStripeController.ts). Null when no downgrade is pending.
+  pending_tier:            mysqlEnum('pending_tier', ['pro', 'elite']),
   created_at:              timestamp('created_at').notNull().defaultNow(),
   updated_at:              timestamp('updated_at').notNull().defaultNow().onUpdateNow(),
 });

@@ -2,7 +2,7 @@ import { Helmet } from '@dr.pogodin/react-helmet';
 import { Link } from 'react-router-dom';
 import {
   Shield, Globe, Users, TrendingUp, Zap, Bell, BarChart2,
-  ArrowRight, Star, Heart
+  ArrowRight, Heart
 } from 'lucide-react';
 
 const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/membership#webpage\",\"name\":\"Become a PadiHub Member — Join Trusted Communities\",\"url\":\"https://padihub.com/membership\",\"description\":\"Join PadiHub and access trusted communities, build your reputation with Trust Score™ and participate in transparent savings ecosystems.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"}}";
@@ -20,7 +20,6 @@ const benefits = [
   { icon: BarChart2, title: 'Analytics',             desc: 'Track your progress, contributions and community impact over time.',          color: '#8B5CF6' },
   { icon: Users,     title: 'Governance',            desc: 'Participate in democratic community decisions and elections.',                color: '#2EAF6F' },
   { icon: Bell,      title: 'Notifications',         desc: 'Stay informed with smart alerts for contributions, votes and events.',        color: '#F59E0B' },
-  { icon: Star,      title: 'AI Onboarding',         desc: 'Personalised guidance to help you find the right communities fast.',         color: '#2eafaf' },
   { icon: Heart,     title: 'Priority Support',      desc: 'Get help from our community team whenever you need it.',                     color: '#EF4444' },
 ];
 
@@ -79,7 +78,7 @@ export default function MembershipPage() {
         @media (min-width: 640px) { .membership-stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
         @media (min-width: 1024px) { .membership-stats-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
         .membership-stat-card { min-width: 0; }
-        .membership-stat-value { line-height: 1.15; word-break: break-word; }
+        .membership-stat-value { line-height: 1.15; overflow-wrap: break-word; }
         .membership-pillars { display: flex; flex-direction: column; gap: 1rem; }
         @media (min-width: 640px) { .membership-pillars { flex-direction: row; flex-wrap: wrap; justify-content: center; } }
         .membership-pill { width: 100%; justify-content: center; text-align: center; }

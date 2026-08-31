@@ -8,9 +8,11 @@
  */
 
 import { drizzle } from 'drizzle-orm/mysql2';
+import { eq, and } from 'drizzle-orm';
 import mysql from 'mysql2/promise';
 import { getDatabaseCredentials } from './config';
 import * as schema from './schema';
+import { TRUST_SCORE_INITIAL, TRUST_SCORE_MIN, TRUST_SCORE_DELTA_IDENTITY_VERIFIED } from '../lib/constants';
 
 // Get database configuration
 const dbConfig = getDatabaseCredentials();
@@ -141,6 +143,7 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
   subscriptions: [
     { column: 'provider_subscription_id', sqlType: 'VARCHAR(255) NULL' },
     { column: 'renewal_date',             sqlType: 'TIMESTAMP NULL' },
+    { column: 'pending_tier',             sqlType: "ENUM('pro','elite') NULL" },
   ],
 };
 
@@ -178,5 +181,75 @@ export async function ensureSchemaSync(): Promise<void> {
         err instanceof Error ? err.message : err,
       );
     }
+  }
+}
+
+type TrustScoreAuditMetadata = { reason?: string; delta?: number; newScore?: number; legacyCorrectedFrom?: number };
+
+/**
+ * Idempotent, non-destructive self-heal for pre-existing users whose
+ * trust_score was set by the old 0-100 formula (TRUST_SCORE_INITIAL=50,
+ * IDENTITY_VERIFIED bonus=+50) before it was corrected to the current
+ * formula (TRUST_SCORE_INITIAL=0, IDENTITY_VERIFIED bonus=+10, see
+ * src/server/lib/constants.ts). Only new activity going forward used the
+ * corrected formula — existing rows kept whatever value the old formula had
+ * already written, so this backfills them once at boot. Never throws — a
+ * failure here is logged but must not prevent the server from starting.
+ */
+export async function normalizeLegacyTrustScores(): Promise<void> {
+  // Fingerprint 1: accounts still sitting at the old default of exactly 50
+  // with zero TRUST_SCORE_UPDATED audit history. Current code only ever
+  // creates users at trust_score=0 and always audit-logs every subsequent
+  // change, so a user at 50 with no audit trail can only be a stale value
+  // from before this fix — never a legitimately-earned score.
+  try {
+    const staleDefaults = await db.select({ id: schema.users.id })
+      .from(schema.users)
+      .where(eq(schema.users.trust_score, 50));
+
+    for (const user of staleDefaults) {
+      const auditRows = await db.select({ id: schema.auditLogs.id })
+        .from(schema.auditLogs)
+        .where(and(eq(schema.auditLogs.user_id, user.id), eq(schema.auditLogs.action, 'TRUST_SCORE_UPDATED')))
+        .limit(1);
+      if (auditRows.length) continue;
+
+      await db.update(schema.users).set({ trust_score: TRUST_SCORE_INITIAL }).where(eq(schema.users.id, user.id));
+      console.log(`[PadiHub] Trust score migration: reset legacy default trust_score=50 -> ${TRUST_SCORE_INITIAL} for user ${user.id} (no prior trust-score audit history).`);
+    }
+  } catch (err) {
+    console.error('[PadiHub] Trust score legacy-default migration failed:', err instanceof Error ? err.message : err);
+  }
+
+  // Fingerprint 2: identity-verification bonuses granted under the old +50
+  // formula. Correct the affected user's current running score and rewrite
+  // the audit log's own metadata.delta to the corrected +10 so re-running
+  // this migration on every boot is a no-op once applied.
+  try {
+    const trustScoreLogs = await db.select({
+      id: schema.auditLogs.id,
+      userId: schema.auditLogs.user_id,
+      metadata: schema.auditLogs.metadata,
+    })
+      .from(schema.auditLogs)
+      .where(eq(schema.auditLogs.action, 'TRUST_SCORE_UPDATED'));
+
+    for (const log of trustScoreLogs) {
+      const metadata = log.metadata as TrustScoreAuditMetadata | null;
+      if (!metadata || metadata.reason !== 'IDENTITY_VERIFIED' || metadata.delta !== 50 || !log.userId) continue;
+
+      const rows = await db.select({ trust_score: schema.users.trust_score })
+        .from(schema.users).where(eq(schema.users.id, log.userId)).limit(1);
+      if (!rows.length) continue;
+
+      const correctedScore = Math.max(rows[0].trust_score - 40, TRUST_SCORE_MIN);
+      await db.update(schema.users).set({ trust_score: correctedScore }).where(eq(schema.users.id, log.userId));
+      await db.update(schema.auditLogs)
+        .set({ metadata: { ...metadata, delta: TRUST_SCORE_DELTA_IDENTITY_VERIFIED, legacyCorrectedFrom: 50 } })
+        .where(eq(schema.auditLogs.id, log.id));
+      console.log(`[PadiHub] Trust score migration: corrected legacy +50 identity-verification bonus to +${TRUST_SCORE_DELTA_IDENTITY_VERIFIED} for user ${log.userId} (trust_score now ${correctedScore}).`);
+    }
+  } catch (err) {
+    console.error('[PadiHub] Trust score legacy-bonus migration failed:', err instanceof Error ? err.message : err);
   }
 }

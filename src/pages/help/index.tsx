@@ -9,7 +9,8 @@ import {
 } from 'lucide-react';
 
 import HelpRouteLayout from './HelpRouteLayout';
-import { FAQ_ENTRIES } from './faqData';
+import { getFaqEntries } from './faqData';
+import { useResolvedPricingRegion } from '@/lib/pricingRegion';
 
 const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/help#webpage\",\"name\":\"Help & Support — PadiHub\",\"url\":\"https://padihub.com/help\",\"description\":\"Get help with PadiHub — search our FAQs, submit a ticket or chat with our team.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"}}";
 
@@ -48,16 +49,18 @@ const channels = [
 export default function HelpIndexPage() {
   const [search, setSearch] = useState('');
   const [openFaq, setOpenFaq] = useState<string | null>(null);
+  const region = useResolvedPricingRegion();
+  const faqEntries = useMemo(() => getFaqEntries(region), [region]);
 
   const normalizedSearch = search.trim().toLowerCase();
   const filteredFaqs = useMemo(
-    () => FAQ_ENTRIES.filter(faq =>
+    () => faqEntries.filter(faq =>
       faq.q.toLowerCase().includes(normalizedSearch)
       || faq.a.toLowerCase().includes(normalizedSearch),
     ),
-    [normalizedSearch],
+    [faqEntries, normalizedSearch],
   );
-  const faqResults = normalizedSearch ? filteredFaqs : FAQ_ENTRIES;
+  const faqResults = normalizedSearch ? filteredFaqs : faqEntries;
 
   return (
     <HelpRouteLayout>

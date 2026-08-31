@@ -627,12 +627,13 @@ if (import.meta.env.PROD) {
 		// issues are immediately visible in logs rather than surfacing as
 		// cryptic "unexpected error" responses at request time.
 		try {
-			const { testConnection, getConnectionTarget, ensureSchemaSync } = await import('./db/client.js');
+			const { testConnection, getConnectionTarget, ensureSchemaSync, normalizeLegacyTrustScores } = await import('./db/client.js');
 			console.log(`[PadiHub] Checking database connectivity to ${getConnectionTarget()}...`);
 			const connected = await testConnection();
 			if (connected) {
 				console.log('[PadiHub] ✓ Database connection verified.');
 				await ensureSchemaSync();
+				await normalizeLegacyTrustScores();
 			} else {
 				console.error(
 					`[PadiHub] ✗ Database connection FAILED after all retries. ` +

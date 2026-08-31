@@ -17,6 +17,7 @@ import { getFlutterwaveProvider } from '../integrations/payments/PaymentProvider
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { computeNextPayoutDate } from '../lib/payoutSchedule.js';
 import { SUBSCRIPTION_TIERS, isSubscriptionTierKey, getTierMonthlyPrice } from '../lib/constants.js';
+import { planCode } from './subscriptionService.js';
 import {
   sendContributionReminderEmail,
   sendSubscriptionRenewalReminderEmail,
@@ -331,7 +332,19 @@ export async function monthlySubscriptionRenewalCharge(): Promise<void> {
 
       const userRows = await db.select().from(schema.users).where(eq(schema.users.id, sub.user_id)).limit(1);
       if (!userRows.length) continue;
-      const user = userRows[0];
+      let user = userRows[0];
+
+      // A mid-cycle downgrade request keeps the member on their current
+      // tier's limits/price until this renewal — apply it now, before
+      // computing the charge amount, so the correct (new, lower) price is
+      // what actually gets charged going forward. See subscriptionService's
+      // switchPlan for where pending_tier is set.
+      if (sub.pending_tier && isSubscriptionTierKey(sub.pending_tier) && sub.pending_tier !== user.subscription_tier) {
+        await db.update(schema.users).set({ subscription_tier: sub.pending_tier }).where(eq(schema.users.id, user.id));
+        await db.update(schema.subscriptions).set({ plan: planCode(user.country, sub.pending_tier), pending_tier: null }).where(eq(schema.subscriptions.id, sub.id));
+        await createAuditLog({ userId: user.id, action: 'SUBSCRIPTION_TIER_SWITCHED', entity: 'subscriptions', entityId: sub.id, metadata: { from: user.subscription_tier, to: sub.pending_tier, appliedAtRenewal: true } });
+        user = { ...user, subscription_tier: sub.pending_tier };
+      }
 
       if (!user.flutterwave_card_token) {
         await notificationService.create({

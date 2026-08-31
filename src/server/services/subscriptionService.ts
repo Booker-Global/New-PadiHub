@@ -25,7 +25,7 @@ import {
   sendSubscriptionTierChangedEmail,
 } from '../integrations/email/emailService.js';
 
-function planCode(country: string, tier: SubscriptionTierKey): string {
+export function planCode(country: string, tier: SubscriptionTierKey): string {
   return `${country === 'NG' ? 'ng' : 'gb'}_${tier}`;
 }
 
@@ -224,6 +224,9 @@ export const subscriptionService = {
     // just update the stored preference, nothing to bill/prorate.
     if (!sub || !sub.provider_subscription_id || sub.billing_status === 'cancelled') {
       await db.update(schema.users).set({ subscription_tier: newTier }).where(eq(schema.users.id, userId));
+      if (sub) {
+        await db.update(schema.subscriptions).set({ pending_tier: null }).where(eq(schema.subscriptions.user_id, userId));
+      }
       await createAuditLog({ userId, action: 'SUBSCRIPTION_TIER_SWITCHED', entity: 'users', metadata: { from: currentTier, to: newTier } });
       return { tier: newTier, direction, effective_immediately: true };
     }
@@ -231,25 +234,31 @@ export const subscriptionService = {
     const effectiveDate = sub.renewal_date ? new Date(sub.renewal_date) : new Date();
 
     if (direction === 'downgrade') {
-      // Keep current tier/limits and price until the next renewal date, then
-      // flip both the DB tier and the provider's plan/price. We store the
-      // *pending* tier alongside a note in the audit log; the scheduled
-      // renewal job (monthlySubscriptionRenewalCharge) or provider webhook
-      // is responsible for the actual price change at that date. For
-      // simplicity and correctness of *this* request we apply the tier
-      // change to the `subscriptions.plan` immediately (so future renewal
-      // charges use the new tier's price) and to `users.subscription_tier`
-      // immediately, but the confirmation email makes clear the new price
-      // is only charged from the next billing date — no proration refund is
-      // given for the current, already-paid period.
+      // Keep the current tier's limits and price until the next renewal
+      // date, then flip both `users.subscription_tier` and
+      // `subscriptions.plan` to the new tier. We only record the *pending*
+      // tier here — monthlySubscriptionRenewalCharge (Flutterwave) and the
+      // Stripe invoice.payment_succeeded webhook apply it once the next
+      // renewal is actually reached, which keeps group-creation limits
+      // (gated on users.subscription_tier — see groupService.create) in
+      // sync with what members are told: no change until renewal, and no
+      // proration refund for the already-paid current period.
       await db.update(schema.subscriptions)
-        .set({ plan: planCode(user.country, newTier) })
+        .set({ pending_tier: newTier })
         .where(eq(schema.subscriptions.user_id, userId));
-      await db.update(schema.users).set({ subscription_tier: newTier }).where(eq(schema.users.id, userId));
     } else {
-      // Upgrade: switch the provider's subscription item to the new price
-      // immediately so the higher tier's group limits and billing apply now.
+      // Upgrade: neither provider exposes an "update this subscription's
+      // price" call here (createSubscription always creates a brand-new
+      // subscription object) — cancel the existing lower-tier subscription
+      // first, or the customer would end up billed on both subscriptions
+      // concurrently with only the new one tracked locally.
       const provider = getPaymentProvider(user.country);
+      try {
+        await provider.cancelSubscription({ subscriptionId: sub.provider_subscription_id });
+      } catch (error) {
+        console.error('[SubscriptionService] Failed to cancel previous provider subscription during upgrade:', error);
+      }
+
       const result = await provider.createSubscription({
         customerId: user.country === 'NG' ? (user.flutterwave_customer_id ?? '') : (user.stripe_customer_id ?? ''),
         userId,
@@ -262,6 +271,7 @@ export const subscriptionService = {
         plan:                     planCode(user.country, newTier),
         billing_status:           'active',
         renewal_date:             result.renewalDate,
+        pending_tier:             null,
       }).where(eq(schema.subscriptions.user_id, userId));
       await db.update(schema.users).set({ subscription_tier: newTier }).where(eq(schema.users.id, userId));
     }
