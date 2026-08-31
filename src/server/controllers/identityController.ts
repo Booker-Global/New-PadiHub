@@ -18,7 +18,7 @@ import {
   sendVerificationFeeChargedEmail,
 } from '../integrations/email/emailService.js';
 import { ip } from '../lib/reqHelpers.js';
-import { TRUST_SCORE_DELTA_IDENTITY_VERIFIED } from '../lib/constants.js';
+import { TRUST_SCORE_DELTA_IDENTITY_VERIFIED, isSubscriptionTierKey, formatTierPrice } from '../lib/constants.js';
 
 const stripeIdentity      = new StripeIdentityProvider();
 const flutterwaveIdentity = new FlutterwaveIdentityProvider();
@@ -85,11 +85,12 @@ export async function stripeIdentityWebhook(req: Request, res: Response, next: N
         message: 'Your identity has been verified. Your Trust Score has increased.',
       });
 
-      const userRow = await db.select({ email: schema.users.email, first_name: schema.users.first_name })
+      const userRow = await db.select({ email: schema.users.email, first_name: schema.users.first_name, subscription_tier: schema.users.subscription_tier, country: schema.users.country })
         .from(schema.users).where(eq(schema.users.id, userId)).limit(1);
       if (userRow.length) {
         await sendIdentityVerifiedEmail(userRow[0].email, userRow[0].first_name);
-        await sendVerificationFeeChargedEmail(userRow[0].email, userRow[0].first_name);
+        const tier = isSubscriptionTierKey(userRow[0].subscription_tier) ? userRow[0].subscription_tier : 'pro';
+        await sendVerificationFeeChargedEmail(userRow[0].email, userRow[0].first_name, formatTierPrice(tier, userRow[0].country));
       }
 
       await createAuditLog({ userId, action: 'IDENTITY_VERIFIED', entity: 'users', entityId: userId });

@@ -16,6 +16,11 @@ export const users = mysqlTable('users', {
   currency:                    varchar('currency', { length: 3 }).notNull().default('GBP'),
   trust_score:                 int('trust_score').notNull().default(0),
   subscription_status:         mysqlEnum('subscription_status', ['free', 'trial', 'active', 'expired', 'cancelled']).notNull().default('free'),
+  // The subscription tier the user chose during onboarding — 'pro' or 'elite'
+  // (see SUBSCRIPTION_TIERS in src/server/lib/constants.ts). Null until the
+  // user picks a plan; group creation/joining requires this to be set — see
+  // paymentEligibilityService.ts.
+  subscription_tier:           mysqlEnum('subscription_tier', ['pro', 'elite']),
   stripe_customer_id:          varchar('stripe_customer_id', { length: 100 }),
   stripe_payment_method_id:    varchar('stripe_payment_method_id', { length: 100 }),
   stripe_connected_account_id: varchar('stripe_connected_account_id', { length: 100 }),
@@ -86,6 +91,10 @@ export const savingsGroups = mysqlTable('savings_groups', {
   // group-creation time for weekly/monthly groups — see groupController.ts.
   payout_day:               int('payout_day'),
   maximum_members:          int('maximum_members').notNull().default(10),
+  // Minimum Trust Score a prospective member must have to request to join
+  // this group — set by the creator at group-creation time (0 = no minimum).
+  // Enforced in membershipService.requestToJoin().
+  min_trust_score:          int('min_trust_score').notNull().default(0),
   rotation_method:          mysqlEnum('rotation_method', ['manual', 'random']).notNull().default('manual'),
   current_rotation_position: int('current_rotation_position').notNull().default(1),
   current_cycle:            int('current_cycle').notNull().default(1),

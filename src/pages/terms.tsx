@@ -54,11 +54,7 @@ const sections = [
     content: [
       {
         subtitle: 'Subscription Plans',
-        text: 'PadiHub offers paid membership plans for the United Kingdom (£4.99/month or £49.99/year) and Nigeria (₦3,500/month or ₦35,000/year). Prices are subject to change with 30 days\' notice.',
-      },
-      {
-        subtitle: 'Free Trial',
-        text: 'New members receive a 30-day free trial. You will not be charged during the trial period. You may cancel at any time before the trial ends without charge.',
+        text: 'PadiHub offers exactly two monthly-only subscription tiers with no annual option and no free trial: Pro Group at £4.99/month (UK) or ₦5,000/month (Nigeria), and Elite Group at £9.99/month (UK) or ₦10,000/month (Nigeria). Pro Group lets a member create ONE savings group and be a member of up to 5 groups total. Elite Group lets a member create up to SEVEN savings groups and be a member of up to 10 groups total. Which currency/country is shown depends on the visitor\'s location (IP-based), not a manual toggle.',
       },
       {
         subtitle: 'Cancellation',
@@ -102,7 +98,7 @@ const sections = [
     content: [
       {
         subtitle: 'PadiHub IP',
-        text: 'PadiHub™, Trust Score™, PadiHub Passport™, and Community DNA™ are trademarks of PadiHub. The platform, its design, and all original content are protected by copyright and other intellectual property laws.',
+        text: 'PadiHub™, Trust Score™, and Community DNA™ are trademarks of PadiHub. The platform, its design, and all original content are protected by copyright and other intellectual property laws.',
       },
       {
         subtitle: 'Your Content',
@@ -186,11 +182,11 @@ const sections = [
       },
       {
         subtitle: 'How It Appears on Your Invoice',
-        text: 'The fee will appear on your invoice as "Identity Verification Fee (one-time)". It is added automatically when you initiate identity verification and will be collected together with your first subscription payment.',
+        text: 'The fee will appear on your invoice as "Identity Verification Fee (one-time)". It is added automatically when you initiate identity verification and will be collected together with your first monthly subscription payment.',
       },
       {
         subtitle: 'First Invoice Total',
-        text: 'Your first month\'s invoice will total £6.49 (£4.99 subscription + £1.50 identity verification fee). All subsequent monthly invoices will be £4.99. Annual plan pricing is unaffected by this fee.',
+        text: 'Your first invoice will include your selected monthly plan plus the £1.50 identity verification fee. If you subscribe to Pro Group, your first invoice total will be £6.49. If you subscribe to Elite Group, your first invoice total will be £11.49. There is no annual billing option and no free trial.',
       },
       {
         subtitle: 'Non-Refundable',
@@ -210,7 +206,7 @@ const sections = [
       },
       {
         subtitle: 'Standard Subscription Pricing',
-        text: 'Nigerian users pay the standard subscription fee of ₦3,500/month or ₦35,000/year. No identity verification surcharge is applied at any point.',
+        text: 'Nigerian users can subscribe to Pro Group at ₦5,000/month or Elite Group at ₦10,000/month. Pro Group lets a member create ONE savings group and be a member of up to 5 groups total. Elite Group lets a member create up to SEVEN savings groups and be a member of up to 10 groups total. There is no annual billing option, no free trial, and no identity verification surcharge.',
       },
     ],
   },
@@ -242,11 +238,11 @@ const sections = [
     content: [
       {
         subtitle: 'Legal Team',
-        text: 'For questions about these Terms of Service, please contact our Legal Team at legal@padihub.com.',
+        text: 'For questions about these Terms of Service, please contact our Legal Team at hello@padihub.com.',
       },
       {
         subtitle: 'General Support',
-        text: 'For general support and account questions, visit our Help Centre at padihub.com/help or contact support@padihub.com.',
+        text: 'For general support and account questions, visit our Help Centre at padihub.com/help or contact hello@padihub.com.',
       },
     ],
   },
@@ -361,7 +357,7 @@ export default function TermsPage() {
               <div
                 className="mt-8 rounded-3xl p-6 text-center" style={{ background: 'linear-gradient(135deg, #0F172A, #1A1A2E)' }}>
                 <p className="text-white font-bold mb-2" style={{ fontFamily: 'Nunito, sans-serif' }}>Questions about these terms?</p>
-                <p className="text-gray-400 text-sm mb-4">Our team is happy to clarify anything. Reach us at legal@padihub.com</p>
+                <p className="text-gray-400 text-sm mb-4">Our team is happy to clarify anything. Reach us at hello@padihub.com</p>
                 <div className="r-flex-center">
                   <Link to="/contact" className="px-6 py-3 rounded-2xl text-sm font-bold text-white transition-all hover:opacity-90"
                     style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}>

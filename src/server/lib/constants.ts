@@ -54,4 +54,51 @@ export const TRUST_SCORE_DELTA_IDENTITY_VERIFIED    = 10; // completed KYC/ident
 export const GROUP_DEFAULT_STRIKE_THRESHOLD     = 2; // missed contributions before a warning
 export const GROUP_DEFAULT_SUSPENSION_THRESHOLD = 3; // missed contributions before the member is kicked out
 export const GROUP_DEFAULT_VOTING_THRESHOLD     = 51; // % of votes required to pass a group decision
+export const GROUP_DEFAULT_MIN_TRUST_SCORE      = 0; // no minimum Trust Score required to join, unless the creator sets one
+
+/**
+ * Subscription tiers — PadiHub has exactly two monthly-only membership
+ * tiers (no annual billing, no free trial). Each tier caps how many groups
+ * a member may CREATE (as leader) versus how many groups they may be an
+ * active MEMBER of (creating a group also counts as membership of it).
+ * A user must select one of these during onboarding, before their account
+ * is treated as fully verified — see paymentEligibilityService.ts for the
+ * enforcement gate.
+ */
+export const SUBSCRIPTION_TIERS = {
+  pro: {
+    key:             'pro' as const,
+    name:            'Pro Group',
+    priceGBP:        4.99,
+    priceNGN:        5000,
+    maxGroupsCreate: 1,
+    maxGroupsJoin:   5,
+  },
+  elite: {
+    key:             'elite' as const,
+    name:            'Elite Group',
+    priceGBP:        9.99,
+    priceNGN:        10000,
+    maxGroupsCreate: 7,
+    maxGroupsJoin:   10,
+  },
+} as const;
+
+export type SubscriptionTierKey = keyof typeof SUBSCRIPTION_TIERS;
+
+export function isSubscriptionTierKey(value: unknown): value is SubscriptionTierKey {
+  return value === 'pro' || value === 'elite';
+}
+
+/** Monthly price (as a number, in the country's own currency) for a tier. */
+export function getTierMonthlyPrice(tier: SubscriptionTierKey, country: string): number {
+  return country === 'NG' ? SUBSCRIPTION_TIERS[tier].priceNGN : SUBSCRIPTION_TIERS[tier].priceGBP;
+}
+
+/** Monthly price formatted with the country's currency symbol, e.g. "£4.99" or "₦5,000". */
+export function formatTierPrice(tier: SubscriptionTierKey, country: string): string {
+  return country === 'NG'
+    ? `₦${SUBSCRIPTION_TIERS[tier].priceNGN.toLocaleString('en-NG')}`
+    : `£${SUBSCRIPTION_TIERS[tier].priceGBP.toFixed(2)}`;
+}
 

@@ -12,6 +12,80 @@ export const voteService = {
     return db.select().from(schema.votes).where(eq(schema.votes.group_id, groupId));
   },
 
+  /**
+   * Propose swapping payout rotation positions with another member of the
+   * same group. Encodes the target member id in `proposal_text` using a
+   * machine-readable marker so `executePayoutSwapIfApproved` can act on it
+   * once the group votes to approve.
+   */
+  async proposePayoutSwap(groupId: string, proposerId: string, targetMemberId: string, note: string | undefined, ipAddress?: string) {
+    if (proposerId === targetMemberId) throw new AppError('You cannot propose a swap with yourself.', 400);
+
+    const groupRows = await db.select().from(schema.savingsGroups).where(eq(schema.savingsGroups.id, groupId)).limit(1);
+    if (!groupRows.length) throw new AppError('Group not found.', 404);
+    if (!groupRows[0].allow_payout_swaps) throw new AppError('Payout swaps are not permitted in this group.', 403);
+
+    const memberRows = await db.select().from(schema.memberships)
+      .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')));
+    const proposer = memberRows.find(m => m.user_id === proposerId);
+    const target = memberRows.find(m => m.user_id === targetMemberId);
+    if (!proposer) throw new AppError('You are not an active member of this group.', 403);
+    if (!target) throw new AppError('The selected member is not an active member of this group.', 404);
+    if (proposer.rotation_order == null || target.rotation_order == null) {
+      throw new AppError('Payout rotation positions are not yet assigned for this group.', 400);
+    }
+
+    const votingDeadline = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000); // 3 days to vote
+    const proposalText = `[[PAYOUT_SWAP:${targetMemberId}]] ${note?.trim() || 'Requesting to swap payout rotation position with another member.'}`;
+
+    return this.create({
+      group_id: groupId,
+      proposal_type: 'payout_swap',
+      proposer_id: proposerId,
+      proposal_text: proposalText,
+      voting_deadline: votingDeadline,
+    }, ipAddress);
+  },
+
+  /** Parses the target member id out of a payout_swap vote's proposal_text, if present. */
+  _parseSwapTarget(proposalText: string): string | null {
+    const match = /^\[\[PAYOUT_SWAP:([^\]]+)\]\]/.exec(proposalText);
+    return match ? match[1] : null;
+  },
+
+  /** Swaps rotation_order between the proposer and the target member once a payout_swap vote is approved. */
+  async executePayoutSwapIfApproved(vote: typeof schema.votes.$inferSelect) {
+    if (vote.proposal_type !== 'payout_swap') return;
+    const targetMemberId = this._parseSwapTarget(vote.proposal_text);
+    if (!targetMemberId) return;
+
+    const [proposerMembership] = await db.select().from(schema.memberships)
+      .where(and(eq(schema.memberships.group_id, vote.group_id), eq(schema.memberships.user_id, vote.proposer_id))).limit(1);
+    const [targetMembership] = await db.select().from(schema.memberships)
+      .where(and(eq(schema.memberships.group_id, vote.group_id), eq(schema.memberships.user_id, targetMemberId))).limit(1);
+    if (!proposerMembership || !targetMembership) return;
+    if (proposerMembership.rotation_order == null || targetMembership.rotation_order == null) return;
+
+    const proposerOrder = proposerMembership.rotation_order;
+    const targetOrder = targetMembership.rotation_order;
+
+    await db.update(schema.memberships).set({ rotation_order: targetOrder }).where(eq(schema.memberships.id, proposerMembership.id));
+    await db.update(schema.memberships).set({ rotation_order: proposerOrder }).where(eq(schema.memberships.id, targetMembership.id));
+
+    await createAuditLog({
+      userId: vote.proposer_id, action: 'PAYOUT_SWAP_EXECUTED', entity: 'memberships', entityId: proposerMembership.id,
+      metadata: { group_id: vote.group_id, swapped_with: targetMemberId, proposer_new_order: targetOrder, target_new_order: proposerOrder },
+    });
+
+    for (const userId of [vote.proposer_id, targetMemberId]) {
+      await notificationService.create({
+        userId, type: 'payout_swap_completed',
+        title: 'Payout Schedule Updated',
+        message: 'Your group approved a payout rotation swap — your payout position has been updated.',
+      });
+    }
+  },
+
   async create(data: {
     group_id: string; proposal_type: 'payout_swap' | 'exceptional_request';
     proposer_id: string; proposal_text: string; voting_deadline: Date;
@@ -100,6 +174,7 @@ export const voteService = {
       });
     }
     await createAuditLog({ userId, action: 'VOTE_FORCE_CLOSED', entity: 'votes', entityId: voteId, ipAddress, metadata: { result: newStatus } });
+    if (newStatus === 'approved') await this.executePayoutSwapIfApproved({ ...vote, status: newStatus });
     return { status: newStatus, approvals, total };
   },
 
@@ -124,6 +199,7 @@ export const voteService = {
     else if (new Date() > deadline) newStatus = responses.length === total ? 'rejected' : 'expired';
 
     if (newStatus) {
+      const voteRows = await db.select().from(schema.votes).where(eq(schema.votes.id, voteId)).limit(1);
       await db.update(schema.votes).set({ status: newStatus }).where(eq(schema.votes.id, voteId));
       for (const m of members) {
         await notificationService.create({
@@ -133,6 +209,7 @@ export const voteService = {
         });
       }
       await createAuditLog({ action: 'VOTE_CLOSED', entity: 'votes', entityId: voteId, metadata: { result: newStatus } });
+      if (newStatus === 'approved' && voteRows.length) await this.executePayoutSwapIfApproved({ ...voteRows[0], status: newStatus });
     }
   },
 };

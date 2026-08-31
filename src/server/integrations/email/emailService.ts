@@ -25,7 +25,7 @@ function footer(): string {
       <p style="margin:0;font-family:sans-serif;font-size:12px;color:#6B7280;">
         You received this email because you have an account with PadiHub.
         If you have questions, contact us at
-        <a href="mailto:support@padihub.com" style="color:#2EAF6F;">support@padihub.com</a>.
+        <a href="mailto:hello@padihub.com" style="color:#2EAF6F;">hello@padihub.com</a>.
       </p>
       <p style="margin:8px 0 0;font-family:sans-serif;font-size:11px;color:#9CA3AF;">
         © ${new Date().getFullYear()} PadiHub. All rights reserved.
@@ -69,6 +69,10 @@ function table(rows: string): string {
   return `<table style="width:100%;border-collapse:collapse;margin:16px 0;">${rows}</table>`;
 }
 
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 // ─── Safe send wrapper ────────────────────────────────────────────────────────
 
 async function send(to: string, subject: string, html: string): Promise<void> {
@@ -81,14 +85,54 @@ async function send(to: string, subject: string, html: string): Promise<void> {
   }
 }
 
+export async function sendSupportTicketSubmissionEmail(data: {
+  ticketRef: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  ticketAbout: string;
+  priority: string;
+  subject: string;
+  message: string;
+  userId?: string;
+}): Promise<void> {
+  const APP_URL = process.env.APP_URL ?? 'https://padihub.com';
+  const toAddress = 'hello@padihub.com';
+  const requesterName = escapeHtml(`${data.firstName} ${data.lastName}`.trim());
+  const safeEmail = escapeHtml(data.email);
+  const safeSubject = escapeHtml(data.subject);
+  const safeTicketAbout = escapeHtml(data.ticketAbout);
+  const safePriority = escapeHtml(data.priority);
+  const safeMessage = escapeHtml(data.message);
+  const safeUserId = data.userId ? detail('User ID', escapeHtml(data.userId)) : '';
+
+  await send(toAddress, `[Support Ticket] ${data.subject} — ${data.ticketRef}`, wrap(`
+    ${h2('New support ticket submission')}
+    ${table(
+      detail('Ticket reference', escapeHtml(data.ticketRef)) +
+      detail('From', requesterName || safeEmail) +
+      detail('Email', safeEmail) +
+      detail('What it is about', safeTicketAbout) +
+      detail('Priority', safePriority) +
+      detail('Subject', safeSubject) +
+      safeUserId
+    )}
+    <div style="background:#F9FAFB;border:1px solid #E5E7EB;border-radius:8px;padding:16px 20px;margin:16px 0;">
+      <p style="margin:0;font-family:sans-serif;font-size:14px;color:#374151;white-space:pre-wrap;">${safeMessage}</p>
+    </div>
+    ${btn('Reply to ' + (requesterName || data.email), `mailto:${data.email}`)}
+    ${p('<small style="color:#9CA3AF;">Sent via the PadiHub help ticket form at ' + APP_URL + '/help/ticket</small>')}
+  `));
+}
+
 // ─── Auth emails ──────────────────────────────────────────────────────────────
 
 export async function sendContactEmail(data: {
   name: string; email: string; subject: string; message: string;
 }): Promise<void> {
   const APP_URL = process.env.APP_URL ?? 'https://padihub.com';
-  const toAddress = process.env.RESEND_FROM_EMAIL ?? 'hello@padihub.com';
-  // Send to the support inbox
+  const toAddress = 'hello@padihub.com';
+  // Send to the shared inbox
   await send(toAddress, `[Contact] ${data.subject} — from ${data.name}`, wrap(`
     ${h2('New contact form submission')}
     ${p(`<strong>From:</strong> ${data.name} &lt;${data.email}&gt;`)}
@@ -147,7 +191,7 @@ export async function sendPasswordChangedEmail(to: string, timestamp: string): P
     ${h2('Password changed')}
     ${p(`Your PadiHub password was successfully changed on <strong>${timestamp}</strong>.`)}
     ${p('If you made this change, no further action is needed.')}
-    ${p('If you did not make this change, please <a href="mailto:support@padihub.com" style="color:#2EAF6F;">contact support</a> immediately and reset your password.')}
+    ${p('If you did not make this change, please <a href="mailto:hello@padihub.com" style="color:#2EAF6F;">contact support</a> immediately and reset your password.')}
   `));
 }
 
@@ -190,7 +234,7 @@ export async function sendMemberRemovedEmail(
     ${h2('Membership removed')}
     ${p(`You have been removed from <strong>${groupName}</strong>.`)}
     ${table(detail('Reason', reason))}
-    ${p('If you believe this was a mistake, please contact the group leader or <a href="mailto:support@padihub.com" style="color:#2EAF6F;">PadiHub support</a>.')}
+    ${p('If you believe this was a mistake, please contact the group leader or <a href="mailto:hello@padihub.com" style="color:#2EAF6F;">PadiHub support</a>.')}
   `));
 }
 
@@ -215,6 +259,61 @@ export async function sendGroupClosedEmail(to: string, groupName: string): Promi
     ${h2('Your savings group has been closed')}
     ${p(`The savings group <strong>${groupName}</strong> has been closed by the group leader.`)}
     ${p('Any pending contributions or payouts will be handled according to your group\'s rules. If you have questions, contact the group leader or PadiHub support.')}
+  `));
+}
+
+/** Notify a group leader that a verified member has requested to join their group. */
+export async function sendGroupJoinRequestEmail(
+  to: string, groupName: string, requesterName: string, requesterTrustScore: number,
+): Promise<void> {
+  await send(to, `${requesterName} wants to join ${groupName}`, wrap(`
+    ${h2('New request to join your group')}
+    ${p(`<strong>${requesterName}</strong> has requested to join <strong>${groupName}</strong>.`)}
+    ${table(
+      detail('Group', groupName) +
+      detail('Requested by', requesterName) +
+      detail('Trust Score', `${requesterTrustScore}/100`),
+    )}
+    ${p('Review and vote on this request from your dashboard.')}
+    ${btn('Review Request', `${process.env.APP_URL ?? 'https://padihub.com'}/dashboard`)}
+  `));
+}
+
+/** Confirm to the requester that their join request has been submitted. */
+export async function sendGroupJoinRequestSubmittedEmail(to: string, groupName: string): Promise<void> {
+  await send(to, `Your request to join ${groupName} was submitted`, wrap(`
+    ${h2('Join request submitted')}
+    ${p(`Your request to join <strong>${groupName}</strong> has been sent to the group leader for approval.`)}
+    ${p('We\'ll email you as soon as a decision has been made.')}
+  `));
+}
+
+/** Notify the requester their join request was approved. */
+export async function sendGroupJoinApprovedEmail(to: string, groupName: string): Promise<void> {
+  await send(to, `You've been accepted into ${groupName}`, wrap(`
+    ${h2('Request approved')}
+    ${p(`You've been accepted as a member of <strong>${groupName}</strong>.`)}
+    ${p('The group\'s payout schedule has been updated to include you. Check the group page for your rotation position.')}
+    ${btn('View Group', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
+  `));
+}
+
+/** Notify the requester their join request was declined. */
+export async function sendGroupJoinRejectedEmail(to: string, groupName: string): Promise<void> {
+  await send(to, `Update on your request to join ${groupName}`, wrap(`
+    ${h2('Request not approved')}
+    ${p(`Your request to join <strong>${groupName}</strong> was not approved by the group leader at this time.`)}
+  `));
+}
+
+/** Notify the group leader and every existing member once a new member is accepted. */
+export async function sendGroupNewMemberJoinedEmail(
+  to: string, groupName: string, newMemberName: string,
+): Promise<void> {
+  await send(to, `${newMemberName} joined ${groupName}`, wrap(`
+    ${h2('New member joined your group')}
+    ${p(`<strong>${newMemberName}</strong> has joined <strong>${groupName}</strong>. The payout schedule has been updated accordingly.`)}
+    ${btn('View Group', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
   `));
 }
 
@@ -400,6 +499,37 @@ export async function sendSubscriptionCancelledEmail(
   `));
 }
 
+/**
+ * Notify a member their subscription tier has changed. When downgrading,
+ * the new (lower) price takes effect from `effectiveDate` (their next
+ * billing date) and they keep current-tier access until then. When
+ * upgrading, the new (higher) price is charged immediately/from
+ * `effectiveDate`, which reflects their existing monthly billing anniversary.
+ */
+export async function sendSubscriptionTierChangedEmail(
+  to: string, params: {
+    direction: 'upgrade' | 'downgrade';
+    fromPlanName: string;
+    toPlanName: string;
+    newAmount: string;
+    effectiveDate: string;
+  },
+): Promise<void> {
+  const { direction, fromPlanName, toPlanName, newAmount, effectiveDate } = params;
+  await send(to, `Your PadiHub subscription is switching to ${toPlanName}`, wrap(`
+    ${h2(direction === 'upgrade' ? 'Subscription upgraded' : 'Subscription downgrade scheduled')}
+    ${p(`Your PadiHub subscription is changing from <strong>${fromPlanName}</strong> to <strong>${toPlanName}</strong>.`)}
+    ${table(
+      detail('New monthly amount', newAmount) +
+      detail(direction === 'upgrade' ? 'Charged from' : 'New price takes effect from', effectiveDate),
+    )}
+    ${direction === 'upgrade'
+      ? p('Your new group limits are available immediately.')
+      : p('You will keep your current plan\'s group limits until the date above, then move to your new plan\'s limits.')}
+    ${btn('View Subscription', `${process.env.APP_URL ?? 'https://padihub.com'}/dashboard`)}
+  `));
+}
+
 // ─── Support emails ───────────────────────────────────────────────────────────
 
 export async function sendSupportTicketReceivedEmail(
@@ -450,23 +580,24 @@ export async function sendIdentityVerifiedEmail(to: string, firstName: string): 
   await send(to, 'Your identity has been verified — PadiHub', wrap(`
     ${h2(`Identity verified, ${firstName}!`)}
     ${p('Your identity has been successfully verified on PadiHub.')}
-    ${p('As a result, your Trust Score has increased by <strong>+50 points</strong>. This helps build confidence with other group members and may unlock higher contribution limits.')}
-    ${p('No further action is needed. You can now create and join savings groups with full verification status.')}
+    ${p('As a result, your Trust Score has increased slightly. Everyone starts from the bottom of the scale and builds their Trust Score up over time through real group activity — on-time contributions, completed cycles, and positive participation.')}
+    ${p('No further action is needed. You can now create and join savings groups once you\'ve also selected a subscription plan and added your payment details.')}
     ${btn('View Your Trust Score', `${process.env.APP_URL ?? 'https://padihub.com'}/trust`)}
   `));
 }
 
-export async function sendVerificationFeeChargedEmail(to: string, firstName: string): Promise<void> {
+export async function sendVerificationFeeChargedEmail(
+  to: string, firstName: string, monthlySubscriptionAmount: string,
+): Promise<void> {
   await send(to, 'Identity Verification Fee Added to Your First Invoice', wrap(`
     ${h2(`Identity Verification Fee — ${firstName}`)}
     ${p('As part of completing your identity verification, a one-time fee has been added to your first subscription invoice.')}
     ${table(
       detail('Verification fee', '£1.50') +
-      detail('Monthly subscription', '£4.99') +
-      detail('First invoice total', '£6.49') +
+      detail('Monthly subscription', monthlySubscriptionAmount) +
       detail('Invoice description', 'Identity Verification Fee (one-time)'),
     )}
-    ${p('This fee covers the cost of securely verifying your identity through Stripe Identity. Subsequent monthly payments will be <strong>£4.99</strong>.')}
+    ${p(`This fee covers the cost of securely verifying your identity through Stripe Identity. Subsequent monthly payments will be <strong>${monthlySubscriptionAmount}</strong>.`)}
     ${p('This charge is non-refundable once verification has been completed.')}
     ${btn('View Subscription', `${process.env.APP_URL ?? 'https://padihub.com'}/dashboard`)}
   `));

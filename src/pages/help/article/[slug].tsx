@@ -4,10 +4,11 @@ import { Link, useParams } from 'react-router-dom';
 import {
   Clock, ThumbsUp, ThumbsDown, BookOpen,
   ChevronRight, Shield, PiggyBank, Users, Globe,
-  CheckCircle, AlertTriangle, Zap, MessageSquare
+  CheckCircle, AlertTriangle, Zap, MessageSquare,
 } from 'lucide-react';
 import { useState } from 'react';
-import DashboardLayout from '@/components/DashboardLayout';
+
+import HelpRouteLayout from '../HelpRouteLayout';
 
 const fadeUp = { hidden: { opacity: 0, y: 16 }, visible: { opacity: 1, y: 0, transition: { duration: 0.4, ease: 'easeOut' as const } } };
 const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.07 } } };
@@ -30,7 +31,7 @@ const articles: Record<string, {
       { heading: 'What decreases your score?', body: 'Missing contributions, failing to vote on governance proposals, extended inactivity and receiving negative peer feedback can reduce your Trust Score™. The impact is proportional — one missed contribution will not dramatically affect a strong score.', type: 'warning' },
     ],
     related: [
-      { title: 'Understanding your PadiHub Passport™',  slug: 'understanding-passport' },
+      { title: 'Understanding your PadiHub Passport™', slug: 'understanding-passport' },
       { title: 'What happens if I miss a contribution?', slug: 'missed-contribution' },
     ],
   },
@@ -61,7 +62,7 @@ const articles: Record<string, {
       { heading: 'Passport™ verification', body: 'Your Passport™ is automatically verified when you complete identity verification and maintain an active membership. Verified Passports™ display a verification badge and are trusted by community leaders.', type: 'info' },
     ],
     related: [
-      { title: 'How does Trust Score™ work?',    slug: 'how-trust-score-works' },
+      { title: 'How does Trust Score™ work?', slug: 'how-trust-score-works' },
     ],
   },
   'missed-contribution': {
@@ -75,8 +76,8 @@ const articles: Record<string, {
       { heading: 'Recovering your Trust Score™', body: 'Trust Score™ recovers over time through consistent on-time contributions, governance participation and community engagement. A single missed contribution is not permanent — consistent positive behaviour rebuilds your score.' },
     ],
     related: [
-      { title: 'How does Trust Score™ work?',      slug: 'how-trust-score-works' },
-      { title: 'How to create a savings group',    slug: 'create-savings-group' },
+      { title: 'How does Trust Score™ work?', slug: 'how-trust-score-works' },
+      { title: 'How to create a savings group', slug: 'create-savings-group' },
     ],
   },
   'invite-members': {
@@ -89,7 +90,7 @@ const articles: Record<string, {
       { heading: 'Setting join requirements', body: 'As a community leader, you can require a minimum Trust Score™, approval for all join requests, or keep your community fully open. We recommend requiring a minimum Trust Score™ of 300 for savings-focused communities.', type: 'tip' },
     ],
     related: [
-      { title: 'How to create a savings group',    slug: 'create-savings-group' },
+      { title: 'How to create a savings group', slug: 'create-savings-group' },
       { title: 'Understanding your PadiHub Passport™', slug: 'understanding-passport' },
     ],
   },
@@ -102,10 +103,10 @@ const fallbackArticle: {
   related: { title: string; slug: string }[];
 } = {
   title: 'Help Article',
-  category: 'Help Centre', readTime: '3 min read', updated: 'Jun 2025',
+  category: 'Help', readTime: '3 min read', updated: 'Jun 2025',
   icon: BookOpen, color: '#2EAF6F',
   sections: [
-    { heading: 'Article not found', body: 'This article is being updated. Please browse our help centre for related articles or submit a support ticket if you need immediate assistance.' },
+    { heading: 'Article not found', body: 'This article is being updated. Please browse our FAQ and help pages for related guidance, or submit a support ticket if you need immediate assistance.' },
   ],
   related: [
     { title: 'How does Trust Score™ work?', slug: 'how-trust-score-works' },
@@ -118,43 +119,36 @@ export default function HelpArticlePage() {
   const [helpful, setHelpful] = useState<boolean | null>(null);
 
   return (
-    <DashboardLayout>
+    <HelpRouteLayout>
       <Helmet>
         <title>{article.title} — PadiHub Help</title>
         <meta name="description" content={`PadiHub help article: ${article.title}`} />
         <link rel="canonical" href={`https://www.padihub.com/help/article/${slug || ''}`} />
-              <meta property="og:title" content="{article.title} — PadiHub Help" />
+        <meta property="og:title" content={`${article.title} — PadiHub Help`} />
         <meta property="og:description" content="The trusted community savings platform. Save together, grow together and belong." />
         <meta property="og:type" content="website" />
         <meta property="og:url" content="https://padihub.com/help/article/[slug]" />
         <meta property="og:image" content="https://padihub.com/airo-assets/images/og/default" />
         <meta name="twitter:card" content="summary_large_image" />
         <meta name="twitter:image" content="https://padihub.com/airo-assets/images/og/default" />
-</Helmet>
+      </Helmet>
 
       <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
-
-        {/* Breadcrumb */}
-        <MotionDiv variants={fadeUp} initial="hidden" animate="visible"
-          className="flex items-center gap-2 text-xs text-gray-400">
-          <Link to="/help" className="hover:text-gray-600 transition-colors">Help Centre</Link>
+        <MotionDiv variants={fadeUp} initial="hidden" animate="visible" className="flex items-center gap-2 text-xs text-gray-400">
+          <Link to="/help" className="hover:text-gray-600 transition-colors">Help &amp; Support</Link>
           <ChevronRight size={12} />
           <span style={{ color: article.color }}>{article.category}</span>
           <ChevronRight size={12} />
           <span className="text-gray-600 truncate">{article.title}</span>
         </MotionDiv>
 
-        {/* Article Header */}
-        <MotionDiv variants={fadeUp} initial="hidden" animate="visible"
-          className="bg-white rounded-3xl p-6 shadow-sm border border-gray-100">
+        <MotionDiv variants={fadeUp} initial="hidden" animate="visible" className="bg-white rounded-3xl p-6 shadow-sm border border-gray-100">
           <div className="flex items-start gap-4">
-            <div className="w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0"
-              style={{ background: `${article.color}15` }}>
+            <div className="w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0" style={{ background: `${article.color}15` }}>
               <article.icon size={22} style={{ color: article.color }} />
             </div>
             <div className="flex-1">
-              <span className="text-xs font-bold px-2.5 py-1 rounded-full mb-2 inline-block"
-                style={{ background: `${article.color}15`, color: article.color }}>
+              <span className="text-xs font-bold px-2.5 py-1 rounded-full mb-2 inline-block" style={{ background: `${article.color}15`, color: article.color }}>
                 {article.category}
               </span>
               <h1 className="text-xl font-extrabold text-gray-900 mb-2" style={{ fontFamily: 'Nunito, sans-serif' }}>
@@ -168,22 +162,23 @@ export default function HelpArticlePage() {
           </div>
         </MotionDiv>
 
-        {/* Article Content */}
         <MotionDiv variants={stagger} initial="hidden" animate="visible" className="space-y-4">
           {article.sections.map((section, i) => (
-            <MotionDiv key={i} variants={fadeUp}
+            <MotionDiv
+              key={i}
+              variants={fadeUp}
               className={`rounded-2xl p-5 ${section.type ? '' : 'bg-white shadow-sm border border-gray-100'}`}
               style={section.type ? {
                 background: section.type === 'tip' ? '#F0FDF4' : section.type === 'warning' ? '#FFFBEB' : '#EFF6FF',
                 border: `1px solid ${section.type === 'tip' ? '#D1FAE5' : section.type === 'warning' ? '#FDE68A' : '#BFDBFE'}`,
-              } : {}}>
+              } : {}}
+            >
               {section.type && (
                 <div className="flex items-center gap-2 mb-2">
                   {section.type === 'tip' && <CheckCircle size={14} style={{ color: '#2EAF6F' }} />}
                   {section.type === 'warning' && <AlertTriangle size={14} style={{ color: '#F59E0B' }} />}
                   {section.type === 'info' && <Zap size={14} style={{ color: '#3B82F6' }} />}
-                  <span className="text-xs font-bold uppercase tracking-wide"
-                    style={{ color: section.type === 'tip' ? '#065F46' : section.type === 'warning' ? '#92400E' : '#1E40AF' }}>
+                  <span className="text-xs font-bold uppercase tracking-wide" style={{ color: section.type === 'tip' ? '#065F46' : section.type === 'warning' ? '#92400E' : '#1E40AF' }}>
                     {section.type === 'tip' ? 'Pro Tip' : section.type === 'warning' ? 'Important' : 'Note'}
                   </span>
                 </div>
@@ -196,20 +191,22 @@ export default function HelpArticlePage() {
           ))}
         </MotionDiv>
 
-        {/* Was this helpful? */}
-        <MotionDiv variants={fadeUp} initial="hidden" animate="visible"
-          className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100 text-center">
+        <MotionDiv variants={fadeUp} initial="hidden" animate="visible" className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100 text-center">
           <p className="text-sm font-bold text-gray-700 mb-3">Was this article helpful?</p>
           {helpful === null ? (
             <div className="flex justify-center gap-3">
-              <button onClick={() => setHelpful(true)}
+              <button
+                onClick={() => setHelpful(true)}
                 className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold border transition-all hover:bg-green-50"
-                style={{ borderColor: '#D1FAE5', color: '#2EAF6F' }}>
+                style={{ borderColor: '#D1FAE5', color: '#2EAF6F' }}
+              >
                 <ThumbsUp size={14} /> Yes, helpful
               </button>
-              <button onClick={() => setHelpful(false)}
+              <button
+                onClick={() => setHelpful(false)}
                 className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold border transition-all hover:bg-gray-50"
-                style={{ borderColor: '#E5E7EB', color: '#6B7280' }}>
+                style={{ borderColor: '#E5E7EB', color: '#6B7280' }}
+              >
                 <ThumbsDown size={14} /> Not really
               </button>
             </div>
@@ -221,23 +218,23 @@ export default function HelpArticlePage() {
           ) : (
             <div className="space-y-2">
               <p className="text-xs text-gray-500">Sorry to hear that. Let us help you directly.</p>
-              <Link to="/help/ticket"
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold text-white transition-all hover:opacity-90"
-                style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}>
+              <Link to="/help/ticket" className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold text-white transition-all hover:opacity-90" style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}>
                 <MessageSquare size={13} /> Submit a Support Ticket
               </Link>
             </div>
           )}
         </MotionDiv>
 
-        {/* Related Articles */}
         {article.related.length > 0 && (
           <MotionDiv variants={fadeUp} initial="hidden" animate="visible">
             <h2 className="text-sm font-extrabold text-gray-900 mb-3" style={{ fontFamily: 'Nunito, sans-serif' }}>Related Articles</h2>
             <div className="space-y-2">
-              {article.related.map((rel, i) => (
-                <Link key={i} to={`/help/article/${rel.slug}`}
-                  className="flex items-center gap-3 bg-white rounded-2xl p-4 shadow-sm border border-gray-100 hover:shadow-md transition-all group">
+              {article.related.map(rel => (
+                <Link
+                  key={rel.slug}
+                  to={`/help/article/${rel.slug}`}
+                  className="flex items-center gap-3 bg-white rounded-2xl p-4 shadow-sm border border-gray-100 hover:shadow-md transition-all group"
+                >
                   <BookOpen size={14} style={{ color: '#9CA3AF', flexShrink: 0 }} />
                   <p className="text-sm font-semibold text-gray-700 flex-1">{rel.title}</p>
                   <ChevronRight size={14} style={{ color: '#D1D5DB' }} className="flex-shrink-0 group-hover:translate-x-0.5 transition-transform" />
@@ -246,8 +243,7 @@ export default function HelpArticlePage() {
             </div>
           </MotionDiv>
         )}
-
       </div>
-    </DashboardLayout>
+    </HelpRouteLayout>
   );
 }

@@ -208,6 +208,7 @@ app.get(   '/api/users/trust-history', authenticate, userController.getTrustHist
 
 // ── Groups ───────────────────────────────────────────────────────────�[...]
 app.get(   '/api/groups',                    authenticate, groupController.list);
+app.get(   '/api/groups/search',              groupController.search);
 app.get(   '/api/groups/:id',                authenticate, groupController.getOne);
 app.post(  '/api/groups',                    authenticate, ...groupController.create);
 app.put(   '/api/groups/:id',                authenticate, ...groupController.update);
@@ -218,6 +219,8 @@ app.post(  '/api/groups/:id/invitations',    authenticate, ...groupController.cr
 app.get(   '/api/memberships',     authenticate, membershipController.list);
 app.post(  '/api/memberships',     authenticate, ...membershipController.join);
 app.delete('/api/memberships/:id', authenticate, membershipController.leave);
+app.post(  '/api/memberships/:id/approve', authenticate, membershipController.approve);
+app.post(  '/api/memberships/:id/reject',  authenticate, membershipController.reject);
 app.post(  '/api/memberships/remove', authenticate, ...membershipController.remove);
 
 // ── Contributions ─────────────────────────────────────────────────────────[...]
@@ -235,6 +238,7 @@ app.put('/api/rotations/:id/advance',    authenticate, rotationController.advanc
 // ── Votes ───────────────────────────────────────────────────────────��[...]
 app.get('/api/votes',            authenticate, voteController.list);
 app.post('/api/votes',           authenticate, ...voteController.create);
+app.post('/api/votes/payout-swap', authenticate, ...voteController.proposeSwap);
 app.put('/api/votes/:id',        authenticate, ...voteController.cast);
 app.put('/api/votes/:id/close',  authenticate, voteController.close);
 
@@ -248,6 +252,8 @@ app.delete('/api/notifications/:id',          authenticate, notificationControll
 // ── Subscriptions ─────────────────────────────────────────────────────────[...]
 app.get( '/api/subscriptions',            authenticate, subscriptionController.get);
 app.get( '/api/subscriptions/status',     authenticate, subscriptionController.get);
+app.post('/api/subscriptions/select-plan', authenticate, ...subscriptionController.selectPlan);
+app.post('/api/subscriptions/switch-plan', authenticate, ...subscriptionController.switchPlan);
 app.post('/api/subscriptions/cancel',     authenticate, subscriptionController.cancel);
 app.post('/api/subscriptions/reactivate', authenticate, subscriptionController.reactivate);
 
@@ -266,6 +272,7 @@ app.post('/api/payments/charge-contribution', authenticate, paymentController.ch
 // ── Support ───────────────────────────────────────────────────────────[...]
 app.get( '/api/support',     authenticate, supportController.list);
 app.get( '/api/support/:id', authenticate, supportController.getOne);
+app.post('/api/support/public', ...supportController.createPublic);
 app.post('/api/support',     authenticate, ...supportController.create);
 app.put( '/api/support/:id', authenticate, ...supportController.update);
 

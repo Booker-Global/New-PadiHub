@@ -47,6 +47,22 @@ export const membershipController = {
     } catch (e) { next(e); }
   },
 
+  /** POST /api/memberships/:id/approve — group leader approves a pending join request */
+  approve: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await membershipService.approveJoinRequest(req.user!.userId, pp(req.params.id), ip(req.ip));
+      res.json({ success: true, data });
+    } catch (e) { next(e); }
+  },
+
+  /** POST /api/memberships/:id/reject — group leader rejects a pending join request */
+  reject: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      await membershipService.rejectJoinRequest(req.user!.userId, pp(req.params.id), ip(req.ip));
+      res.json({ success: true, message: 'Join request rejected.' });
+    } catch (e) { next(e); }
+  },
+
   remove: [
     validate(removeSchema),
     async (req: Request, res: Response, next: NextFunction) => {

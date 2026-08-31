@@ -15,7 +15,7 @@ const TERMS_SECTIONS = [
   },
   {
     title: 'Subscription Fees',
-    content: "PadiHub charges a monthly platform subscription fee of £4.99 (UK) or ₦3,500 (Nigeria). For UK users completing identity verification, the first month's invoice will include the £1.50 identity verification fee, making the first payment £6.49. Subsequent monthly payments will be £4.99.",
+    content: 'PadiHub offers exactly two monthly-only subscription tiers with no annual option and no free trial: Pro Group at £4.99/month (UK) or ₦5,000/month (Nigeria), and Elite Group at £9.99/month (UK) or ₦10,000/month (Nigeria). Pro Group lets a member create ONE savings group and be a member of up to 5 groups total. Elite Group lets a member create up to SEVEN savings groups and be a member of up to 10 groups total. Which currency/country is shown depends on the visitor\'s location (IP-based), not a manual toggle.',
   },
   {
     title: 'Savings Groups',
@@ -54,7 +54,7 @@ const PRIVACY_SECTIONS = [
   },
   {
     title: 'Your Rights',
-    content: 'UK users have rights under the UK GDPR including access, rectification, erasure, and portability. Nigerian users have rights under the Nigeria Data Protection Regulation (NDPR). Contact privacy@padihub.com to exercise your rights.',
+    content: 'UK users have rights under the UK GDPR including access, rectification, erasure, and portability. Nigerian users have rights under the Nigeria Data Protection Regulation (NDPR). Contact hello@padihub.com to exercise your rights.',
   },
 ];
 

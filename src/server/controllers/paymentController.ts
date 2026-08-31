@@ -13,6 +13,7 @@ import { getStripeProvider, getFlutterwaveProvider } from '../integrations/payme
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { contributionService } from '../services/contributionService.js';
 import { getPaymentEligibility } from '../services/paymentEligibilityService.js';
+import { subscriptionService } from '../services/subscriptionService.js';
 import { calculateProcessingFee } from '../lib/paymentFees.js';
 
 const FLUTTERWAVE_SETUP_TX_REF_PREFIX = 'padihub-flw-setup';
@@ -235,6 +236,15 @@ export const paymentController = {
         metadata: { paymentMethodId: payment_method_id },
       });
 
+      // Kick off the real, billable platform subscription now that a
+      // verified card is on file — no-op if one is already active, throws
+      // (non-fatally, logged only) if the member skipped plan selection.
+      try {
+        await subscriptionService.activateSubscription(userId);
+      } catch (subErr) {
+        console.error('[PaymentController] Failed to activate subscription after saving card:', subErr);
+      }
+
       res.json({
         success: true,
         data: { payment_method_id },
@@ -383,6 +393,12 @@ export const paymentController = {
           txRef: result.txRef,
         },
       });
+
+      try {
+        await subscriptionService.activateSubscription(userId);
+      } catch (subErr) {
+        console.error('[PaymentController] Failed to activate subscription after saving Flutterwave card:', subErr);
+      }
 
       res.json({
         success: true,

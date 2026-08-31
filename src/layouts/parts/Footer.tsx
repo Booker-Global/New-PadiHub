@@ -199,7 +199,7 @@ export default function Footer() {
             <p className="ftr-col-head">Support</p>
             <nav aria-label="Footer support links">
               {[
-                { to: '/help',    label: 'Help Centre' },
+                { to: '/help',    label: 'Help' },
                 { to: '/about',   label: 'About' },
                 { to: '/contact', label: 'Contact' },
                 { to: '/faq',     label: 'FAQ' },
