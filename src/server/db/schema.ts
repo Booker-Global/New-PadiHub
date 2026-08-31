@@ -14,7 +14,7 @@ export const users = mysqlTable('users', {
   phone_number:                varchar('phone_number', { length: 30 }),
   country:                     varchar('country', { length: 2 }).notNull().default('GB'),
   currency:                    varchar('currency', { length: 3 }).notNull().default('GBP'),
-  trust_score:                 int('trust_score').notNull().default(50),
+  trust_score:                 int('trust_score').notNull().default(0),
   subscription_status:         mysqlEnum('subscription_status', ['free', 'trial', 'active', 'expired', 'cancelled']).notNull().default('free'),
   stripe_customer_id:          varchar('stripe_customer_id', { length: 100 }),
   stripe_payment_method_id:    varchar('stripe_payment_method_id', { length: 100 }),

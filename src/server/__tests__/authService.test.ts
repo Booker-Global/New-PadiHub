@@ -2,7 +2,7 @@ import { describe, it } from 'vitest';
 
 describe('authService', () => {
   describe('register', () => {
-    it('should create a user with trust_score 50 and account_status pending_verification', async () => {
+    it('should create a user with trust_score 0 and account_status pending_verification', async () => {
       // TODO: mock db.insert, assert user created with correct defaults
     });
     it('should hash the password before storing', async () => {

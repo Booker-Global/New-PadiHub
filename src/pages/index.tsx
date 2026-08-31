@@ -406,18 +406,36 @@ export default function HomePage() {
               </div>
             </div>
 
-            {/* Right column — hidden on mobile via display:none, shown via media query above */}
-            <div className="hero-right" style={{ display: 'none', flexShrink: 0, boxSizing: 'border-box', minWidth: 0 }}>
+            {/* Right column — the decorative HeroIllustration stays desktop-only
+                (hidden on mobile via display:none, shown via the .hero-right media
+                query above). The logged-in member's DashboardPreview is real,
+                functional content (their groups, trust score, due contributions),
+                not decoration, so it must always render — including on mobile and
+                tablet — instead of being hidden by the same desktop-only rule. */}
+            <div
+              className="hero-right"
+              style={{
+                display: authUser.isMounted && authUser.isLoggedIn ? 'flex' : 'none',
+                flexShrink: 0, boxSizing: 'border-box', minWidth: 0, width: '100%',
+              }}
+            >
               {/* Gate on isMounted so the first client render matches the SSR output
-                  (both render HeroIllustration). After hydration, isMounted flips true
-                  and we swap to DashboardPreview if the user is logged in.
-                  Without this gate, React 19 detects a server/client DOM mismatch
-                  and throws hydration error #418. */}
-              {authUser.isMounted && authUser.isLoggedIn
-                ? <DashboardPreview name={authUser.name} trust={authUser.trust} token={authUser.token} />
-                : <HeroIllustration region={pricingRegion} />
-              }
+                  (both render nothing here, since isLoggedIn starts false). After
+                  hydration, isMounted flips true and we swap to DashboardPreview if
+                  the user is logged in. Without this gate, React 19 detects a
+                  server/client DOM mismatch and throws hydration error #418. */}
+              {authUser.isMounted && authUser.isLoggedIn && (
+                <DashboardPreview name={authUser.name} trust={authUser.trust} token={authUser.token} />
+              )}
             </div>
+
+            {/* Decorative illustration — desktop-only, shown only for logged-out
+                visitors via the same .hero-right media query (never real user data). */}
+            {!(authUser.isMounted && authUser.isLoggedIn) && (
+              <div className="hero-right" style={{ display: 'none', flexShrink: 0, boxSizing: 'border-box', minWidth: 0 }}>
+                <HeroIllustration region={pricingRegion} />
+              </div>
+            )}
           </div>
         </div>
 

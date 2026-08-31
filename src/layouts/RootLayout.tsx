@@ -12,7 +12,7 @@ const FULL_SCREEN_ROUTES = [
   '/login', '/get-started', '/forgot-password', '/verify-email', '/onboarding', '/reset-password',
   '/dashboard', '/savings-groups', '/trust',
   '/notifications', '/profile', '/subscription',
-  '/settings', '/leader-dashboard', '/leader', '/help', '/admin',
+  '/settings', '/leader-dashboard', '/leader', '/help', '/admin', '/payments',
   '/subscription/confirm', '/subscription/success', '/subscription/billing',
   '/subscription/manage', '/subscription/renew', '/subscription/cancel',
 ];

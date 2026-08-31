@@ -24,7 +24,13 @@ export const EMAIL_VERIFY_TTL   = 24 * 60 * 60 * 1000; // 24 hours ms
 export const PASSWORD_RESET_TTL = 2  * 60 * 60 * 1000; // 2 hours ms
 export const INVITE_TTL         = 7  * 24 * 60 * 60 * 1000; // 7 days ms
 export const BCRYPT_ROUNDS      = 12;
-export const TRUST_SCORE_INITIAL = 50;
+// New accounts start at the very bottom of the scale (Explorer tier) and must
+// earn their way up through real group activity — see TIER_BANDS in
+// src/lib/trust-tiers.ts. Identity verification is a prerequisite to
+// participate, not a shortcut to a higher tier, so its delta below is kept
+// small enough that a freshly verified user with zero contributions still
+// lands in the Explorer band (0-29).
+export const TRUST_SCORE_INITIAL = 0;
 export const TRUST_SCORE_MAX     = 100;
 export const TRUST_SCORE_MIN     = 0;
 
@@ -39,7 +45,7 @@ export const TRUST_SCORE_DELTA_CONTRIBUTION_PAID    = 2;  // a contribution was 
 export const TRUST_SCORE_DELTA_CONTRIBUTION_MISSED  = -5; // a contribution default (missed payment)
 export const TRUST_SCORE_DELTA_CYCLE_COMPLETED      = 3;  // successfully received a rotation payout
 export const TRUST_SCORE_DELTA_MEMBER_SUSPENDED     = -10; // kicked out of a group after repeated defaults
-export const TRUST_SCORE_DELTA_IDENTITY_VERIFIED    = 50; // completed KYC/identity verification
+export const TRUST_SCORE_DELTA_IDENTITY_VERIFIED    = 10; // completed KYC/identity verification — keeps a brand-new, contribution-free user within the Explorer tier (0-29)
 
 /**
  * Group "initial conditions" defaults applied at group creation when the
