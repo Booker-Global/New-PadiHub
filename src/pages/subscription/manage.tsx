@@ -1,222 +1,514 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Helmet } from '@dr.pogodin/react-helmet';
-import { MotionDiv } from '@/lib/motion-safe';
 import { Link } from 'react-router-dom';
-import {
-  ChevronLeft, CreditCard, CheckCircle, Shield, RefreshCw,
-  XCircle, ArrowRight, Smartphone, Edit3
-} from 'lucide-react';
+import { ChevronLeft, CreditCard, CheckCircle, Shield, XCircle, ArrowRight, RefreshCw } from 'lucide-react';
 import DashboardLayout from '@/components/DashboardLayout';
+import { MotionDiv } from '@/lib/motion-safe';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { SkeletonPage } from '@/components/ui/loading-skeleton';
+import { getValidSession } from '@/lib/session';
 
 const fadeUp = { hidden: { opacity: 0, y: 16 }, visible: { opacity: 1, y: 0, transition: { duration: 0.4, ease: 'easeOut' as const } } };
 const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.07 } } };
 
-const planFeatures = [
-  'Unlimited Communities & Savings Groups',
-  'Trust Score™',
-  'PadiHub Passport™ & Community DNA™',
-  'Analytics, Governance & Voting',
-  'Priority Support & AI Onboarding',
-];
+const tierConfig = {
+  pro: {
+    name: 'Pro Group',
+    price: { GB: '£4.99', NG: '₦5,000' },
+    createLimit: 1,
+    joinLimit: 5,
+  },
+  elite: {
+    name: 'Elite Group',
+    price: { GB: '£9.99', NG: '₦10,000' },
+    createLimit: 7,
+    joinLimit: 10,
+  },
+} as const;
+
+type TierKey = keyof typeof tierConfig;
+type CountryCode = 'GB' | 'NG';
+
+type ApiResponse<T> = {
+  success?: boolean;
+  data?: T;
+  message?: string;
+};
+
+type SubscriptionStatus = {
+  billing_status?: 'active' | 'past_due' | 'cancelled' | 'trialing' | null;
+  renewal_date?: string | null;
+  plan?: string | null;
+  provider?: 'stripe' | 'flutterwave' | null;
+  provider_subscription_id?: string | null;
+};
+
+type UserStats = {
+  subscription_tier?: TierKey | null;
+  country?: CountryCode | null;
+};
+
+type SwitchPlanResult = {
+  tier?: TierKey;
+  direction?: 'upgrade' | 'downgrade';
+  effective_immediately?: boolean;
+  effective_date?: string | null;
+};
+
+function isTierKey(value: string | null | undefined): value is TierKey {
+  return value === 'pro' || value === 'elite';
+}
+
+function getApiErrorMessage(payload: unknown, fallback: string): string {
+  if (payload && typeof payload === 'object' && 'message' in payload && typeof payload.message === 'string' && payload.message.trim()) {
+    return payload.message;
+  }
+  return fallback;
+}
+
+function formatDate(value?: string | null): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function getTierFromPlan(plan?: string | null): TierKey | null {
+  if (!plan) return null;
+  if (plan.endsWith('_elite')) return 'elite';
+  if (plan.endsWith('_pro')) return 'pro';
+  return null;
+}
+
+function getCountryFromStatus(status?: SubscriptionStatus | null): CountryCode | null {
+  if (status?.plan?.startsWith('ng_') || status?.provider === 'flutterwave') return 'NG';
+  if (status?.plan?.startsWith('gb_') || status?.provider === 'stripe') return 'GB';
+  return null;
+}
 
 export default function ManageMembershipPage() {
-  const [editCard, setEditCard] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [pageError, setPageError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [stats, setStats] = useState<UserStats | null>(null);
+  const [status, setStatus] = useState<SubscriptionStatus | null>(null);
+  const [showSwitchDialog, setShowSwitchDialog] = useState(false);
+  const [showCancelDialog, setShowCancelDialog] = useState(false);
+  const [switchTarget, setSwitchTarget] = useState<TierKey | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
-  const handleSave = () => {
-    setSaved(true);
-    setEditCard(false);
-    setTimeout(() => setSaved(false), 3000);
+  const refreshSubscription = async () => {
+    const session = getValidSession();
+    if (!session?.token) {
+      throw new Error('Your session has expired. Please sign in again.');
+    }
+
+    const headers = { Authorization: 'Bearer ' + session.token };
+    const [statusResponse, statsResponse] = await Promise.all([
+      window.fetch('/api/subscriptions/status', { headers }),
+      window.fetch('/api/users/stats', { headers }),
+    ]);
+
+    const statusPayload = await statusResponse.json().catch(() => null) as ApiResponse<SubscriptionStatus | null> | null;
+    const statsPayload = await statsResponse.json().catch(() => null) as ApiResponse<UserStats> | null;
+
+    if (!statusResponse.ok || !statusPayload?.success) {
+      throw new Error(getApiErrorMessage(statusPayload, 'Unable to load your subscription status right now.'));
+    }
+    if (!statsResponse.ok || !statsPayload?.success || !statsPayload.data) {
+      throw new Error(getApiErrorMessage(statsPayload, 'Unable to load your plan details right now.'));
+    }
+
+    setStatus(statusPayload.data ?? null);
+    setStats(statsPayload.data);
   };
+
+  useEffect(() => {
+    let active = true;
+
+    void (async () => {
+      try {
+        await refreshSubscription();
+        if (!active) return;
+        setPageError(null);
+      } catch (error) {
+        if (!active) return;
+        setPageError(error instanceof Error ? error.message : 'Unable to load your subscription right now.');
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const currentTier = useMemo(
+    () => (isTierKey(stats?.subscription_tier) ? stats?.subscription_tier : getTierFromPlan(status?.plan)),
+    [stats?.subscription_tier, status?.plan],
+  );
+  const currentCountry = (stats?.country ?? getCountryFromStatus(status) ?? 'GB') as CountryCode;
+  const renewalDate = formatDate(status?.renewal_date);
+  const nextTier = currentTier === 'elite' ? 'pro' : 'elite';
+  const plan = currentTier ? tierConfig[currentTier] : null;
+  const switchPlan = currentTier ? tierConfig[nextTier] : null;
+  const priceLabel = currentTier ? plan?.price[currentCountry] : null;
+  const switchPrice = switchPlan?.price[currentCountry] ?? null;
+
+  const statusBadge = !status?.billing_status
+    ? { label: 'No active billing', color: '#6B7280', background: 'rgba(107,114,128,0.16)' }
+    : status.billing_status === 'cancelled'
+      ? { label: 'Cancelled', color: '#EF4444', background: 'rgba(239,68,68,0.15)' }
+      : status.billing_status === 'past_due'
+        ? { label: 'Payment overdue', color: '#F59E0B', background: 'rgba(245,158,11,0.16)' }
+        : { label: 'Active', color: '#2EAF6F', background: 'rgba(46,175,111,0.2)' };
+
+  const switchDescription = useMemo(() => {
+    if (!switchTarget) return '';
+    const targetPlan = tierConfig[switchTarget];
+    const targetPrice = targetPlan.price[currentCountry];
+    const direction = currentTier === 'pro' && switchTarget === 'elite' ? 'upgrade' : 'downgrade';
+
+    if (!status?.provider_subscription_id || status.billing_status === 'cancelled') {
+      return `Your ${targetPlan.name} preference will update now. Billing will start when you reactivate or add a verified payment method.`;
+    }
+
+    if (direction === 'downgrade') {
+      return `You'll continue on your current plan until ${renewalDate ?? 'your next renewal date'}, then switch to ${targetPlan.name} at ${targetPrice} per month.`;
+    }
+
+    return `Your upgrade takes effect immediately. You'll move to ${targetPlan.name} now, and your regular monthly billing date remains ${renewalDate ?? 'on your existing schedule'}.`;
+  }, [currentCountry, currentTier, renewalDate, status?.billing_status, status?.provider_subscription_id, switchTarget]);
+
+  const planFeatures = plan
+    ? [
+      `Create ${plan.createLimit === 1 ? '1 group' : `up to ${plan.createLimit} groups`}`,
+      `Join up to ${plan.joinLimit} savings groups`,
+      'Governance, voting and Trust Score access',
+      'Priority support and onboarding guidance',
+    ]
+    : ['Choose a monthly plan to unlock your savings-group limits'];
+
+  const handleSwitch = async () => {
+    if (!switchTarget) return;
+    const session = getValidSession();
+    if (!session?.token) {
+      setActionError('Your session has expired. Please sign in again.');
+      return;
+    }
+
+    setSubmitting(true);
+    setActionError(null);
+    setActionNotice(null);
+
+    try {
+      const response = await window.fetch('/api/subscriptions/switch-plan', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer ' + session.token,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ tier: switchTarget }),
+      });
+
+      const payload = await response.json().catch(() => null) as ApiResponse<SwitchPlanResult> | null;
+      if (!response.ok || !payload?.success) {
+        throw new Error(getApiErrorMessage(payload, 'Unable to switch your plan right now.'));
+      }
+
+      const targetPlan = tierConfig[switchTarget];
+      const targetPriceLabel = targetPlan.price[currentCountry];
+      const effectiveDate = formatDate(payload?.data?.effective_date);
+
+      if (payload?.data?.direction === 'downgrade') {
+        setActionNotice(`You're staying on your current plan until ${effectiveDate ?? renewalDate ?? 'your next renewal date'}, then switching to ${targetPlan.name} at ${targetPriceLabel}. A confirmation email has been sent.`);
+      } else if (payload?.data?.direction === 'upgrade') {
+        setActionNotice(`Your plan has been upgraded to ${targetPlan.name}. Your monthly billing schedule continues with the next renewal on ${effectiveDate ?? renewalDate ?? 'your existing billing date'}. A confirmation email has been sent.`);
+      } else {
+        setActionNotice(`${targetPlan.name} has been selected. Billing starts once a verified payment method is on file.`);
+      }
+
+      await refreshSubscription();
+      setShowSwitchDialog(false);
+      setSwitchTarget(null);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Unable to switch your plan right now.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleCancelMembership = async () => {
+    const session = getValidSession();
+    if (!session?.token) {
+      setActionError('Your session has expired. Please sign in again.');
+      return;
+    }
+
+    setSubmitting(true);
+    setActionError(null);
+    setActionNotice(null);
+
+    try {
+      const response = await window.fetch('/api/subscriptions/cancel', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + session.token },
+      });
+      const payload = await response.json().catch(() => null) as ApiResponse<null> | null;
+      if (!response.ok || !payload?.success) {
+        throw new Error(getApiErrorMessage(payload, 'Unable to cancel your subscription right now.'));
+      }
+
+      await refreshSubscription();
+      setActionNotice(`Your membership has been cancelled. You'll keep access until ${renewalDate ?? 'the end of your current billing period'}. A confirmation email has been sent.`);
+      setShowCancelDialog(false);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Unable to cancel your subscription right now.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <DashboardLayout>
+        <SkeletonPage />
+      </DashboardLayout>
+    );
+  }
 
   return (
     <DashboardLayout>
       <Helmet>
         <title>Manage Membership — PadiHub</title>
-        <meta name="description" content="Manage your PadiHub membership, update payment method and change your plan." />
+        <meta name="description" content="Manage your PadiHub membership, payment method and monthly plan." />
         <link rel="canonical" href="https://padihub.com/subscription/manage" />
-              <meta property="og:title" content="Manage Membership — PadiHub" />
-        <meta property="og:description" content="Manage your PadiHub membership, update payment method and change your plan." />
+        <meta property="og:title" content="Manage Membership — PadiHub" />
+        <meta property="og:description" content="Manage your PadiHub membership, payment method and monthly plan." />
         <meta property="og:type" content="website" />
         <meta property="og:image" content="https://padihub.com/airo-assets/images/og/default" />
         <meta name="twitter:card" content="summary_large_image" />
         <meta name="twitter:image" content="https://padihub.com/airo-assets/images/og/default" />
         <meta name="robots" content="noindex,nofollow" />
-</Helmet>
+      </Helmet>
 
       <div className="p-4 sm:p-6 max-w-3xl mx-auto">
         <MotionDiv initial="hidden" animate="visible" variants={stagger}>
-
-          {/* Header */}
           <MotionDiv variants={fadeUp} className="flex items-center gap-3 mb-6">
             <Link to="/subscription" className="flex items-center gap-1 text-sm font-semibold text-gray-400 hover:text-gray-700 transition-colors">
               <ChevronLeft size={16} /> Back
             </Link>
             <div>
               <h1 className="text-2xl font-extrabold text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>Manage Membership</h1>
-              <p className="text-gray-500 text-sm">Update your plan, payment method and billing details</p>
+              <p className="text-gray-500 text-sm">Update your monthly plan and billing settings</p>
             </div>
           </MotionDiv>
 
-          {/* Success toast */}
-          {saved && (
-            <MotionDiv initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
-              className="mb-4 rounded-2xl p-4 flex items-center gap-3"
-              style={{ background: 'rgba(46,175,111,0.08)', border: '1px solid rgba(46,175,111,0.2)' }}>
-              <CheckCircle size={18} style={{ color: '#2EAF6F' }} />
-              <p className="text-sm font-bold" style={{ color: '#2EAF6F' }}>Payment method updated successfully!</p>
+          {pageError && (
+            <MotionDiv variants={fadeUp} className="mb-4">
+              <Alert variant="destructive" className="rounded-2xl">
+                <AlertTitle>Unable to load membership details</AlertTitle>
+                <AlertDescription>{pageError}</AlertDescription>
+              </Alert>
             </MotionDiv>
           )}
 
-          {/* Current plan */}
-          <MotionDiv variants={fadeUp} className="rounded-3xl p-6 mb-5 relative overflow-hidden"
-            style={{ background: 'linear-gradient(135deg, #0F172A, #1A1A2E)' }}>
+          {actionNotice && (
+            <MotionDiv variants={fadeUp} className="mb-4">
+              <Alert className="rounded-2xl border-[#2EAF6F]/20 bg-[#2EAF6F]/5">
+                <AlertTitle className="text-[#2EAF6F]">Membership updated</AlertTitle>
+                <AlertDescription>{actionNotice}</AlertDescription>
+              </Alert>
+            </MotionDiv>
+          )}
+
+          {actionError && (
+            <MotionDiv variants={fadeUp} className="mb-4">
+              <Alert variant="destructive" className="rounded-2xl">
+                <AlertTitle>We couldn't update your membership</AlertTitle>
+                <AlertDescription>{actionError}</AlertDescription>
+              </Alert>
+            </MotionDiv>
+          )}
+
+          <MotionDiv variants={fadeUp} className="rounded-3xl p-6 mb-5 relative overflow-hidden" style={{ background: 'linear-gradient(135deg, #0F172A, #1A1A2E)' }}>
             <div className="absolute top-0 right-0 w-32 h-32 rounded-full blur-3xl opacity-20" style={{ background: '#2EAF6F' }} />
             <div className="relative">
-              <div className="flex items-start justify-between mb-4">
+              <div className="flex items-start justify-between mb-4 gap-4">
                 <div>
-                  <span className="text-xs font-bold px-3 py-1 rounded-full mb-2 inline-block"
-                    style={{ background: 'rgba(46,175,111,0.2)', color: '#2EAF6F' }}>✓ Active</span>
-                  <h2 className="text-xl font-extrabold text-white" style={{ fontFamily: 'Nunito, sans-serif' }}>PadiHub UK Monthly</h2>
-                  <p className="text-gray-400 text-sm">£4.99/month · Renews Jul 1, 2026</p>
+                  <span className="text-xs font-bold px-3 py-1 rounded-full mb-2 inline-block" style={{ background: statusBadge.background, color: statusBadge.color }}>
+                    {statusBadge.label}
+                  </span>
+                  <h2 className="text-xl font-extrabold text-white" style={{ fontFamily: 'Nunito, sans-serif' }}>
+                    {plan ? plan.name : 'No plan selected yet'}
+                  </h2>
+                  <p className="text-gray-400 text-sm">
+                    {plan
+                      ? `${priceLabel} per month${renewalDate ? ` · Next billing ${renewalDate}` : ''}`
+                      : 'Choose Pro Group or Elite Group to set your monthly membership.'}
+                  </p>
                 </div>
                 <div className="text-right">
-                  <p className="text-3xl font-black text-white" style={{ fontFamily: 'Nunito, sans-serif' }}>£4.99</p>
-                  <p className="text-gray-400 text-xs">per month</p>
+                  <p className="text-3xl font-black text-white" style={{ fontFamily: 'Nunito, sans-serif' }}>{priceLabel ?? '—'}</p>
+                  <p className="text-gray-400 text-xs">monthly</p>
                 </div>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {planFeatures.map((f, i) => (
-                  <div key={i} className="flex items-center gap-2">
+                {planFeatures.map((feature) => (
+                  <div key={feature} className="flex items-center gap-2">
                     <CheckCircle size={12} style={{ color: '#2EAF6F', flexShrink: 0 }} />
-                    <span className="text-xs" style={{ color: 'rgba(255,255,255,0.65)' }}>{f}</span>
+                    <span className="text-xs" style={{ color: 'rgba(255,255,255,0.65)' }}>{feature}</span>
                   </div>
                 ))}
               </div>
             </div>
           </MotionDiv>
 
-          {/* Upgrade to annual */}
-          <MotionDiv variants={fadeUp} className="rounded-3xl p-5 mb-5 flex items-center justify-between"
-            style={{ background: 'rgba(46,175,111,0.06)', border: '1px solid rgba(46,175,111,0.2)' }}>
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-2xl flex items-center justify-center" style={{ background: 'rgba(46,175,111,0.15)' }}>
+          <MotionDiv variants={fadeUp} className="rounded-3xl p-6 bg-white mb-5" style={{ border: '1px solid #E5E7EB', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
+            <div className="flex items-start justify-between gap-4 mb-4">
+              <div>
+                <h2 className="font-extrabold text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>Switch plan</h2>
+                <p className="text-sm text-gray-500 mt-1">Monthly plans only. Changes send a confirmation email automatically.</p>
+              </div>
+              <div className="w-11 h-11 rounded-2xl flex items-center justify-center" style={{ background: 'rgba(46,175,111,0.08)' }}>
                 <RefreshCw size={18} style={{ color: '#2EAF6F' }} />
               </div>
-              <div>
-                <p className="font-bold text-gray-900 text-sm">Switch to Annual — Save 17%</p>
-                <p className="text-xs text-gray-500">£49.99/year instead of £59.88. Save £9.89.</p>
-              </div>
-            </div>
-            <Link to="/subscription/renew?plan=uk-annual"
-              className="flex items-center gap-1 text-sm font-bold px-4 py-2 rounded-xl transition-all hover:opacity-90"
-              style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', color: '#fff' }}>
-              Switch <ArrowRight size={14} />
-            </Link>
-          </MotionDiv>
-
-          {/* Payment method */}
-          <MotionDiv variants={fadeUp} className="rounded-3xl p-6 bg-white mb-5" style={{ border: '1px solid #E5E7EB', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="font-extrabold text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>Payment method</h2>
-              <button onClick={() => setEditCard(!editCard)}
-                className="flex items-center gap-1.5 text-sm font-bold px-3 py-1.5 rounded-xl transition-colors hover:bg-gray-50"
-                style={{ color: '#2EAF6F', border: '1px solid rgba(46,175,111,0.2)' }}>
-                <Edit3 size={13} /> {editCard ? 'Cancel' : 'Update'}
-              </button>
             </div>
 
-            {!editCard ? (
-              <div className="flex items-center gap-4 p-4 rounded-2xl" style={{ background: '#F9FAFB' }}>
-                <div className="w-12 h-8 rounded-lg flex items-center justify-center" style={{ background: '#1A1A2E' }}>
-                  <CreditCard size={16} color="#fff" />
+            {currentTier && switchPlan ? (
+              <div className="rounded-2xl p-4" style={{ background: '#F9FAFB' }}>
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                  <div>
+                    <p className="font-bold text-gray-900 text-sm">Switch to {switchPlan.name}</p>
+                    <p className="text-xs text-gray-500 mt-1">
+                      {switchPrice} per month · Create {switchPlan.createLimit === 1 ? '1 group' : `up to ${switchPlan.createLimit} groups`} · Join up to {switchPlan.joinLimit} groups
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSwitchTarget(nextTier);
+                      setShowSwitchDialog(true);
+                    }}
+                    className="inline-flex items-center justify-center gap-1.5 text-sm font-bold px-4 py-2 rounded-xl transition-all hover:opacity-90"
+                    style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', color: '#fff' }}
+                  >
+                    Switch plan <ArrowRight size={14} />
+                  </button>
                 </div>
-                <div>
-                  <p className="font-bold text-gray-900 text-sm">Visa ending in 4242</p>
-                  <p className="text-xs text-gray-400">Expires 08/2028</p>
-                </div>
-                <span className="ml-auto text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: 'rgba(46,175,111,0.1)', color: '#2EAF6F' }}>
-                  Default
-                </span>
+                <p className="text-xs text-gray-500 mt-3">
+                  {currentTier === 'elite'
+                    ? `Downgrades stay on your current plan until ${renewalDate ?? 'your next billing date'}.`
+                    : `Upgrades apply immediately and keep your monthly billing schedule anchored to ${renewalDate ?? 'your current renewal date'}.`}
+                </p>
               </div>
             ) : (
-              <div className="flex flex-col gap-4">
-                <div className="flex gap-3 mb-2">
-                  {[
-                    { key: 'card',   label: 'Card',         icon: CreditCard },
-                    { key: 'mobile', label: 'Mobile Money', icon: Smartphone },
-                  ].map(m => (
-                    <button key={m.key}
-                      className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-2xl text-sm font-bold"
-                      style={{ background: m.key === 'card' ? 'rgba(46,175,111,0.08)' : '#F9FAFB', border: m.key === 'card' ? '2px solid #2EAF6F' : '2px solid #E5E7EB', color: m.key === 'card' ? '#2EAF6F' : '#6B7280' }}>
-                      <m.icon size={15} /> {m.label}
-                    </button>
-                  ))}
-                </div>
-                <input className="w-full px-4 py-3 rounded-2xl text-sm border border-gray-200 focus:outline-none focus:border-green-400 transition-colors"
-                  placeholder="Card number" />
-                <div className="grid grid-cols-2 gap-4">
-                  <input className="px-4 py-3 rounded-2xl text-sm border border-gray-200 focus:outline-none focus:border-green-400 transition-colors"
-                    placeholder="MM / YY" />
-                  <input className="px-4 py-3 rounded-2xl text-sm border border-gray-200 focus:outline-none focus:border-green-400 transition-colors"
-                    placeholder="CVV" />
-                </div>
-                <input className="w-full px-4 py-3 rounded-2xl text-sm border border-gray-200 focus:outline-none focus:border-green-400 transition-colors"
-                  placeholder="Name on card" />
-                <button onClick={handleSave}
-                  className="w-full py-3 rounded-2xl font-bold text-white transition-all hover:opacity-90"
-                  style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}>
-                  Save payment method
-                </button>
+              <div className="rounded-2xl p-4 text-sm text-gray-500" style={{ background: '#F9FAFB' }}>
+                Select a plan first, then you can switch between Pro Group and Elite Group here.
               </div>
             )}
           </MotionDiv>
 
-          {/* Billing address */}
           <MotionDiv variants={fadeUp} className="rounded-3xl p-6 bg-white mb-5" style={{ border: '1px solid #E5E7EB', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
-            <h2 className="font-extrabold text-gray-900 mb-4" style={{ fontFamily: 'Nunito, sans-serif' }}>Billing address</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <input className="px-4 py-3 rounded-2xl text-sm border border-gray-200 focus:outline-none focus:border-green-400 transition-colors"
-                placeholder="First name" defaultValue="Adaeze" />
-              <input className="px-4 py-3 rounded-2xl text-sm border border-gray-200 focus:outline-none focus:border-green-400 transition-colors"
-                placeholder="Last name" defaultValue="Okonkwo" />
-              <input className="sm:col-span-2 px-4 py-3 rounded-2xl text-sm border border-gray-200 focus:outline-none focus:border-green-400 transition-colors"
-                placeholder="Address line 1" defaultValue="123 Community Lane" />
-              <input className="px-4 py-3 rounded-2xl text-sm border border-gray-200 focus:outline-none focus:border-green-400 transition-colors"
-                placeholder="City" defaultValue="London" />
-              <input className="px-4 py-3 rounded-2xl text-sm border border-gray-200 focus:outline-none focus:border-green-400 transition-colors"
-                placeholder="Postcode" defaultValue="EC1A 1BB" />
+            <div className="flex items-start justify-between gap-4 mb-4">
+              <div>
+                <h2 className="font-extrabold text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>Payment method</h2>
+                <p className="text-sm text-gray-500 mt-1">Manage your saved card or mobile-money setup on the secure payment methods page.</p>
+              </div>
+              <div className="w-11 h-11 rounded-2xl flex items-center justify-center" style={{ background: '#F9FAFB' }}>
+                <CreditCard size={18} style={{ color: '#2EAF6F' }} />
+              </div>
             </div>
-            <button className="mt-4 px-6 py-2.5 rounded-2xl text-sm font-bold transition-all hover:opacity-90"
-              style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', color: '#fff' }}>
-              Save address
-            </button>
+
+            <div className="rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3" style={{ background: '#F9FAFB' }}>
+              <div>
+                <p className="font-bold text-gray-900 text-sm">Update payment method</p>
+                <p className="text-xs text-gray-500 mt-1">Use the existing payments flow to add or replace the card used for your monthly membership.</p>
+              </div>
+              <Link
+                to="/payments/methods"
+                className="inline-flex items-center justify-center gap-1.5 text-sm font-bold px-4 py-2 rounded-xl transition-colors hover:bg-gray-100"
+                style={{ color: '#2EAF6F', border: '1px solid rgba(46,175,111,0.2)' }}
+              >
+                Open payment methods <ArrowRight size={14} />
+              </Link>
+            </div>
           </MotionDiv>
 
-          {/* Danger zone */}
-          <MotionDiv variants={fadeUp} className="rounded-3xl p-5 flex items-center justify-between"
-            style={{ background: 'rgba(239,68,68,0.04)', border: '1px solid rgba(239,68,68,0.15)' }}>
+          <MotionDiv variants={fadeUp} className="rounded-3xl p-6 bg-white mb-5" style={{ border: '1px solid #E5E7EB', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
+            <h2 className="font-extrabold text-gray-900 mb-2" style={{ fontFamily: 'Nunito, sans-serif' }}>Billing address</h2>
+            <p className="text-sm text-gray-500 mb-4">This card is cosmetic for now — billing-address editing is not connected to a backend API yet.</p>
+            <div className="rounded-2xl p-4" style={{ background: '#F9FAFB' }}>
+              <p className="font-bold text-sm text-gray-900">Billing details coming soon</p>
+              <p className="text-xs text-gray-500 mt-1">For now, contact support if you need billing-address changes reflected on future invoices.</p>
+            </div>
+          </MotionDiv>
+
+          <MotionDiv variants={fadeUp} className="rounded-3xl p-5 flex items-center justify-between gap-4" style={{ background: 'rgba(239,68,68,0.04)', border: '1px solid rgba(239,68,68,0.15)' }}>
             <div className="flex items-center gap-3">
               <XCircle size={20} style={{ color: '#EF4444' }} />
               <div>
                 <p className="font-bold text-gray-900 text-sm">Cancel membership</p>
-                <p className="text-xs text-gray-500">You'll keep access until Jul 1, 2026.</p>
+                <p className="text-xs text-gray-500">{status?.billing_status === 'cancelled' ? 'Your membership is already cancelled.' : `You'll keep access until ${renewalDate ?? 'the end of your current billing period'}.`}</p>
               </div>
             </div>
-            <Link to="/subscription/cancel"
-              className="text-sm font-bold px-4 py-2 rounded-xl transition-colors hover:bg-red-50"
-              style={{ color: '#EF4444', border: '1px solid rgba(239,68,68,0.2)' }}>
-              Cancel
-            </Link>
+            {status?.billing_status === 'cancelled' ? (
+              <Link
+                to="/subscription/renew"
+                className="text-sm font-bold px-4 py-2 rounded-xl transition-colors hover:bg-green-50"
+                style={{ color: '#2EAF6F', border: '1px solid rgba(46,175,111,0.2)' }}
+              >
+                Reactivate
+              </Link>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowCancelDialog(true)}
+                className="text-sm font-bold px-4 py-2 rounded-xl transition-colors hover:bg-red-50"
+                style={{ color: '#EF4444', border: '1px solid rgba(239,68,68,0.2)' }}
+              >
+                Cancel
+              </button>
+            )}
           </MotionDiv>
 
-          {/* Trust signal */}
           <MotionDiv variants={fadeUp} className="mt-5 flex items-center justify-center gap-2 text-xs text-gray-400">
             <Shield size={12} style={{ color: '#2EAF6F' }} />
             Secured with 256-bit SSL encryption · PadiHub never stores your full card details
           </MotionDiv>
         </MotionDiv>
       </div>
+
+      <ConfirmDialog
+        open={showSwitchDialog}
+        title={switchTarget ? `Switch to ${tierConfig[switchTarget].name}?` : 'Switch plan?'}
+        description={switchDescription}
+        confirmLabel={submitting ? 'Updating…' : 'Confirm switch'}
+        cancelLabel="Keep current plan"
+        onConfirm={() => { void handleSwitch(); }}
+        onCancel={() => {
+          if (submitting) return;
+          setShowSwitchDialog(false);
+          setSwitchTarget(null);
+        }}
+      />
+
+      <ConfirmDialog
+        open={showCancelDialog}
+        title="Cancel your membership?"
+        description={`You'll keep access until ${renewalDate ?? 'the end of your current billing period'}. We'll send a confirmation email straight away.`}
+        confirmLabel={submitting ? 'Cancelling…' : 'Yes, cancel'}
+        cancelLabel="Keep my membership"
+        variant="danger"
+        onConfirm={() => { void handleCancelMembership(); }}
+        onCancel={() => {
+          if (submitting) return;
+          setShowCancelDialog(false);
+        }}
+      />
     </DashboardLayout>
   );
 }

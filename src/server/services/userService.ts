@@ -1,16 +1,46 @@
-import { eq, and, inArray, desc } from 'drizzle-orm';
+import bcrypt from 'bcryptjs';
+import { eq, and, inArray, desc, count, ne } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
-import { TRUST_SCORE_MAX, TRUST_SCORE_MIN } from '../lib/constants.js';
+import { BCRYPT_ROUNDS, TRUST_SCORE_MAX, TRUST_SCORE_MIN } from '../lib/constants.js';
+import { getPaymentProvider } from '../integrations/payments/PaymentProviderFactory.js';
+import { sendAccountDeletedEmail } from '../integrations/email/emailService.js';
+
+function getDeletedEmail(userId: string): string {
+  return `deleted-${userId}@padihub.invalid`;
+}
+
+function getDeletedDisplayName(user: {
+  display_name?: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+}): string {
+  return user.display_name?.trim()
+    || `${user.first_name ?? ''} ${user.last_name ?? ''}`.trim()
+    || 'PadiHub member';
+}
+
+function isForeignKeyReferenceError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const mysqlError = error as Error & { code?: string; errno?: number };
+  return mysqlError.code === 'ER_ROW_IS_REFERENCED_2'
+    || mysqlError.errno === 1451
+    || /foreign key constraint fails/i.test(mysqlError.message);
+}
+
+async function countRows(query: Promise<Array<{ value: number | bigint }>>): Promise<number> {
+  const rows = await query;
+  return Number(rows[0]?.value ?? 0);
+}
 
 export const userService = {
   async getProfile(userId: string) {
-    
     const rows = await db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1);
     if (!rows.length) throw new AppError('User not found.', 404);
-    const { password_hash: _, ...safe } = rows[0];
+    const safe = { ...rows[0] };
+    delete (safe as { password_hash?: string }).password_hash;
     return safe;
   },
 
@@ -149,7 +179,6 @@ export const userService = {
     phone_number?: string;
     notification_preferences?: Record<string, unknown>;
   }, ipAddress?: string) {
-    
     const allowed: Record<string, unknown> = {};
     if (data.display_name !== undefined)             allowed.display_name = data.display_name;
     if (data.phone_number !== undefined)             allowed.phone_number = data.phone_number;
@@ -160,17 +189,205 @@ export const userService = {
     return this.getProfile(userId);
   },
 
+  async deleteAccount(userId: string, ipAddress?: string) {
+    const userRows = await db.select({
+      id:                        schema.users.id,
+      first_name:                schema.users.first_name,
+      last_name:                 schema.users.last_name,
+      display_name:              schema.users.display_name,
+      email:                     schema.users.email,
+      country:                   schema.users.country,
+      flutterwave_customer_id:   schema.users.flutterwave_customer_id,
+      stripe_customer_id:        schema.users.stripe_customer_id,
+      subscription_tier:         schema.users.subscription_tier,
+    }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
+    if (!userRows.length) throw new AppError('User not found.', 404);
+    const user = userRows[0];
+
+    const ledGroups = await db.select({
+      id:     schema.savingsGroups.id,
+      name:   schema.savingsGroups.name,
+      status: schema.savingsGroups.status,
+    }).from(schema.savingsGroups).where(and(
+      eq(schema.savingsGroups.leader_id, userId),
+      eq(schema.savingsGroups.status, 'active'),
+    ));
+
+    const ledGroupIds = ledGroups.map(group => group.id);
+    const otherActiveMembers = ledGroupIds.length
+      ? await db.select({ group_id: schema.memberships.group_id })
+        .from(schema.memberships)
+        .where(and(
+          inArray(schema.memberships.group_id, ledGroupIds),
+          eq(schema.memberships.status, 'active'),
+          ne(schema.memberships.user_id, userId),
+        ))
+      : [];
+
+    const blockedGroupIds = new Set(otherActiveMembers.map(member => member.group_id));
+    const blockedGroups = ledGroups.filter(group => blockedGroupIds.has(group.id));
+    if (blockedGroups.length) {
+      const names = blockedGroups.map(group => group.name).join(', ');
+      throw new AppError(
+        names
+          ? `You must transfer leadership or close your group(s) before deleting your account. Active groups: ${names}.`
+          : 'You must transfer leadership or close your group(s) before deleting your account.',
+        409,
+        'ACCOUNT_DELETE_BLOCKED_BY_ACTIVE_GROUPS',
+      );
+    }
+
+    const closableGroupIds = ledGroups
+      .filter(group => !blockedGroupIds.has(group.id))
+      .map(group => group.id);
+
+    const subscriptionRows = await db.select({
+      provider:                 schema.subscriptions.provider,
+      provider_subscription_id: schema.subscriptions.provider_subscription_id,
+      billing_status:           schema.subscriptions.billing_status,
+    }).from(schema.subscriptions).where(eq(schema.subscriptions.user_id, userId)).limit(1);
+    const subscription = subscriptionRows[0];
+
+    let providerSubscriptionCancelled = false;
+    if (subscription?.provider_subscription_id && subscription.billing_status !== 'cancelled') {
+      try {
+        const provider = getPaymentProvider(subscription.provider === 'flutterwave' ? 'NG' : 'GB');
+        const result = await provider.cancelSubscription({ subscriptionId: subscription.provider_subscription_id });
+        providerSubscriptionCancelled = Boolean(result.cancelled);
+      } catch (error) {
+        console.error('[UserService] Failed to cancel provider subscription during account deletion:', error);
+      }
+    }
+
+    await sendAccountDeletedEmail(user.email, getDeletedDisplayName(user));
+
+    const dependencyCounts = {
+      savings_groups_leader: await countRows(
+        db.select({ value: count() }).from(schema.savingsGroups).where(eq(schema.savingsGroups.leader_id, userId))
+      ),
+      group_invitations_invited_by: await countRows(
+        db.select({ value: count() }).from(schema.groupInvitations).where(eq(schema.groupInvitations.invited_by, userId))
+      ),
+      memberships: await countRows(
+        db.select({ value: count() }).from(schema.memberships).where(eq(schema.memberships.user_id, userId))
+      ),
+      contributions: await countRows(
+        db.select({ value: count() }).from(schema.contributions).where(eq(schema.contributions.member_id, userId))
+      ),
+      rotations: await countRows(
+        db.select({ value: count() }).from(schema.rotations).where(eq(schema.rotations.recipient_id, userId))
+      ),
+      votes_proposed: await countRows(
+        db.select({ value: count() }).from(schema.votes).where(eq(schema.votes.proposer_id, userId))
+      ),
+      vote_responses: await countRows(
+        db.select({ value: count() }).from(schema.voteResponses).where(eq(schema.voteResponses.member_id, userId))
+      ),
+      notifications: await countRows(
+        db.select({ value: count() }).from(schema.notifications).where(eq(schema.notifications.user_id, userId))
+      ),
+      subscriptions: await countRows(
+        db.select({ value: count() }).from(schema.subscriptions).where(eq(schema.subscriptions.user_id, userId))
+      ),
+      support_tickets_opened: await countRows(
+        db.select({ value: count() }).from(schema.supportTickets).where(eq(schema.supportTickets.user_id, userId))
+      ),
+      support_tickets_assigned: await countRows(
+        db.select({ value: count() }).from(schema.supportTickets).where(eq(schema.supportTickets.assigned_admin, userId))
+      ),
+      audit_logs: await countRows(
+        db.select({ value: count() }).from(schema.auditLogs).where(eq(schema.auditLogs.user_id, userId))
+      ),
+    };
+
+    const hasRetainedDependencies = Object.values(dependencyCounts).some(value => value > 0);
+    const deletedPasswordHash = await bcrypt.hash(`deleted-account-${userId}-${Date.now()}`, BCRYPT_ROUNDS);
+    const deletedEmail = getDeletedEmail(userId);
+    let hardDeleted = false;
+
+    await db.transaction(async (tx) => {
+      await tx.delete(schema.emailVerificationTokens).where(eq(schema.emailVerificationTokens.user_id, userId));
+      await tx.delete(schema.passwordResetTokens).where(eq(schema.passwordResetTokens.user_id, userId));
+
+      if (closableGroupIds.length) {
+        await tx.update(schema.savingsGroups)
+          .set({ status: 'closed' })
+          .where(inArray(schema.savingsGroups.id, closableGroupIds));
+      }
+
+      await tx.update(schema.subscriptions)
+        .set({
+          billing_status:           'cancelled',
+          provider_subscription_id: null,
+          renewal_date:             null,
+        })
+        .where(eq(schema.subscriptions.user_id, userId));
+
+      await tx.update(schema.users)
+        .set({
+          first_name:                  'Deleted',
+          last_name:                   'User',
+          display_name:                'Deleted user',
+          email:                       deletedEmail,
+          password_hash:               deletedPasswordHash,
+          phone_number:                null,
+          subscription_status:         'cancelled',
+          subscription_tier:           null,
+          stripe_customer_id:          null,
+          stripe_payment_method_id:    null,
+          stripe_connected_account_id: null,
+          flutterwave_customer_id:     null,
+          flutterwave_card_token:      null,
+          flutterwave_subaccount_id:   null,
+          payment_method_verified_at:  null,
+          payout_verified_at:          null,
+          payment_terms_accepted_at:   null,
+          notification_preferences:    null,
+          account_status:              'deactivated',
+          email_verified:              false,
+          identity_verified:           false,
+          identity_verified_at:        null,
+          stripe_identity_session_id:  null,
+          bvn_verification_reference:  null,
+          last_login_at:               null,
+          active:                      false,
+        })
+        .where(eq(schema.users.id, userId));
+
+      if (!hasRetainedDependencies) {
+        try {
+          await tx.delete(schema.users).where(eq(schema.users.id, userId));
+          hardDeleted = true;
+        } catch (error) {
+          if (!isForeignKeyReferenceError(error)) throw error;
+        }
+      }
+    });
+
+    await createAuditLog({
+      action: 'ACCOUNT_DELETED',
+      entity: 'users',
+      entityId: userId,
+      ipAddress,
+      metadata: {
+        accountDeletionOutcome: hardDeleted ? 'hard_deleted' : 'anonymized',
+        closedGroupIds: closableGroupIds,
+        dependencyCounts,
+        providerSubscriptionCancelled,
+        previousCountry: user.country,
+        previousSubscriptionTier: user.subscription_tier,
+        previousCustomerIdsCleared: Boolean(user.flutterwave_customer_id || user.stripe_customer_id),
+      },
+    });
+
+    return { hardDeleted };
+  },
+
   async deactivate(userId: string, ipAddress?: string) {
-    
-    await db.update(schema.users)
-      .set({ active: false, account_status: 'deactivated' })
-      .where(eq(schema.users.id, userId));
-    await createAuditLog({ userId, action: 'ACCOUNT_DEACTIVATED', entity: 'users', entityId: userId, ipAddress });
-    return true;
+    return this.deleteAccount(userId, ipAddress);
   },
 
   async updatePreferences(userId: string, preferences: Record<string, unknown>) {
-    
     await db.update(schema.users)
       .set({ notification_preferences: preferences })
       .where(eq(schema.users.id, userId));

@@ -46,8 +46,8 @@ export const userController = {
 
   deleteProfile: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      await userService.deactivate(req.user!.userId, ip(req.ip));
-      res.json({ success: true, message: 'Account deactivated.' });
+      await userService.deleteAccount(req.user!.userId, ip(req.ip));
+      res.json({ success: true, message: 'Your account has been deleted. A confirmation email has been sent.' });
     } catch (e) { next(e); }
   },
 

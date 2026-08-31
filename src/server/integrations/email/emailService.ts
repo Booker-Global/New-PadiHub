@@ -195,6 +195,16 @@ export async function sendPasswordChangedEmail(to: string, timestamp: string): P
   `));
 }
 
+export async function sendAccountDeletedEmail(to: string, name: string): Promise<void> {
+  await send(to, 'Your PadiHub account has been deleted', wrap(`
+    ${h2('Account deleted')}
+    ${p(`Hi ${escapeHtml(name)}, your PadiHub account has now been deleted.`)}
+    ${p('Your subscription access has been cancelled and your personal details have been removed or anonymised where retention is required for operational or compliance reasons.')}
+    ${p('If you did not request this, please contact <a href="mailto:hello@padihub.com" style="color:#2EAF6F;">hello@padihub.com</a> immediately.')}
+    ${btn('Contact Support', 'mailto:hello@padihub.com')}
+  `));
+}
+
 // ─── Group emails ─────────────────────────────────────────────────────────────
 
 export async function sendGroupInvitationEmail(

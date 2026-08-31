@@ -1,8 +1,20 @@
+import { useEffect, useState } from 'react';
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { Link } from 'react-router-dom';
 import { FileText, Shield, Users, AlertTriangle, ChevronRight } from 'lucide-react';
+import { getValidSession } from '@/lib/session';
 
 const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/terms#webpage\",\"name\":\"Terms of Service — PadiHub\",\"url\":\"https://padihub.com/terms\",\"description\":\"PadiHub's Terms of Service — the rules and agreements that govern your use of the world's trusted Community Savings Infrastructure Platform.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"}}";
+
+type TermsRegion = 'UK' | 'NG';
+type GeoResponse = { region?: 'UK' | 'NG' | 'BOTH' };
+type ProfileResponse = { success?: boolean; data?: { country?: string | null } };
+
+function normalizeProfileCountry(country?: string | null): TermsRegion | null {
+  if (country === 'NG') return 'NG';
+  if (country === 'GB' || country === 'UK') return 'UK';
+  return null;
+}
 
 
 const sections = [
@@ -54,7 +66,9 @@ const sections = [
     content: [
       {
         subtitle: 'Subscription Plans',
-        text: 'PadiHub offers exactly two monthly-only subscription tiers with no annual option and no free trial: Pro Group at £4.99/month (UK) or ₦5,000/month (Nigeria), and Elite Group at £9.99/month (UK) or ₦10,000/month (Nigeria). Pro Group lets a member create ONE savings group and be a member of up to 5 groups total. Elite Group lets a member create up to SEVEN savings groups and be a member of up to 10 groups total. Which currency/country is shown depends on the visitor\'s location (IP-based), not a manual toggle.',
+        text: (region: TermsRegion) => region === 'NG'
+          ? 'PadiHub offers exactly two monthly-only subscription tiers with no annual option and no free trial: Pro Group at ₦5,000/month, and Elite Group at ₦10,000/month. Pro Group lets a member create ONE savings group and be a member of up to 5 groups total. Elite Group lets a member create up to SEVEN savings groups and be a member of up to 10 groups total.'
+          : 'PadiHub offers exactly two monthly-only subscription tiers with no annual option and no free trial: Pro Group at £4.99/month, and Elite Group at £9.99/month. Pro Group lets a member create ONE savings group and be a member of up to 5 groups total. Elite Group lets a member create up to SEVEN savings groups and be a member of up to 10 groups total.',
       },
       {
         subtitle: 'Cancellation',
@@ -175,6 +189,7 @@ const sections = [
     title: '9. Identity Verification Fee (UK Users)',
     icon: AlertTriangle,
     color: '#F59E0B',
+    region: 'UK' as TermsRegion,
     content: [
       {
         subtitle: 'One-Time Fee',
@@ -199,6 +214,7 @@ const sections = [
     title: '10. Identity Verification Fee (Nigerian Users)',
     icon: Shield,
     color: '#2eafaf',
+    region: 'NG' as TermsRegion,
     content: [
       {
         subtitle: 'No Charge for Nigerian Users',
@@ -248,7 +264,42 @@ const sections = [
   },
 ];
 
+function renumberTitle(title: string, position: number) {
+  return title.replace(/^\d+\./, `${position}.`);
+}
+
 export default function TermsPage() {
+  const [region, setRegion] = useState<TermsRegion>('UK');
+
+  useEffect(() => {
+    let active = true;
+    const session = getValidSession();
+
+    const geoRequest = window.fetch('/api/geo')
+      .then(response => response.ok ? response.json() as Promise<GeoResponse> : null)
+      .catch(() => null);
+
+    const profileRequest = session?.token
+      ? window.fetch('/api/users/profile', { headers: { Authorization: 'Bearer ' + session.token } })
+        .then(response => response.ok ? response.json() as Promise<ProfileResponse> : null)
+        .catch(() => null)
+      : Promise.resolve<ProfileResponse | null>(null);
+
+    void Promise.all([geoRequest, profileRequest]).then(([geo, profile]) => {
+      if (!active) return;
+      const profileRegion = normalizeProfileCountry(profile?.data?.country);
+      setRegion(profileRegion ?? (geo?.region === 'NG' ? 'NG' : 'UK'));
+    });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const visibleSections = sections
+    .filter(section => !('region' in section) || section.region === region)
+    .map((section, index) => ({ ...section, title: renumberTitle(section.title, index + 1) }));
+
   return (
     <>
       <Helmet>
@@ -316,7 +367,7 @@ export default function TermsPage() {
               <div className="sticky top-24 rounded-3xl p-6 bg-white" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
                 <h2 className="text-sm font-extrabold text-gray-900 mb-4 uppercase tracking-wider" style={{ fontFamily: 'Nunito, sans-serif' }}>Contents</h2>
                 <nav className="flex flex-col gap-1">
-                  {sections.map(s => (
+                  {visibleSections.map(s => (
                     <a key={s.id} href={`#${s.id}`}
                       className="flex items-center gap-2 py-2 px-3 rounded-xl text-xs font-semibold text-gray-500 hover:text-gray-900 hover:bg-gray-50 transition-colors">
                       <ChevronRight size={12} />
@@ -330,7 +381,7 @@ export default function TermsPage() {
             {/* Main content */}
             <main className="flex-1 min-w-0">
               <div className="flex flex-col gap-8">
-                {sections.map((section) => (
+                {visibleSections.map((section) => (
                   <div key={section.id} id={section.id}
                    
                     className="rounded-3xl p-6 bg-white" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
@@ -345,7 +396,7 @@ export default function TermsPage() {
                       {section.content.map((item, i) => (
                         <div key={i}>
                           <h3 className="text-sm font-bold text-gray-900 mb-1">{item.subtitle}</h3>
-                          <p className="text-sm text-gray-600 leading-relaxed">{item.text}</p>
+                          <p className="text-sm text-gray-600 leading-relaxed">{typeof item.text === 'function' ? item.text(region) : item.text}</p>
                         </div>
                       ))}
                     </div>
