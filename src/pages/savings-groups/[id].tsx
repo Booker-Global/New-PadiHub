@@ -18,6 +18,8 @@ import {
   AlertTriangle,
   Copy,
   RefreshCw,
+  ThumbsUp,
+  ThumbsDown,
 } from 'lucide-react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { Button } from '@/components/ui/button';
@@ -94,6 +96,17 @@ interface NextRotationInfo {
 interface InvitationResult {
   token?: string;
   inviteLink?: string;
+}
+
+interface Vote {
+  id: string;
+  group_id: string;
+  proposal_type: 'payout_swap' | 'exceptional_request';
+  proposer_id: string;
+  proposal_text: string;
+  voting_deadline: string;
+  status: 'open' | 'approved' | 'rejected' | 'expired';
+  created_at: string;
 }
 
 interface ApiResponse<T> {
@@ -189,6 +202,14 @@ export default function SavingsGroupDetailPage() {
   const [inviteToken, setInviteToken] = useState('');
   const [membershipActionId, setMembershipActionId] = useState<string | null>(null);
   const [membershipActionError, setMembershipActionError] = useState('');
+  const [votes, setVotes] = useState<Vote[]>([]);
+  const [swapTarget, setSwapTarget] = useState('');
+  const [swapNote, setSwapNote] = useState('');
+  const [swapSubmitting, setSwapSubmitting] = useState(false);
+  const [swapError, setSwapError] = useState('');
+  const [swapNotice, setSwapNotice] = useState('');
+  const [voteActionId, setVoteActionId] = useState<string | null>(null);
+  const [voteActionError, setVoteActionError] = useState('');
 
   const loadData = useCallback(async () => {
     if (!id) {
@@ -230,11 +251,12 @@ export default function SavingsGroupDetailPage() {
       const groupData = groupJson.data ?? null;
       setGroup(groupData);
 
-      const [membershipsResult, contributionsResult, currentRotationResult, nextRotationResult] = await Promise.allSettled([
+      const [membershipsResult, contributionsResult, currentRotationResult, nextRotationResult, votesResult] = await Promise.allSettled([
         window.fetch(`/api/memberships?group_id=${id}`, { headers }),
         window.fetch(`/api/contributions?group_id=${id}`, { headers }),
         window.fetch(`/api/rotations/${id}/current`, { headers }),
         window.fetch(`/api/rotations/${id}/next`, { headers }),
+        window.fetch(`/api/votes?group_id=${id}`, { headers }),
       ]);
 
       if (membershipsResult.status === 'fulfilled' && membershipsResult.value.ok) {
@@ -271,12 +293,20 @@ export default function SavingsGroupDetailPage() {
       } else {
         setNextRotation(null);
       }
+
+      if (votesResult.status === 'fulfilled' && votesResult.value.ok) {
+        const votesJson = await votesResult.value.json() as ApiResponse<Vote[]>;
+        setVotes(Array.isArray(votesJson.data) ? votesJson.data : []);
+      } else {
+        setVotes([]);
+      }
     } catch (loadError) {
       setGroup(null);
       setMemberships([]);
       setContributions([]);
       setCurrentRotation(null);
       setNextRotation(null);
+      setVotes([]);
       setError(loadError instanceof Error ? loadError.message : 'Could not load this group.');
     } finally {
       setLoading(false);
@@ -315,6 +345,33 @@ export default function SavingsGroupDetailPage() {
     }),
     [memberships],
   );
+
+  const getMemberDisplayName = useCallback((userId: string) => {
+    if (userId === currentUserId) return 'You';
+    const index = orderedMembers.findIndex(member => member.user_id === userId);
+    return index >= 0 ? `Member ${index + 1}` : shortId(userId);
+  }, [orderedMembers, currentUserId]);
+
+  const currentMembership = useMemo(
+    () => memberships.find(member => member.user_id === currentUserId),
+    [memberships, currentUserId],
+  );
+
+  const swapCandidates = useMemo(
+    () => activeMembers.filter(member => member.user_id !== currentUserId),
+    [activeMembers, currentUserId],
+  );
+
+  const openPayoutSwapVotes = useMemo(
+    () => votes.filter(vote => vote.proposal_type === 'payout_swap' && vote.status === 'open'),
+    [votes],
+  );
+
+  function parseSwapTarget(proposalText: string) {
+    const match = /\[\[PAYOUT_SWAP:([^\]]+)\]\]\s*(.*)$/.exec(proposalText);
+    if (!match) return { targetUserId: '', note: proposalText };
+    return { targetUserId: match[1], note: match[2] };
+  }
 
   const tabs: { key: Tab; label: string }[] = [
     { key: 'overview', label: 'Overview' },
@@ -415,6 +472,78 @@ export default function SavingsGroupDetailPage() {
       setMembershipActionError('Network error. Please check your connection and try again.');
     } finally {
       setMembershipActionId(null);
+    }
+  };
+
+  const handleProposeSwap = async () => {
+    if (!id || !swapTarget) {
+      setSwapError('Please choose a member to swap payout positions with.');
+      return;
+    }
+    const activeSession = getValidSession();
+    if (!activeSession?.token) {
+      setSwapError('Please log in to propose a payout swap.');
+      return;
+    }
+
+    setSwapSubmitting(true);
+    setSwapError('');
+    setSwapNotice('');
+
+    try {
+      const response = await window.fetch('/api/votes/payout-swap', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer ' + activeSession.token,
+        },
+        body: JSON.stringify({ group_id: id, target_member_id: swapTarget, note: swapNote || undefined }),
+      });
+      const json = await response.json() as ApiResponse<{ id: string }>;
+      if (!response.ok) {
+        setSwapError(getErrorMessage(json, 'Could not propose this payout swap.'));
+        return;
+      }
+      setSwapNotice('Swap proposal submitted. Group members have 3 days to vote.');
+      setSwapTarget('');
+      setSwapNote('');
+      await loadData();
+    } catch {
+      setSwapError('Network error. Please check your connection and try again.');
+    } finally {
+      setSwapSubmitting(false);
+    }
+  };
+
+  const handleCastVote = async (voteId: string, decision: 'approve' | 'reject') => {
+    const activeSession = getValidSession();
+    if (!activeSession?.token) {
+      setVoteActionError('Please log in to vote.');
+      return;
+    }
+
+    setVoteActionId(voteId);
+    setVoteActionError('');
+
+    try {
+      const response = await window.fetch(`/api/votes/${voteId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer ' + activeSession.token,
+        },
+        body: JSON.stringify({ decision }),
+      });
+      const json = await response.json() as ApiResponse<null>;
+      if (!response.ok) {
+        setVoteActionError(getErrorMessage(json, 'Could not record your vote.'));
+        return;
+      }
+      await loadData();
+    } catch {
+      setVoteActionError('Network error. Please check your connection and try again.');
+    } finally {
+      setVoteActionId(null);
     }
   };
 
@@ -651,70 +780,171 @@ export default function SavingsGroupDetailPage() {
               )}
 
               {tab === 'members' && (
-                orderedMembers.length === 0 ? (
-                  <div className="rounded-3xl p-6 bg-white text-center" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
-                    <Users size={24} className="mx-auto mb-3" style={{ color: '#9CA3AF' }} />
-                    <h2 className="text-lg font-extrabold text-gray-900 mb-2" style={{ fontFamily: 'Nunito, sans-serif' }}>No member records yet</h2>
-                    <p className="text-sm text-gray-500">Members will appear here once the group has active memberships.</p>
-                  </div>
-                ) : (
-                  <div className="flex flex-col gap-3">
-                    {membershipActionError && (
-                      <div className="rounded-2xl p-3 text-sm font-semibold flex items-center gap-2" style={{ background: 'rgba(239,68,68,0.08)', color: '#B91C1C', border: '1px solid rgba(239,68,68,0.2)' }}>
-                        <AlertTriangle size={15} /> {membershipActionError}
-                      </div>
-                    )}
-                    {orderedMembers.map((member, index) => {
-                      const badge = getMembershipBadge(member.status);
-                      const displayName = member.user_id === currentUserId ? 'You' : `Member ${index + 1}`;
-                      const isLeaderViewing = group.leader_id === currentUserId;
-                      const actionBusy = membershipActionId === member.id;
+                <div className="flex flex-col gap-3">
+                  {orderedMembers.length === 0 ? (
+                    <div className="rounded-3xl p-6 bg-white text-center" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
+                      <Users size={24} className="mx-auto mb-3" style={{ color: '#9CA3AF' }} />
+                      <h2 className="text-lg font-extrabold text-gray-900 mb-2" style={{ fontFamily: 'Nunito, sans-serif' }}>No member records yet</h2>
+                      <p className="text-sm text-gray-500">Members will appear here once the group has active memberships.</p>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-3">
+                      {membershipActionError && (
+                        <div className="rounded-2xl p-3 text-sm font-semibold flex items-center gap-2" style={{ background: 'rgba(239,68,68,0.08)', color: '#B91C1C', border: '1px solid rgba(239,68,68,0.2)' }}>
+                          <AlertTriangle size={15} /> {membershipActionError}
+                        </div>
+                      )}
+                      {orderedMembers.map((member, index) => {
+                        const badge = getMembershipBadge(member.status);
+                        const displayName = member.user_id === currentUserId ? 'You' : `Member ${index + 1}`;
+                        const isLeaderViewing = group.leader_id === currentUserId;
+                        const actionBusy = membershipActionId === member.id;
 
-                      return (
-                        <div key={member.id} className="rounded-2xl p-4 bg-white flex items-center gap-4 flex-wrap" style={{ border: '1px solid #F3F4F6', boxShadow: '0 1px 6px rgba(0,0,0,0.04)' }}>
-                          <div className="w-11 h-11 rounded-full flex items-center justify-center font-bold text-white flex-shrink-0" style={{ background: `linear-gradient(135deg, ${groupColor}, ${groupColor}cc)` }}>
-                            {displayName[0]}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <p className="font-bold text-gray-900 text-sm">{displayName}</p>
-                              {member.role === 'leader' && <CheckCircle size={13} style={{ color: '#2EAF6F' }} />}
+                        return (
+                          <div key={member.id} className="rounded-2xl p-4 bg-white flex items-center gap-4 flex-wrap" style={{ border: '1px solid #F3F4F6', boxShadow: '0 1px 6px rgba(0,0,0,0.04)' }}>
+                            <div className="w-11 h-11 rounded-full flex items-center justify-center font-bold text-white flex-shrink-0" style={{ background: `linear-gradient(135deg, ${groupColor}, ${groupColor}cc)` }}>
+                              {displayName[0]}
                             </div>
-                            <p className="text-xs text-gray-400 break-all">
-                              {titleCase(member.role)} · Position {member.rotation_order ?? '—'} · {shortId(member.user_id)}
-                            </p>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <p className="font-bold text-gray-900 text-sm">{displayName}</p>
+                                {member.role === 'leader' && <CheckCircle size={13} style={{ color: '#2EAF6F' }} />}
+                              </div>
+                              <p className="text-xs text-gray-400 break-all">
+                                {titleCase(member.role)} · Position {member.rotation_order ?? '—'} · {shortId(member.user_id)}
+                              </p>
+                            </div>
+                            <div className="text-right">
+                              <span className="px-2 py-0.5 rounded-full text-xs font-bold" style={{ background: badge.bg, color: badge.color }}>
+                                {titleCase(member.status)}
+                              </span>
+                              <p className="text-xs text-gray-400 mt-1">{member.strike_count} strike{member.strike_count === 1 ? '' : 's'}</p>
+                            </div>
+                            {isLeaderViewing && member.status === 'pending' && (
+                              <div className="flex items-center gap-2 w-full sm:w-auto">
+                                <button
+                                  onClick={() => void handleMembershipDecision(member.id, 'approve')}
+                                  disabled={actionBusy}
+                                  className="flex-1 sm:flex-none px-3 py-2 rounded-xl text-xs font-bold text-white"
+                                  style={{ background: actionBusy ? '#D1D5DB' : 'linear-gradient(135deg, #2EAF6F, #1d8a55)', cursor: actionBusy ? 'not-allowed' : 'pointer' }}
+                                >
+                                  Approve
+                                </button>
+                                <button
+                                  onClick={() => void handleMembershipDecision(member.id, 'reject')}
+                                  disabled={actionBusy}
+                                  className="flex-1 sm:flex-none px-3 py-2 rounded-xl text-xs font-bold"
+                                  style={{ background: '#FEE2E2', color: '#B91C1C', cursor: actionBusy ? 'not-allowed' : 'pointer' }}
+                                >
+                                  Decline
+                                </button>
+                              </div>
+                            )}
                           </div>
-                          <div className="text-right">
-                            <span className="px-2 py-0.5 rounded-full text-xs font-bold" style={{ background: badge.bg, color: badge.color }}>
-                              {titleCase(member.status)}
-                            </span>
-                            <p className="text-xs text-gray-400 mt-1">{member.strike_count} strike{member.strike_count === 1 ? '' : 's'}</p>
-                          </div>
-                          {isLeaderViewing && member.status === 'pending' && (
-                            <div className="flex items-center gap-2 w-full sm:w-auto">
-                              <button
-                                onClick={() => void handleMembershipDecision(member.id, 'approve')}
-                                disabled={actionBusy}
-                                className="flex-1 sm:flex-none px-3 py-2 rounded-xl text-xs font-bold text-white"
-                                style={{ background: actionBusy ? '#D1D5DB' : 'linear-gradient(135deg, #2EAF6F, #1d8a55)', cursor: actionBusy ? 'not-allowed' : 'pointer' }}
-                              >
-                                Approve
-                              </button>
-                              <button
-                                onClick={() => void handleMembershipDecision(member.id, 'reject')}
-                                disabled={actionBusy}
-                                className="flex-1 sm:flex-none px-3 py-2 rounded-xl text-xs font-bold"
-                                style={{ background: '#FEE2E2', color: '#B91C1C', cursor: actionBusy ? 'not-allowed' : 'pointer' }}
-                              >
-                                Decline
-                              </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {group.allow_payout_swaps && (
+                    <div className="rounded-3xl p-5 bg-white" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
+                      <div className="flex items-center gap-2 mb-3">
+                        <RefreshCw size={16} style={{ color: '#2eafaf' }} />
+                        <h2 className="font-extrabold text-gray-900 text-sm" style={{ fontFamily: 'Nunito, sans-serif' }}>Payout schedule swaps</h2>
+                      </div>
+
+                      {currentMembership?.status === 'active' && (
+                        <div className="flex flex-col gap-3 mb-4">
+                          <p className="text-xs text-gray-500">Propose swapping your payout position with another active member. Group members will vote to approve it.</p>
+                          {swapError && (
+                            <div className="rounded-xl p-2.5 text-xs font-semibold flex items-center gap-2" style={{ background: 'rgba(239,68,68,0.08)', color: '#B91C1C' }}>
+                              <AlertTriangle size={13} /> {swapError}
                             </div>
                           )}
+                          {swapNotice && (
+                            <div className="rounded-xl p-2.5 text-xs font-semibold flex items-center gap-2" style={{ background: 'rgba(46,175,111,0.08)', color: '#1d8a55' }}>
+                              <CheckCircle size={13} /> {swapNotice}
+                            </div>
+                          )}
+                          <div className="flex flex-col sm:flex-row gap-2">
+                            <select
+                              value={swapTarget}
+                              onChange={event => setSwapTarget(event.target.value)}
+                              className="flex-1 px-3 py-2 rounded-xl text-sm border border-gray-200 focus:outline-none focus:border-teal-400"
+                            >
+                              <option value="">Choose a member…</option>
+                              {swapCandidates.map(candidate => (
+                                <option key={candidate.id} value={candidate.user_id}>
+                                  {getMemberDisplayName(candidate.user_id)} (Position {candidate.rotation_order ?? '—'})
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              onClick={() => void handleProposeSwap()}
+                              disabled={swapSubmitting || !swapTarget}
+                              className="px-4 py-2 rounded-xl text-xs font-bold text-white whitespace-nowrap"
+                              style={{ background: swapSubmitting || !swapTarget ? '#D1D5DB' : 'linear-gradient(135deg, #2eafaf, #1d8a8a)', cursor: swapSubmitting || !swapTarget ? 'not-allowed' : 'pointer' }}
+                            >
+                              {swapSubmitting ? 'Submitting…' : 'Propose swap'}
+                            </button>
+                          </div>
+                          <input
+                            value={swapNote}
+                            onChange={event => setSwapNote(event.target.value)}
+                            placeholder="Optional note for the group (e.g. reason for swap)"
+                            className="w-full px-3 py-2 rounded-xl text-sm border border-gray-200 focus:outline-none focus:border-teal-400"
+                          />
                         </div>
-                      );
-                    })}
-                  </div>
-                )
+                      )}
+
+                      {voteActionError && (
+                        <div className="rounded-xl p-2.5 mb-3 text-xs font-semibold flex items-center gap-2" style={{ background: 'rgba(239,68,68,0.08)', color: '#B91C1C' }}>
+                          <AlertTriangle size={13} /> {voteActionError}
+                        </div>
+                      )}
+
+                      {openPayoutSwapVotes.length === 0 ? (
+                        <p className="text-xs text-gray-400">No open payout swap requests right now.</p>
+                      ) : (
+                        <div className="flex flex-col gap-2">
+                          {openPayoutSwapVotes.map(vote => {
+                            const { targetUserId, note } = parseSwapTarget(vote.proposal_text);
+                            const busy = voteActionId === vote.id;
+                            return (
+                              <div key={vote.id} className="rounded-2xl p-3" style={{ background: '#F9FAFB', border: '1px solid #F3F4F6' }}>
+                                <p className="text-xs font-bold text-gray-900">
+                                  {getMemberDisplayName(vote.proposer_id)} wants to swap with {getMemberDisplayName(targetUserId)}
+                                </p>
+                                {note && <p className="text-xs text-gray-500 mt-0.5">{note}</p>}
+                                <p className="text-[11px] text-gray-400 mt-1">Voting closes {formatDate(vote.voting_deadline)}</p>
+                                {currentMembership?.status === 'active' && (
+                                  <div className="flex items-center gap-2 mt-2">
+                                    <button
+                                      onClick={() => void handleCastVote(vote.id, 'approve')}
+                                      disabled={busy}
+                                      className="flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold text-white"
+                                      style={{ background: busy ? '#D1D5DB' : 'linear-gradient(135deg, #2EAF6F, #1d8a55)', cursor: busy ? 'not-allowed' : 'pointer' }}
+                                    >
+                                      <ThumbsUp size={12} /> Approve
+                                    </button>
+                                    <button
+                                      onClick={() => void handleCastVote(vote.id, 'reject')}
+                                      disabled={busy}
+                                      className="flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold"
+                                      style={{ background: '#FEE2E2', color: '#B91C1C', cursor: busy ? 'not-allowed' : 'pointer' }}
+                                    >
+                                      <ThumbsDown size={12} /> Reject
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               )}
 
               {tab === 'activity' && (

@@ -19,6 +19,7 @@ import {
 import DashboardLayout from '@/components/DashboardLayout';
 import { Button } from '@/components/ui/button';
 import { getValidSession } from '@/lib/session';
+import { getTrustTiers, getCurrentTier } from '@/lib/trust-tiers';
 
 const fadeSlide = {
   hidden: { opacity: 0, x: 24 },
@@ -41,6 +42,7 @@ interface GroupData {
   gracePeriod: number;
   votingRequired: boolean;
   allowSwaps: boolean;
+  minTrustScore: number;
   inviteEmails: string;
 }
 
@@ -70,6 +72,7 @@ const defaultData: GroupData = {
   gracePeriod: 48,
   votingRequired: false,
   allowSwaps: true,
+  minTrustScore: 0,
   inviteEmails: '',
 };
 
@@ -160,6 +163,13 @@ export default function CreateGroupWizard() {
     ? 'Enter a valid amount with up to 2 decimal places.'
     : '';
 
+  const minTrustTierLabel = useMemo(() => {
+    if (data.minTrustScore <= 0) return 'Open to anyone (no minimum)';
+    const tiers = getTrustTiers(100);
+    const tier = getCurrentTier(data.minTrustScore, tiers);
+    return `${tier.name} tier or above`;
+  }, [data.minTrustScore]);
+
   const set = <K extends keyof GroupData>(key: K, value: GroupData[K]) => {
     setSubmitError('');
     setNeedsVerification(false);
@@ -226,6 +236,7 @@ export default function CreateGroupWizard() {
           rotation_method: data.rotationOrder === 'random' ? 'random' : 'manual', // "fcfs" has no backend equivalent yet.
           strike_threshold: data.maxMissed,
           allow_payout_swaps: data.allowSwaps,
+          min_trust_score: data.minTrustScore || undefined,
         }),
       });
 
@@ -603,6 +614,18 @@ export default function CreateGroupWizard() {
                         </div>
                       </OptionCard>
                     </div>
+                    <div>
+                      <label className="text-sm font-bold text-gray-700 block mb-2">Minimum Trust Score™ to join</label>
+                      <p className="text-xs text-gray-400 mb-3">Only members with at least this Trust Score™ can request to join your group. Set to 0 to allow anyone.</p>
+                      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                        {[0, 20, 30, 50, 70, 85].map(value => (
+                          <OptionCard key={value} selected={data.minTrustScore === value} onClick={() => set('minTrustScore', value)}>
+                            <p className="font-black text-lg text-center" style={{ fontFamily: 'Nunito, sans-serif', color: data.minTrustScore === value ? '#2EAF6F' : '#9CA3AF' }}>{value}</p>
+                          </OptionCard>
+                        ))}
+                      </div>
+                      <p className="text-xs text-gray-400 mt-2">Currently: {minTrustTierLabel}</p>
+                    </div>
                   </div>
                 )}
 
@@ -644,6 +667,7 @@ export default function CreateGroupWizard() {
                       { icon: RotateCcw, label: 'Payout order', value: data.rotationOrder === 'random' ? 'Random' : data.rotationOrder === 'manual' ? 'Manual' : 'First come, first served' },
                       { icon: Shield, label: 'Max missed payments', value: `${data.maxMissed} missed` },
                       { icon: Eye, label: 'Grace period', value: `${data.gracePeriod} hours` },
+                      { icon: Shield, label: 'Minimum Trust Score™ to join', value: data.minTrustScore > 0 ? `${data.minTrustScore}+ (${minTrustTierLabel})` : 'None' },
                     ].map(row => (
                       <div key={row.label} className="flex items-center justify-between py-2.5 border-b border-gray-50 last:border-0 gap-4">
                         <div className="flex items-center gap-2">
