@@ -27,6 +27,8 @@ export const userService = {
       identity_verified_at: schema.users.identity_verified_at,
       created_at:           schema.users.created_at,
       role:                 schema.users.role,
+      subscription_tier:    schema.users.subscription_tier,
+      country:              schema.users.country,
     }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
     if (!userRows.length) throw new AppError('User not found.', 404);
     const user = userRows[0];
@@ -99,6 +101,8 @@ export const userService = {
       trust_score_max:           TRUST_SCORE_MAX,
       trust_score_min:           TRUST_SCORE_MIN,
       identity_verified:         user.identity_verified,
+      subscription_tier:         user.subscription_tier,
+      country:                   user.country,
       communities_count:         activeGroupIds.length,
       is_group_leader:           isGroupLeader,
       contribution_reliability: contributionReliability,

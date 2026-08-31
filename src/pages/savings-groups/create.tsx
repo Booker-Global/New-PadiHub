@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { AnimatePresence } from 'motion/react';
 import { MotionDiv } from '@/lib/motion-safe';
@@ -136,7 +136,13 @@ function OptionCard({ selected, onClick, children }: { selected: boolean; onClic
   );
 }
 
+function requiresIdentityVerification(message: string) {
+  const normalized = message.toLowerCase();
+  return normalized.includes('/verify-identity') || normalized.includes('identity verification');
+}
+
 export default function CreateGroupWizard() {
+  const location = useLocation();
   const [step, setStep] = useState(0);
   const [data, setData] = useState<GroupData>(defaultData);
   const [done, setDone] = useState(false);
@@ -144,8 +150,10 @@ export default function CreateGroupWizard() {
   const [submitError, setSubmitError] = useState('');
   const [needsVerification, setNeedsVerification] = useState(false);
   const [needsPaymentSetup, setNeedsPaymentSetup] = useState(false);
+  const [needsIdentitySetup, setNeedsIdentitySetup] = useState(false);
   const [bypassing, setBypassing] = useState(false);
   const [createdGroup, setCreatedGroup] = useState<SavingsGroup | null>(null);
+  const verificationReturnPath = `${location.pathname}${location.search}`;
 
   const normalizedAmount = useMemo(() => normalizeContributionAmount(data.amount), [data.amount]);
   const amountError = data.amount.trim() && !normalizedAmount
@@ -156,6 +164,7 @@ export default function CreateGroupWizard() {
     setSubmitError('');
     setNeedsVerification(false);
     setNeedsPaymentSetup(false);
+    setNeedsIdentitySetup(false);
     setData(current => ({ ...current, [key]: value }));
   };
 
@@ -175,6 +184,7 @@ export default function CreateGroupWizard() {
       setSubmitError('');
       setNeedsVerification(false);
       setNeedsPaymentSetup(false);
+      setNeedsIdentitySetup(false);
       setStep(current => current - 1);
     }
   };
@@ -195,6 +205,7 @@ export default function CreateGroupWizard() {
     setSubmitError('');
     setNeedsVerification(false);
     setNeedsPaymentSetup(false);
+    setNeedsIdentitySetup(false);
 
     try {
       const response = await window.fetch('/api/groups', {
@@ -220,9 +231,11 @@ export default function CreateGroupWizard() {
 
       const json = await response.json() as ApiResponse<SavingsGroup>;
       if (!response.ok) {
-        setSubmitError(getErrorMessage(json, 'Could not create your group.'));
+        const message = getErrorMessage(json, 'Could not create your group.');
+        setSubmitError(message);
         setNeedsVerification(json.code === 'VERIFICATION_REQUIRED');
         setNeedsPaymentSetup(json.code === 'PAYMENT_SETUP_REQUIRED');
+        setNeedsIdentitySetup(json.code === 'PAYMENT_SETUP_REQUIRED' && requiresIdentityVerification(message));
         return;
       }
 
@@ -365,7 +378,10 @@ export default function CreateGroupWizard() {
                   </button>
                 )}
                 {needsPaymentSetup && (
-                  <div className="flex gap-3 mt-3">
+                  <div className="flex gap-3 mt-3 flex-wrap">
+                    {needsIdentitySetup && (
+                      <Link to={`/verify-identity?next=${encodeURIComponent(verificationReturnPath)}`} style={{ fontSize: 13, fontWeight: 700, color: '#DC2626', textDecoration: 'underline' }}>Verify your identity</Link>
+                    )}
                     <Link to="/payments/methods" style={{ fontSize: 13, fontWeight: 700, color: '#DC2626', textDecoration: 'underline' }}>Add payment method</Link>
                     <Link to="/payments/payout" style={{ fontSize: 13, fontWeight: 700, color: '#DC2626', textDecoration: 'underline' }}>Connect payout destination</Link>
                   </div>

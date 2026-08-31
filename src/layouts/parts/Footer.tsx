@@ -187,7 +187,7 @@ export default function Footer() {
             <nav aria-label="Footer community links">
               {[
                 { to: '/trust',          label: 'Trust Score™' },
-                { to: '/savings-groups', label: 'Savings Groups' },
+                { to: '/groups/search',  label: 'Savings Groups' },
               ].map(({ to, label }) => (
                 <Link key={to} to={to}>{label}</Link>
               ))}

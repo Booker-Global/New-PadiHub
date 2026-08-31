@@ -10,6 +10,7 @@ import PricingPage from './pages/pricing';
 import TrustSecurityPage from './pages/trust-security';
 import FAQPage from './pages/faq';
 import ContactPage from './pages/contact';
+import FindGroupsPage from './pages/groups/search';
 
 const NotFoundPage = import.meta.env.DEV
   ? lazy(() => import('../dev-tools/src/PageNotFound'))
@@ -71,6 +72,7 @@ const EditProfilePage = lazy(() => import('./pages/profile/edit'));
 // Payments — payment method & payout destination setup
 const AddPaymentMethodPage = lazy(() => import('./pages/payments/methods'));
 const ConnectPayoutPage = lazy(() => import('./pages/payments/payout'));
+const VerifyIdentityPage = lazy(() => import('./pages/verify-identity'));
 
 // Leader Tools
 const LeaderCommandCentrePage = lazy(() => import('./pages/leader/index'));
@@ -111,6 +113,7 @@ export const routes: RouteObject[] = [
   { path: '/trust-security', element: <TrustSecurityPage /> },
   { path: '/faq', element: <FAQPage /> },
   { path: '/contact', element: <ContactPage /> },
+  { path: '/groups/search', element: <FindGroupsPage /> },
   { path: '/privacy', element: <PrivacyPage /> },
   { path: '/terms', element: <TermsPage /> },
   { path: '/reset-password', element: <ResetPasswordPage /> },
@@ -145,6 +148,7 @@ export const routes: RouteObject[] = [
   // Payments — payment method & payout destination setup
   { path: '/payments/methods', element: <AddPaymentMethodPage /> },
   { path: '/payments/payout', element: <ConnectPayoutPage /> },
+  { path: '/verify-identity', element: <VerifyIdentityPage /> },
 
   // Leader Tools
   { path: '/leader',               element: <LeaderCommandCentrePage /> },
@@ -166,6 +170,6 @@ export type Path = '/' | '/login' | '/get-started' | '/forgot-password' | '/veri
   '/dashboard' | '/savings-groups' | '/trust' |
   '/notifications' | '/profile' |
   '/about' | '/how-it-works' | '/features' | '/pricing' |
-  '/trust-security' | '/faq' | '/contact';
+  '/trust-security' | '/faq' | '/contact' | '/groups/search';
 
 export type Params = Record<string, string | undefined>;

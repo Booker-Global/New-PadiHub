@@ -16,16 +16,21 @@ import { chargeContributionForUser } from '../controllers/paymentController.js';
 import { getFlutterwaveProvider } from '../integrations/payments/PaymentProviderFactory.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { computeNextPayoutDate } from '../lib/payoutSchedule.js';
+import { SUBSCRIPTION_TIERS, isSubscriptionTierKey, getTierMonthlyPrice } from '../lib/constants.js';
 import {
   sendContributionReminderEmail,
   sendSubscriptionRenewalReminderEmail,
 } from '../integrations/email/emailService.js';
 
-// ₦3,500/month — matches the published price in legalController.ts and the
-// renewal-reminder email copy. Configurable via env for future price changes.
-const DEFAULT_FLUTTERWAVE_SUBSCRIPTION_AMOUNT_NGN = 3500;
+// Nigeria "Pro Group" price is the default fallback if a user somehow has no
+// recognised subscription_tier recorded — see SUBSCRIPTION_TIERS in
+// ../lib/constants.ts for the authoritative tier pricing/limits.
+const DEFAULT_FLUTTERWAVE_SUBSCRIPTION_AMOUNT_NGN = SUBSCRIPTION_TIERS.pro.priceNGN;
 
-function getFlutterwaveSubscriptionAmount() {
+function getFlutterwaveSubscriptionAmount(subscriptionTier?: string | null) {
+  if (isSubscriptionTierKey(subscriptionTier)) {
+    return getTierMonthlyPrice(subscriptionTier, 'NG');
+  }
   const parsed = Number.parseFloat(
     process.env.FLUTTERWAVE_SUBSCRIPTION_AMOUNT_NGN ?? `${DEFAULT_FLUTTERWAVE_SUBSCRIPTION_AMOUNT_NGN}`,
   );
@@ -339,7 +344,7 @@ export async function monthlySubscriptionRenewalCharge(): Promise<void> {
         continue;
       }
 
-      const amountInSmallestUnit = Math.round(getFlutterwaveSubscriptionAmount() * 100);
+      const amountInSmallestUnit = Math.round(getFlutterwaveSubscriptionAmount(user.subscription_tier) * 100);
       const renewalRef = `sub-renewal-${sub.id}-${sub.renewal_date?.getTime() ?? Date.now()}`;
 
       try {

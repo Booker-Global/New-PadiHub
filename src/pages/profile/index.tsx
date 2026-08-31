@@ -18,6 +18,7 @@ const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.06 } }
 
 const quickActions = [
   { label: 'Edit Profile', icon: Edit, color: '#2EAF6F', link: '/profile/edit' },
+  { label: 'Find Groups', icon: Users, color: '#2EAF6F', link: '/groups/search' },
   { label: 'Trust Score™', icon: Shield, color: '#8B5CF6', link: '/trust' },
   { label: 'Payments', icon: CreditCard, color: '#EF4444', link: '/payments/methods' },
   { label: 'Notifications', icon: Bell, color: '#2eafaf', link: '/notifications' },

@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { getValidSession } from '@/lib/session';
+import GroupSearch from '@/components/GroupSearch';
 
 const _jsonLd = "{\"@context\":\"https://schema.org\",\"@graph\":[{\"@type\":\"WebSite\",\"@id\":\"https://padihub.com/#website\",\"name\":\"PadiHub\",\"url\":\"https://padihub.com/\"},{\"@type\":\"Organization\",\"@id\":\"https://padihub.com/#organization\",\"name\":\"PadiHub\",\"url\":\"https://padihub.com/\",\"logo\":\"https://padihub.com/airo-assets/images/logo/primary\"},{\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/#webpage\",\"url\":\"https://padihub.com/\",\"name\":\"PadiHub — Save Together. Grow Together. Belong.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"},\"datePublished\":\"2026-07-16\",\"dateModified\":\"2026-07-16\"},{\"@type\":\"SoftwareApplication\",\"name\":\"PadiHub\",\"applicationCategory\":\"FinanceApplication\",\"operatingSystem\":\"Web\",\"offers\":{\"@type\":\"Offer\",\"price\":\"4.99\",\"priceCurrency\":\"GBP\"}}]}";
 
@@ -18,21 +19,21 @@ const regionCopy: Record<Region, { hero: string; illustration: string; trustBar:
     illustration: 'Built for members in the United Kingdom',
     trustBar: 'United Kingdom pricing',
     pricing: 'Showing membership options for the United Kingdom. Cancel anytime.',
-    finalCta: 'No credit card required · Cancel anytime · United Kingdom pricing shown',
+    finalCta: 'Cancel anytime · United Kingdom pricing shown',
   },
   NG: {
     hero: 'Built for members saving together in Nigeria.',
     illustration: 'Built for members in Nigeria',
     trustBar: 'Nigeria pricing',
     pricing: 'Showing membership options for Nigeria. Cancel anytime.',
-    finalCta: 'No credit card required · Cancel anytime · Nigeria pricing shown',
+    finalCta: 'Cancel anytime · Nigeria pricing shown',
   },
   BOTH: {
     hero: 'Built for members saving together in community circles of all kinds.',
     illustration: 'Built for community savings groups',
     trustBar: 'Region-aware pricing',
     pricing: 'Choose the membership option that fits your region. Cancel anytime.',
-    finalCta: 'No credit card required · Cancel anytime · Choose the region that fits your group',
+    finalCta: 'Cancel anytime · Choose the region that fits your group',
   },
 };
 
@@ -591,6 +592,20 @@ export default function HomePage() {
               </p>
             </div>
           </div>
+        </div>
+      </section>
+
+      {/* ── FIND A SAVINGS GROUP ─────────────────────────────────────────── */}
+      <section id="find-groups" style={{ padding: '5rem 0', background: '#F9FAFB' }}>
+        <div style={{ maxWidth: '60rem', margin: '0 auto', padding: '0 1.25rem' }}>
+          <div style={{ textAlign: 'center', marginBottom: '2.5rem' }}>
+            <p style={{ fontSize: 13, fontWeight: 700, color: '#2EAF6F', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 12 }}>Find your circle</p>
+            <h2 style={{ fontSize: 'clamp(1.75rem, 4vw, 2.25rem)', fontWeight: 800, color: '#111827', fontFamily: 'Nunito, sans-serif', marginBottom: 12 }}>Search for a savings group</h2>
+            <p style={{ color: '#6B7280', fontSize: 15, maxWidth: 560, margin: '0 auto' }}>
+              Browse rotating savings groups open to new members in your location and request to join.
+            </p>
+          </div>
+          <GroupSearch />
         </div>
       </section>
 

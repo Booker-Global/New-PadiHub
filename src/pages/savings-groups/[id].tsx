@@ -187,6 +187,8 @@ export default function SavingsGroupDetailPage() {
   const [inviteNotice, setInviteNotice] = useState('');
   const [inviteLink, setInviteLink] = useState('');
   const [inviteToken, setInviteToken] = useState('');
+  const [membershipActionId, setMembershipActionId] = useState<string | null>(null);
+  const [membershipActionError, setMembershipActionError] = useState('');
 
   const loadData = useCallback(async () => {
     if (!id) {
@@ -385,6 +387,34 @@ export default function SavingsGroupDetailPage() {
       setInviteError('Network error. Please check your connection and try again.');
     } finally {
       setInviteLoading(false);
+    }
+  };
+
+  const handleMembershipDecision = async (membershipId: string, decision: 'approve' | 'reject') => {
+    const activeSession = getValidSession();
+    if (!activeSession?.token) {
+      setMembershipActionError('Please log in to manage join requests.');
+      return;
+    }
+
+    setMembershipActionId(membershipId);
+    setMembershipActionError('');
+
+    try {
+      const response = await window.fetch(`/api/memberships/${membershipId}/${decision}`, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + activeSession.token },
+      });
+      const json = await response.json() as ApiResponse<null>;
+      if (!response.ok) {
+        setMembershipActionError(getErrorMessage(json, `Could not ${decision} this join request.`));
+        return;
+      }
+      await loadData();
+    } catch {
+      setMembershipActionError('Network error. Please check your connection and try again.');
+    } finally {
+      setMembershipActionId(null);
     }
   };
 
@@ -629,12 +659,19 @@ export default function SavingsGroupDetailPage() {
                   </div>
                 ) : (
                   <div className="flex flex-col gap-3">
+                    {membershipActionError && (
+                      <div className="rounded-2xl p-3 text-sm font-semibold flex items-center gap-2" style={{ background: 'rgba(239,68,68,0.08)', color: '#B91C1C', border: '1px solid rgba(239,68,68,0.2)' }}>
+                        <AlertTriangle size={15} /> {membershipActionError}
+                      </div>
+                    )}
                     {orderedMembers.map((member, index) => {
                       const badge = getMembershipBadge(member.status);
                       const displayName = member.user_id === currentUserId ? 'You' : `Member ${index + 1}`;
+                      const isLeaderViewing = group.leader_id === currentUserId;
+                      const actionBusy = membershipActionId === member.id;
 
                       return (
-                        <div key={member.id} className="rounded-2xl p-4 bg-white flex items-center gap-4" style={{ border: '1px solid #F3F4F6', boxShadow: '0 1px 6px rgba(0,0,0,0.04)' }}>
+                        <div key={member.id} className="rounded-2xl p-4 bg-white flex items-center gap-4 flex-wrap" style={{ border: '1px solid #F3F4F6', boxShadow: '0 1px 6px rgba(0,0,0,0.04)' }}>
                           <div className="w-11 h-11 rounded-full flex items-center justify-center font-bold text-white flex-shrink-0" style={{ background: `linear-gradient(135deg, ${groupColor}, ${groupColor}cc)` }}>
                             {displayName[0]}
                           </div>
@@ -653,6 +690,26 @@ export default function SavingsGroupDetailPage() {
                             </span>
                             <p className="text-xs text-gray-400 mt-1">{member.strike_count} strike{member.strike_count === 1 ? '' : 's'}</p>
                           </div>
+                          {isLeaderViewing && member.status === 'pending' && (
+                            <div className="flex items-center gap-2 w-full sm:w-auto">
+                              <button
+                                onClick={() => void handleMembershipDecision(member.id, 'approve')}
+                                disabled={actionBusy}
+                                className="flex-1 sm:flex-none px-3 py-2 rounded-xl text-xs font-bold text-white"
+                                style={{ background: actionBusy ? '#D1D5DB' : 'linear-gradient(135deg, #2EAF6F, #1d8a55)', cursor: actionBusy ? 'not-allowed' : 'pointer' }}
+                              >
+                                Approve
+                              </button>
+                              <button
+                                onClick={() => void handleMembershipDecision(member.id, 'reject')}
+                                disabled={actionBusy}
+                                className="flex-1 sm:flex-none px-3 py-2 rounded-xl text-xs font-bold"
+                                style={{ background: '#FEE2E2', color: '#B91C1C', cursor: actionBusy ? 'not-allowed' : 'pointer' }}
+                              >
+                                Decline
+                              </button>
+                            </div>
+                          )}
                         </div>
                       );
                     })}

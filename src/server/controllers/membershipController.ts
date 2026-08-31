@@ -29,13 +29,13 @@ export const membershipController = {
     validate(joinSchema),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        await membershipService.join(
+        const data = await membershipService.join(
           req.user!.userId,
           req.body.group_id,
           req.body.invite_token,
           ip(req.ip),
         );
-        res.status(201).json({ success: true, message: 'Joined group successfully.' });
+        res.status(201).json({ success: true, message: data.message, data });
       } catch (e) { next(e); }
     },
   ],
