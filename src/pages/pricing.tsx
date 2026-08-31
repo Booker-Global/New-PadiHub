@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { Link } from 'react-router-dom';
-import { ArrowRight, CheckCircle, Shield, Star, Users } from 'lucide-react';
+import { ArrowRight, CheckCircle, Shield, Users } from 'lucide-react';
 import { getValidSession } from '@/lib/session';
 
 const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/pricing#webpage\",\"name\":\"Membership Pricing — PadiHub\",\"url\":\"https://padihub.com/pricing\",\"description\":\"Region-aware monthly pricing for PadiHub's Pro Group and Elite Group subscriptions.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"}}";
@@ -159,7 +159,7 @@ export default function PricingPage() {
         @media (min-width: 640px) { .shared-grid { grid-template-columns: 1fr 1fr; } }
         @media (min-width: 1024px) { .shared-grid { grid-template-columns: repeat(4, 1fr); } }
         .trust-grid { display: grid; grid-template-columns: 1fr; gap: 1.5rem; text-align: center; }
-        @media (min-width: 768px) { .trust-grid { grid-template-columns: repeat(3, 1fr); } }
+        @media (min-width: 768px) { .trust-grid { grid-template-columns: repeat(2, 1fr); } }
         .cta-btns { display: flex; flex-direction: column; gap: 1rem; justify-content: center; }
         @media (min-width: 640px) { .cta-btns { flex-direction: row; } }
       `}</style>
@@ -313,7 +313,6 @@ export default function PricingPage() {
           <div className="trust-grid">
             {[
               { icon: Shield, title: 'Monthly only', desc: 'Just one clear monthly price per plan, with no billing surprises.', color: '#2EAF6F' },
-              { icon: Star, title: 'Automatic regional pricing', desc: 'This page shows pricing for your region automatically instead of asking you to switch manually.', color: '#F59E0B' },
               { icon: ArrowRight, title: 'Cancel anytime', desc: 'Stay flexible as your savings groups grow and your needs change.', color: '#8B5CF6' },
             ].map((item) => (
               <div key={item.title} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>

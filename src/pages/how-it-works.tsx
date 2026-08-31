@@ -3,13 +3,23 @@ import { Helmet } from '@dr.pogodin/react-helmet';
 import { Link } from 'react-router-dom';
 import { UserPlus, CreditCard, Users, PiggyBank, BarChart2, ArrowRight, CheckCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { useResolvedPricingRegion } from '@/lib/pricingRegion';
 
 const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/how-it-works#webpage\",\"name\":\"How PadiHub Works — Rotating Savings Made Simple\",\"url\":\"https://padihub.com/how-it-works\",\"description\":\"Learn how PadiHub works — register, subscribe, create or join a savings group, contribute monthly and receive your payout. Six simple steps.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"}}";
 
-const planDetails = [
-  'Pro Group: £4.99/month (UK) or ₦5,000/month (Nigeria). Create ONE savings group; be a member of up to 5 groups total.',
-  'Elite Group: £9.99/month (UK) or ₦10,000/month (Nigeria). Create up to SEVEN savings groups; be a member of up to 10 groups total.',
-];
+// Shows only the visitor's own region's price (never both UK and Nigeria at
+// once) — see useResolvedPricingRegion for the detection order.
+const planDetailsByRegion: Record<'UK' | 'NG', string[]> = {
+  UK: [
+    'Pro Group: £4.99/month. Create ONE savings group; be a member of up to 5 groups total.',
+    'Elite Group: £9.99/month. Create up to SEVEN savings groups; be a member of up to 10 groups total.',
+  ],
+  NG: [
+    'Pro Group: ₦5,000/month. Create ONE savings group; be a member of up to 5 groups total.',
+    'Elite Group: ₦10,000/month. Create up to SEVEN savings groups; be a member of up to 10 groups total.',
+  ],
+};
+
 
 
 const stepsMeta = [
@@ -34,6 +44,7 @@ const stepsMeta = [
 ];
 
 export default function HowItWorksPage() {
+  const region = useResolvedPricingRegion();
   const steps = how_it_works.steps.map(step => {
     if (step.title === 'Register') {
       return {
@@ -48,7 +59,7 @@ export default function HowItWorksPage() {
       return {
         ...step,
         desc: 'Choose the monthly plan that matches how you want to save and grow with your community.',
-        details: [...planDetails, 'Cancel anytime'],
+        details: [...planDetailsByRegion[region], 'Cancel anytime'],
       };
     }
 

@@ -5,12 +5,15 @@ import { MotionDiv } from '@/lib/motion-safe';
 import { Link } from 'react-router-dom';
 import { ChevronDown, ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { FAQ_ENTRIES } from './help/faqData';
+import { getFaqEntries } from './help/faqData';
+import { useResolvedPricingRegion } from '@/lib/pricingRegion';
 
 const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/faq#webpage\",\"name\":\"FAQ — PadiHub Frequently Asked Questions\",\"url\":\"https://padihub.com/faq\",\"description\":\"Answers to the most common questions about PadiHub — Trust Score™, pricing, savings groups and more.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"}}";
 
 export default function FAQPage() {
   const [open, setOpen] = useState<number | null>(null);
+  const region = useResolvedPricingRegion();
+  const faqEntries = getFaqEntries(region);
 
   return (
     <>
@@ -38,7 +41,7 @@ export default function FAQPage() {
       <section style={{ padding: '5rem 0', background: '#fff' }}>
         <div style={{ maxWidth: '48rem', margin: '0 auto', padding: '0 1.25rem' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 48 }}>
-            {FAQ_ENTRIES.map((faq, i) => (
+            {faqEntries.map((faq, i) => (
               <MotionDiv key={faq.q} style={{ borderRadius: 16, overflow: 'hidden', background: '#fff', border: '1px solid #E5E7EB' }}>
                 <button
                   onClick={() => setOpen(open === i ? null : i)}
