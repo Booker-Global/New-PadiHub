@@ -106,6 +106,10 @@ app.post('/api/webhooks/flutterwave',
   express.raw({ type: 'application/json' }),
   flutterwaveWebhookHandler,
 );
+app.post('/api/identity/verify/webhook',
+  express.raw({ type: 'application/json' }),
+  stripeIdentityWebhook,
+);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -295,11 +299,8 @@ app.put(   '/api/admin/support/:id/close',        authenticate, requireRole('adm
 app.get(   '/api/admin/audit',                    authenticate, requireRole('admin'), adminController.auditLogs);
 
 // ── Identity Verification ─────────────────────────────────────────────────────
-// Webhook must be public and receive raw body for signature verification
-app.post('/api/identity/verify/webhook',
-  express.raw({ type: 'application/json' }),
-  stripeIdentityWebhook,
-);
+// Webhook is registered above (before express.json()) since it needs the raw
+// body for signature verification — see the webhook routes block near the top.
 app.post('/api/identity/verify/start', authenticate, startStripeIdentity);
 app.get( '/api/identity/status',       authenticate, getIdentityStatus);
 app.post('/api/identity/bvn/verify',   authenticate, initiateBvn);
