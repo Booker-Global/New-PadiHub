@@ -383,13 +383,21 @@ export const groupService = {
     }
     pendingActions.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
 
+    const contributionsByMemberAndGroup = new Map<string, typeof allContributions>();
+    for (const c of allContributions) {
+      const key = `${c.group_id}:${c.member_id}`;
+      const bucket = contributionsByMemberAndGroup.get(key);
+      if (bucket) bucket.push(c);
+      else contributionsByMemberAndGroup.set(key, [c]);
+    }
+
     const members = activeMemberships
       .map(m => ({
         id: m.id,
         label: labelFor(m.group_id, m.user_id),
         community: groupNameById.get(m.group_id) ?? 'Group',
         trustScore: trustById.get(m.user_id) ?? 0,
-        contributionRate: contributionRate(allContributions.filter(c => c.member_id === m.user_id && c.group_id === m.group_id)),
+        contributionRate: contributionRate(contributionsByMemberAndGroup.get(`${m.group_id}:${m.user_id}`) ?? []),
         status: m.strike_count > 0 ? 'attention' as const : 'active' as const,
         strikeCount: m.strike_count,
       }))
