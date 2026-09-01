@@ -169,23 +169,72 @@ export class StripeProvider implements IPaymentProvider {
 
   /** Create a Stripe Express connected account for a group leader */
   async createConnectedAccount(params: {
-    userId: string; email: string;
-  }): Promise<{ accountId: string; onboardingUrl: string }> {
+    userId: string; email: string; country?: string;
+    firstName?: string; lastName?: string;
+  }): Promise<{ accountId: string }> {
     const stripe = getStripe();
     const account = await stripe.accounts.create({
-      type:  'express',
-      email: params.email,
+      type:         'express',
+      email:        params.email,
+      country:      params.country || 'GB',
+      business_type: 'individual',
+      individual: {
+        email:      params.email,
+        first_name: params.firstName,
+        last_name:  params.lastName,
+      },
       metadata: { padihub_user_id: params.userId },
       capabilities: { transfers: { requested: true } },
     });
 
+    return { accountId: account.id };
+  }
+
+  /**
+   * Attach a UK bank account (sort code + account number) submitted in-app to
+   * an existing Express connected account, so the member doesn't have to
+   * re-type their bank details on Stripe's hosted onboarding page — it will
+   * only ask for whatever is still outstanding (e.g. identity verification).
+   */
+  async attachExternalBankAccount(params: {
+    accountId: string; accountHolderName: string; sortCode: string;
+    accountNumber: string; country?: string; currency?: string;
+  }): Promise<{ externalAccountId: string }> {
+    const stripe = getStripe();
+    const externalAccount = await stripe.accounts.createExternalAccount(params.accountId, {
+      external_account: {
+        object:              'bank_account',
+        country:             params.country || 'GB',
+        currency:            params.currency || 'gbp',
+        account_holder_name: params.accountHolderName,
+        account_number:      params.accountNumber,
+        routing_number:      params.sortCode,
+      },
+    });
+    return { externalAccountId: externalAccount.id };
+  }
+
+  /** Create an Account Link for whatever onboarding requirements (e.g. identity
+   * verification) are still outstanding on a connected account. */
+  async createOnboardingLink(accountId: string): Promise<{ onboardingUrl: string }> {
+    const stripe = getStripe();
     const accountLink = await stripe.accountLinks.create({
-      account:     account.id,
+      account:     accountId,
       refresh_url: `${process.env.APP_URL ?? 'https://padihub.com'}/payments/payout?stripe_refresh=1`,
       return_url:  `${process.env.APP_URL ?? 'https://padihub.com'}/payments/payout?stripe_connected=1`,
       type:        'account_onboarding',
     });
+    return { onboardingUrl: accountLink.url };
+  }
 
-    return { accountId: account.id, onboardingUrl: accountLink.url };
+  /** Whether a connected account still has outstanding onboarding requirements
+   * (e.g. identity verification) that only Stripe's hosted flow can collect. */
+  async getOutstandingRequirements(accountId: string): Promise<string[]> {
+    const stripe = getStripe();
+    const account = await stripe.accounts.retrieve(accountId);
+    return [
+      ...(account.requirements?.currently_due ?? []),
+      ...(account.requirements?.past_due ?? []),
+    ];
   }
 }

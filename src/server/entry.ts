@@ -273,6 +273,7 @@ app.post('/api/payments/save-flutterwave-token', authenticate, paymentController
 app.post('/api/payments/connect-onboard',    authenticate, paymentController.connectOnboard);
 app.post('/api/payments/verify-payout',      authenticate, paymentController.verifyPayout);
 app.post('/api/payments/charge-contribution', authenticate, paymentController.chargeContribution);
+app.get( '/api/payments/banks',              authenticate, paymentController.listBanks);
 
 // ── Support ───────────────────────────────────────────────────────────[...]
 app.get( '/api/support',     authenticate, supportController.list);

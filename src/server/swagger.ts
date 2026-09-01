@@ -224,7 +224,10 @@ const spec = {
       post: { tags: ['Payments'], summary: 'Create Stripe SetupIntent (UK — returns client_secret for Stripe.js)', responses: { '200': { description: 'SetupIntent created' } } },
     },
     '/payments/connect-onboard': {
-      post: { tags: ['Payments'], summary: 'Create Stripe Connect account (UK) or Flutterwave subaccount (NG)', responses: { '200': { description: 'Onboarding URL returned' } } },
+      post: { tags: ['Payments'], summary: 'Create/update Stripe Connect account (UK) or Flutterwave subaccount (NG) for payouts', responses: { '200': { description: 'Payout destination connected; onboarding URL returned if further steps are needed' } } },
+    },
+    '/payments/banks': {
+      get: { tags: ['Payments'], summary: 'List Flutterwave banks for NG payout setup dropdown', responses: { '200': { description: 'Bank list returned' } } },
     },
     '/payments/charge-contribution': {
       post: { tags: ['Payments'], summary: 'Manually trigger contribution charge', responses: { '200': { description: 'Charge initiated' } } },
