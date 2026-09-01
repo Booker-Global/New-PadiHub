@@ -22,7 +22,6 @@ export default function TawkToWidget() {
     script.async = true;
     script.src = getTawkToEmbedSrc();
     script.charset = 'UTF-8';
-    script.setAttribute('crossorigin', '*');
     document.body.appendChild(script);
   }, []);
 

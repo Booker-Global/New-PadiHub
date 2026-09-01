@@ -1,13 +1,16 @@
 import { MessageCircle } from 'lucide-react';
-import { toggleTawkChat } from '@/lib/tawkto';
+import { isTawkToConfigured, toggleTawkChat } from '@/lib/tawkto';
 
 /**
  * Global floating "Start Chat" launcher for the Tawk.to widget, rendered
  * from RootLayout so it appears on every page. Positioned bottom-left to
  * avoid clashing with the mobile quick-actions FAB in DashboardLayout
- * (bottom-right).
+ * (bottom-right). Hidden entirely when Tawk.to isn't configured, so there's
+ * never a visible button that does nothing.
  */
 export default function StartChatButton() {
+  if (!isTawkToConfigured()) return null;
+
   return (
     <button
       type="button"
