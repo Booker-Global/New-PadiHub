@@ -38,6 +38,7 @@ interface PendingAction {
 
 interface MemberSummary {
   id: string;
+  label: string;
   community: string;
   trustScore: number;
   contributionRate: number | null;
@@ -322,36 +323,33 @@ export default function LeaderDashboardPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-50">
-                      {data.members.map((m, i) => {
-                        const label = `Member ${i + 1}`;
-                        return (
-                          <tr key={m.id} className="hover:bg-gray-50 transition-colors">
-                            <td className="py-3">
-                              <div className="flex items-center gap-3">
-                                <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0"
-                                  style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}>{i + 1}</div>
-                                <div>
-                                  <p className="font-semibold text-gray-800">{label}</p>
-                                  <p className="text-xs text-gray-400">{m.community}</p>
-                                </div>
+                      {data.members.map(m => (
+                        <tr key={m.id} className="hover:bg-gray-50 transition-colors">
+                          <td className="py-3">
+                            <div className="flex items-center gap-3">
+                              <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0"
+                                style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}>{m.label.match(/\d+/)?.[0] ?? '•'}</div>
+                              <div>
+                                <p className="font-semibold text-gray-800">{m.label}</p>
+                                <p className="text-xs text-gray-400">{m.community}</p>
                               </div>
-                            </td>
-                            <td className="py-3 text-right font-bold" style={{ color: '#2EAF6F' }}>{m.trustScore}/100</td>
-                            <td className="py-3 text-right font-semibold text-gray-700">{m.contributionRate === null ? '—' : `${m.contributionRate}%`}</td>
-                            <td className="py-3 text-right">
-                              {m.status === 'active' ? (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold" style={{ background: 'rgba(46,175,111,0.1)', color: '#2EAF6F' }}>
-                                  Active
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold" style={{ background: 'rgba(245,158,11,0.1)', color: '#F59E0B' }}>
-                                  {m.strikeCount} strike{m.strikeCount === 1 ? '' : 's'}
-                                </span>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
+                            </div>
+                          </td>
+                          <td className="py-3 text-right font-bold" style={{ color: '#2EAF6F' }}>{m.trustScore}/100</td>
+                          <td className="py-3 text-right font-semibold text-gray-700">{m.contributionRate === null ? '—' : `${m.contributionRate}%`}</td>
+                          <td className="py-3 text-right">
+                            {m.status === 'active' ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold" style={{ background: 'rgba(46,175,111,0.1)', color: '#2EAF6F' }}>
+                                Active
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold" style={{ background: 'rgba(245,158,11,0.1)', color: '#F59E0B' }}>
+                                {m.strikeCount} strike{m.strikeCount === 1 ? '' : 's'}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
                 </div>

@@ -314,6 +314,23 @@ export const groupService = {
       : [];
     const trustById = new Map(userRows.map(u => [u.id, u.trust_score]));
 
+    // Stable, privacy-preserving "Member N" label per group (ordered by join
+    // date so it doesn't reshuffle as trust scores change), keyed by
+    // `${group_id}:${user_id}` so the same member gets the same label in
+    // both the pending-actions feed and the member table below — matching
+    // the "Member N" convention already used on the group detail page.
+    const memberLabelByGroupAndUser = new Map<string, string>();
+    for (const g of ledGroups) {
+      const groupActiveMembers = activeMemberships
+        .filter(m => m.group_id === g.id)
+        .sort((a, b) => new Date(a.join_date).getTime() - new Date(b.join_date).getTime());
+      groupActiveMembers.forEach((m, index) => {
+        memberLabelByGroupAndUser.set(`${g.id}:${m.user_id}`, `Member ${index + 1}`);
+      });
+    }
+    const labelFor = (groupId: string, userIdToLabel: string) =>
+      memberLabelByGroupAndUser.get(`${groupId}:${userIdToLabel}`) ?? 'A member';
+
     const contributionRate = (rows: (typeof allContributions)) => {
       const paid = rows.filter(c => c.payment_status === 'paid').length;
       const missed = rows.filter(c => c.payment_status === 'missed').length;
@@ -340,7 +357,7 @@ export const groupService = {
     for (const c of allContributions.filter(c => c.payment_status === 'missed')) {
       pendingActions.push({
         type: 'contribution',
-        label: `Missed contribution — cycle ${c.cycle_number}`,
+        label: `${labelFor(c.group_id, c.member_id)} missed contribution — cycle ${c.cycle_number}`,
         community: groupNameById.get(c.group_id) ?? 'Group',
         time: new Date(c.updated_at ?? c.due_date).toISOString(),
         urgency: 'high',
@@ -369,6 +386,7 @@ export const groupService = {
     const members = activeMemberships
       .map(m => ({
         id: m.id,
+        label: labelFor(m.group_id, m.user_id),
         community: groupNameById.get(m.group_id) ?? 'Group',
         trustScore: trustById.get(m.user_id) ?? 0,
         contributionRate: contributionRate(allContributions.filter(c => c.member_id === m.user_id && c.group_id === m.group_id)),
