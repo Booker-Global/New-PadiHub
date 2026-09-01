@@ -11,6 +11,7 @@ import {
 import HelpRouteLayout from './HelpRouteLayout';
 import { getFaqEntries } from './faqData';
 import { useResolvedPricingRegion } from '@/lib/pricingRegion';
+import { toggleTawkChat } from '@/lib/tawkto';
 
 const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/help#webpage\",\"name\":\"Help & Support — PadiHub\",\"url\":\"https://padihub.com/help\",\"description\":\"Get help with PadiHub — search our FAQs, submit a ticket or chat with our team.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"}}";
 
@@ -40,7 +41,7 @@ const popularArticles = [
 ];
 
 const channels = [
-  { icon: MessageSquare, label: 'Live Chat', desc: 'Chat with our team', action: 'Start Chat', color: '#2EAF6F', to: '/help/ticket' },
+  { icon: MessageSquare, label: 'Live Chat', desc: 'Chat with our team', action: 'Start Chat', color: '#2EAF6F', to: '/help/ticket', isChat: true },
   { icon: Mail, label: 'Email Support', desc: 'Response within 24h', action: 'Submit Ticket', color: '#2eafaf', to: '/help/ticket' },
   { icon: BookOpen, label: 'FAQs', desc: 'Browse common answers', action: 'View FAQs', color: '#8B5CF6', to: '/faq' },
   { icon: Video, label: 'Video Guides', desc: 'Step-by-step tutorials', action: 'Watch Now', color: '#F59E0B', to: '/help', hidden: !SHOW_VIDEO_GUIDES },
@@ -124,13 +125,24 @@ export default function HelpIndexPage() {
               </div>
               <p className="text-sm font-extrabold text-gray-900 mb-0.5" style={{ fontFamily: 'Nunito, sans-serif' }}>{channel.label}</p>
               <p className="text-xs text-gray-400 mb-3">{channel.desc}</p>
-              <Link
-                to={channel.to}
-                className="text-xs font-bold px-3 py-1.5 rounded-xl transition-all hover:opacity-90 text-white inline-block"
-                style={{ background: channel.color }}
-              >
-                {channel.action}
-              </Link>
+              {channel.isChat ? (
+                <button
+                  type="button"
+                  onClick={toggleTawkChat}
+                  className="text-xs font-bold px-3 py-1.5 rounded-xl transition-all hover:opacity-90 text-white inline-block"
+                  style={{ background: channel.color }}
+                >
+                  {channel.action}
+                </button>
+              ) : (
+                <Link
+                  to={channel.to}
+                  className="text-xs font-bold px-3 py-1.5 rounded-xl transition-all hover:opacity-90 text-white inline-block"
+                  style={{ background: channel.color }}
+                >
+                  {channel.action}
+                </Link>
+              )}
             </MotionDiv>
           ))}
         </MotionDiv>
