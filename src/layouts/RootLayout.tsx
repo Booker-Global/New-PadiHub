@@ -2,6 +2,8 @@ import { Helmet } from '@dr.pogodin/react-helmet';
 import { type ReactElement } from 'react';
 import { ScrollRestoration, useLocation } from 'react-router-dom';
 
+import StartChatButton from '@/components/StartChatButton';
+import TawkToWidget from '@/components/TawkToWidget';
 import Footer from '@/layouts/parts/Footer';
 import Header from '@/layouts/parts/Header';
 import Website from '@/layouts/Website';
@@ -33,6 +35,8 @@ export default function RootLayout({ children }: RootLayoutProps) {
           <meta name="description" content="PadiHub — Save Together. Grow Together. Belong." />
         </Helmet>
         <ScrollRestoration />
+        <TawkToWidget />
+        <StartChatButton />
         {children}
       </MotionReadyProvider>
     );
@@ -46,6 +50,8 @@ export default function RootLayout({ children }: RootLayoutProps) {
           <meta name="description" content="PadiHub is a cutting-edge platform for automated group savings. Build trust, save together and reach your goals." />
         </Helmet>
         <ScrollRestoration />
+        <TawkToWidget />
+        <StartChatButton />
         <Header />
         {children}
         <Footer />
