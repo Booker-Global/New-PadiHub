@@ -209,6 +209,7 @@ app.get(   '/api/users/trust-history', authenticate, userController.getTrustHist
 // ── Groups ───────────────────────────────────────────────────────────�[...]
 app.get(   '/api/groups',                    authenticate, groupController.list);
 app.get(   '/api/groups/search',              groupController.search);
+app.get(   '/api/groups/leader-dashboard',    authenticate, groupController.getLeaderDashboard);
 app.get(   '/api/groups/:id',                authenticate, groupController.getOne);
 app.post(  '/api/groups',                    authenticate, ...groupController.create);
 app.put(   '/api/groups/:id',                authenticate, ...groupController.update);

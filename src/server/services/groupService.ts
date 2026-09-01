@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { eq, and, count } from 'drizzle-orm';
+import { eq, and, count, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -271,5 +271,124 @@ export const groupService = {
     if (inv.accepted) throw new AppError('Invitation already used.', 400);
     if (new Date() > inv.expires_at) throw new AppError('Invitation has expired.', 400);
     return inv;
+  },
+
+  /**
+   * Aggregated data for the "Manage Group" / leader dashboard — the page
+   * MUST ONLY reflect groups the requesting user actually leads (leader_id),
+   * and every figure returned here must be something PadiHub genuinely
+   * tracks (real memberships, contributions, votes) rather than fabricated
+   * analytics. Returns `isLeader: false` when the user leads no groups so
+   * the frontend can gate the page accordingly.
+   */
+  async getLeaderDashboard(userId: string) {
+    const ledGroups = await db.select().from(schema.savingsGroups)
+      .where(eq(schema.savingsGroups.leader_id, userId));
+
+    if (!ledGroups.length) {
+      return {
+        isLeader: false,
+        totals: { groupsLed: 0, totalMembers: 0, avgContributionRate: null, avgTrustScore: null, openProposals: 0 },
+        communities: [] as Array<never>,
+        pendingActions: [] as Array<never>,
+        members: [] as Array<never>,
+      };
+    }
+
+    const groupIds = ledGroups.map(g => g.id);
+    const groupNameById = new Map(ledGroups.map(g => [g.id, g.name]));
+
+    const [allMemberships, allContributions, allVotes] = await Promise.all([
+      db.select().from(schema.memberships).where(inArray(schema.memberships.group_id, groupIds)),
+      db.select().from(schema.contributions).where(inArray(schema.contributions.group_id, groupIds)),
+      db.select().from(schema.votes).where(inArray(schema.votes.group_id, groupIds)),
+    ]);
+
+    // Everyone but the leader themselves — the leader already sees their own
+    // Trust Score elsewhere, this table is about the members they manage.
+    const activeMemberships = allMemberships.filter(m => m.status === 'active' && m.user_id !== userId);
+    const memberUserIds = [...new Set(activeMemberships.map(m => m.user_id))];
+    const userRows = memberUserIds.length
+      ? await db.select({ id: schema.users.id, trust_score: schema.users.trust_score })
+        .from(schema.users).where(inArray(schema.users.id, memberUserIds))
+      : [];
+    const trustById = new Map(userRows.map(u => [u.id, u.trust_score]));
+
+    const contributionRate = (rows: (typeof allContributions)) => {
+      const paid = rows.filter(c => c.payment_status === 'paid').length;
+      const missed = rows.filter(c => c.payment_status === 'missed').length;
+      const resolved = paid + missed;
+      return resolved > 0 ? Math.round((paid / resolved) * 100) : null;
+    };
+
+    const communities = ledGroups.map(g => {
+      const groupContributions = allContributions.filter(c => c.group_id === g.id);
+      return {
+        id: g.id,
+        name: g.name,
+        currency: g.currency,
+        status: g.status,
+        memberCount: allMemberships.filter(m => m.group_id === g.id && m.status === 'active').length,
+        contributionRate: contributionRate(groupContributions),
+        missedCount: groupContributions.filter(c => c.payment_status === 'missed').length,
+        openProposalsCount: allVotes.filter(v => v.group_id === g.id && v.status === 'open').length,
+      };
+    });
+
+    const pendingActions: Array<{ type: 'contribution' | 'proposal' | 'member'; label: string; community: string; time: string; urgency: 'high' | 'medium' | 'low' }> = [];
+
+    for (const c of allContributions.filter(c => c.payment_status === 'missed')) {
+      pendingActions.push({
+        type: 'contribution',
+        label: `Missed contribution — cycle ${c.cycle_number}`,
+        community: groupNameById.get(c.group_id) ?? 'Group',
+        time: new Date(c.updated_at ?? c.due_date).toISOString(),
+        urgency: 'high',
+      });
+    }
+    for (const v of allVotes.filter(v => v.status === 'open')) {
+      pendingActions.push({
+        type: 'proposal',
+        label: `New proposal: ${v.proposal_text}`,
+        community: groupNameById.get(v.group_id) ?? 'Group',
+        time: new Date(v.created_at).toISOString(),
+        urgency: 'medium',
+      });
+    }
+    for (const m of allMemberships.filter(m => m.status === 'pending')) {
+      pendingActions.push({
+        type: 'member',
+        label: 'New join request awaiting approval',
+        community: groupNameById.get(m.group_id) ?? 'Group',
+        time: new Date(m.created_at).toISOString(),
+        urgency: 'low',
+      });
+    }
+    pendingActions.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
+
+    const members = activeMemberships
+      .map(m => ({
+        id: m.id,
+        community: groupNameById.get(m.group_id) ?? 'Group',
+        trustScore: trustById.get(m.user_id) ?? 0,
+        contributionRate: contributionRate(allContributions.filter(c => c.member_id === m.user_id && c.group_id === m.group_id)),
+        status: m.strike_count > 0 ? 'attention' as const : 'active' as const,
+        strikeCount: m.strike_count,
+      }))
+      .sort((a, b) => b.trustScore - a.trustScore);
+
+    return {
+      isLeader: true,
+      totals: {
+        groupsLed: ledGroups.length,
+        totalMembers: activeMemberships.length,
+        avgContributionRate: contributionRate(allContributions),
+        avgTrustScore: trustById.size ? Math.round([...trustById.values()].reduce((sum, v) => sum + v, 0) / trustById.size) : null,
+        openProposals: allVotes.filter(v => v.status === 'open').length,
+      },
+      communities,
+      pendingActions: pendingActions.slice(0, 10),
+      members: members.slice(0, 20),
+    };
   },
 };

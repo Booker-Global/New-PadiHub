@@ -196,6 +196,11 @@ export async function bypassIdentityVerification(req: Request, res: Response, ne
         .set({ identity_verified: true, identity_verified_at: new Date() })
         .where(eq(schema.users.id, userId));
 
+      // Mirrors the real Stripe/Flutterwave verification flows — a verified
+      // identity should always raise the Trust Score, even when the
+      // verification itself was bypassed for testing.
+      await trustScoreService.increase(userId, TRUST_SCORE_DELTA_IDENTITY_VERIFIED, 'IDENTITY_VERIFIED');
+
       await notificationService.create({
         userId, type: 'identity_verified',
         title: 'Identity Verification Bypassed (Test Mode)',

@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { Shield, Users, Globe } from 'lucide-react';
+import { Shield, Users } from 'lucide-react';
 import { useState, useEffect } from 'react';
 
 function TwitterIcon() {
@@ -142,13 +142,12 @@ export default function Footer() {
                 className="r-logo" />
             </div>
             <p style={{ fontSize: 'clamp(0.8125rem, 0.78rem + 0.25vw, 0.875rem)', lineHeight: 1.6, maxWidth: 280, marginBottom: 20, color: 'rgba(255,255,255,0.5)' }}>
-              The world's first Community Operating System for savings. Save together. Grow together. Belong.
+              A cutting-edge platform for automated group savings. Save together. Grow together. Belong.
             </p>
             <div className="ftr-badges">
               {[
                 { icon: Shield, label: 'Trust Score™' },
                 { icon: Users,  label: 'Community' },
-                { icon: Globe,  label: 'UK & Nigeria' },
               ].map(({ icon: Icon, label }) => (
                 <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'rgba(255,255,255,0.4)' }}>
                   <Icon size={12} style={{ color: '#2EAF6F', flexShrink: 0 }} />
