@@ -84,6 +84,18 @@ export const groupController = {
     } catch (e) { next(e); }
   },
 
+  /**
+   * GET /api/groups/leader-dashboard — the "Manage Group" dashboard. Always
+   * scoped to the authenticated user's own led groups; returns
+   * `isLeader: false` (with empty stats) if they don't lead any group.
+   */
+  getLeaderDashboard: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await groupService.getLeaderDashboard(req.user!.userId);
+      res.json({ success: true, data });
+    } catch (e) { next(e); }
+  },
+
   create: [
     validate(createSchema),
     async (req: Request, res: Response, next: NextFunction) => {

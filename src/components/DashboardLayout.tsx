@@ -19,13 +19,13 @@ import { getValidSession, logout } from '@/lib/session';
 // that value goes stale the moment the user contributes, votes, or gets
 // verified without logging out and back in.
 function useDashboardUser() {
-  const [user, setUser] = useState<{ name: string; trust: number; initial: string; tier: 'pro' | 'elite' | null; country: string | null }>({
-    name: '', trust: 0, initial: '', tier: null, country: null,
+  const [user, setUser] = useState<{ name: string; trust: number; initial: string; tier: 'pro' | 'elite' | null; country: string | null; isGroupLeader: boolean }>({
+    name: '', trust: 0, initial: '', tier: null, country: null, isGroupLeader: false,
   });
   useEffect(() => {
     const session = getValidSession();
     if (!session) {
-      setUser({ name: '', trust: 0, initial: '', tier: null, country: null });
+      setUser({ name: '', trust: 0, initial: '', tier: null, country: null, isGroupLeader: false });
       return;
     }
     const name = session.name || '';
@@ -35,18 +35,20 @@ function useDashboardUser() {
       initial: name.charAt(0).toUpperCase() || '?',
       tier: null,
       country: null,
+      isGroupLeader: false,
     });
 
     let cancelled = false;
     void window.fetch('/api/users/stats', { headers: { Authorization: 'Bearer ' + session.token } })
       .then(response => response.ok ? response.json() : null)
-      .then((json: { data?: { trust_score?: number; subscription_tier?: 'pro' | 'elite' | null; country?: string } } | null) => {
+      .then((json: { data?: { trust_score?: number; subscription_tier?: 'pro' | 'elite' | null; country?: string; is_group_leader?: boolean } } | null) => {
         if (!cancelled && json?.data) {
           setUser(current => ({
             ...current,
             trust: typeof json.data!.trust_score === 'number' ? json.data!.trust_score! : current.trust,
             tier: json.data!.subscription_tier ?? null,
             country: json.data!.country ?? null,
+            isGroupLeader: json.data!.is_group_leader ?? false,
           }));
         }
       })
@@ -124,9 +126,10 @@ interface SidebarProps {
   userName: string;
   userInitial: string;
   userTrust: number;
+  isGroupLeader: boolean;
 }
 
-function Sidebar({ pathname, onNavigate, userName, userInitial, userTrust }: SidebarProps) {
+function Sidebar({ pathname, onNavigate, userName, userInitial, userTrust, isGroupLeader }: SidebarProps) {
   return (
     <aside className="flex flex-col h-full"
       style={{ background: 'linear-gradient(180deg, #0F172A 0%, #1A1A2E 100%)', borderRight: '1px solid rgba(255,255,255,0.07)' }}>
@@ -170,10 +173,12 @@ function Sidebar({ pathname, onNavigate, userName, userInitial, userTrust }: Sid
         {communityNav.map(item => <NavLink key={item.href} item={item} pathname={pathname} onNavigate={onNavigate} />)}
       </nav>
 
-      {/* Bottom — leader tools link */}
-      <div className="px-3 py-3 border-t" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
-        <NavLink item={{ icon: LayoutGrid, label: 'Manage Group', href: '/leader-dashboard' }} pathname={pathname} onNavigate={onNavigate} />
-      </div>
+      {/* Bottom — leader tools link, only for users who actually lead a group */}
+      {isGroupLeader && (
+        <div className="px-3 py-3 border-t" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+          <NavLink item={{ icon: LayoutGrid, label: 'Manage Group', href: '/leader-dashboard' }} pathname={pathname} onNavigate={onNavigate} />
+        </div>
+      )}
     </aside>
   );
 }
@@ -232,7 +237,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const quickActions = [
     { icon: PiggyBank, label: 'Create Group',     href: '/savings-groups/create', color: '#2EAF6F' },
     { icon: UserPlus,  label: 'Invite Member',    href: '/savings-groups', color: '#F59E0B' },
-    { icon: LayoutGrid,label: 'Manage Group',     href: '/leader-dashboard', color: '#EF4444' },
+    ...(dashUser.isGroupLeader ? [{ icon: LayoutGrid, label: 'Manage Group', href: '/leader-dashboard', color: '#EF4444' }] : []),
   ];
 
   return (
@@ -241,14 +246,14 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       {/* Desktop sidebar — hidden below lg (1024px), flex above.
           Always in DOM so SSR and first client render are identical — no hydration mismatch. */}
       <div className="hidden lg:flex flex-col flex-shrink-0" style={{ width: 256 }}>
-        <Sidebar pathname={location.pathname} onNavigate={closeSidebar} userName={dashUser.name} userInitial={dashUser.initial} userTrust={dashUser.trust} />
+        <Sidebar pathname={location.pathname} onNavigate={closeSidebar} userName={dashUser.name} userInitial={dashUser.initial} userTrust={dashUser.trust} isGroupLeader={dashUser.isGroupLeader} />
       </div>
 
       {/* Mobile sidebar overlay */}
       {sidebarOpen && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex' }}>
           <div style={{ width: 288, flexShrink: 0, display: 'flex', flexDirection: 'column', boxShadow: '0 25px 50px rgba(0,0,0,0.5)' }}>
-            <Sidebar pathname={location.pathname} onNavigate={closeSidebar} userName={dashUser.name} userInitial={dashUser.initial} userTrust={dashUser.trust} />
+            <Sidebar pathname={location.pathname} onNavigate={closeSidebar} userName={dashUser.name} userInitial={dashUser.initial} userTrust={dashUser.trust} isGroupLeader={dashUser.isGroupLeader} />
           </div>
           <div style={{ flex: 1, background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)' }} onClick={closeSidebar} />
         </div>
