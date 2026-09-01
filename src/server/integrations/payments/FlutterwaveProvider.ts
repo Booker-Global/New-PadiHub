@@ -229,4 +229,14 @@ export class FlutterwaveProvider implements IPaymentProvider {
 
     return { subaccountId: response.data.data.subaccount_id };
   }
+
+  /** List banks for a given country (used to populate the payout-setup bank dropdown) */
+  async listBanks(country: string = 'NG'): Promise<{ code: string; name: string }[]> {
+    const response = await axios.get(`${FLW_BASE}/banks/${country}`, { headers: getHeaders() });
+    const banks = response.data?.data as Array<{ code?: string; name?: string }> | undefined;
+    if (!banks) throw new Error('Flutterwave did not return a bank list.');
+    return banks
+      .filter((bank): bank is { code: string; name: string } => Boolean(bank.code && bank.name))
+      .map(bank => ({ code: bank.code, name: bank.name }));
+  }
 }

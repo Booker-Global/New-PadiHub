@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { URL } from 'node:url';
 import type { Request, Response, NextFunction } from 'express';
 import { eq } from 'drizzle-orm';
+import axios from 'axios';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -65,6 +66,23 @@ function buildFlutterwaveSetupTxRef(userId: string, contributionId: string) {
 function isFlutterwaveSetupTxRefOwnedByUser(txRef: string, userId: string) {
   const [prefix, ownerUserId] = txRef.split('__');
   return prefix === FLUTTERWAVE_SETUP_TX_REF_PREFIX && ownerUserId === userId;
+}
+
+/**
+ * Extracts a human-readable message from a Stripe SDK error or an axios error
+ * from the Flutterwave REST API, instead of letting these bubble up as plain
+ * Errors — which the global error handler masks as a generic "An unexpected
+ * error occurred." (see errorHandler.ts), hiding the actual, actionable cause
+ * (e.g. an invalid sort code, or Connect not being enabled on the platform's
+ * Stripe account) from both the member and whoever is debugging the report.
+ */
+function describeProviderError(err: unknown, fallback: string): string {
+  if (axios.isAxiosError(err)) {
+    const data = err.response?.data as { message?: string } | undefined;
+    return data?.message || err.message || fallback;
+  }
+  if (err instanceof Error) return err.message || fallback;
+  return fallback;
 }
 
 function getFlutterwaveSetupAmount() {
@@ -424,12 +442,22 @@ export const paymentController = {
         if (!business_name || !bank_code || !account_number) {
           throw new AppError('business_name, bank_code, and account_number are required for NG accounts.', 400);
         }
-        const result = await getFlutterwaveProvider().createSubaccount({
-          userId,
-          businessName:   business_name,
-          bankCode:       bank_code,
-          accountNumber:  account_number,
-        });
+
+        let result: { subaccountId: string };
+        try {
+          result = await getFlutterwaveProvider().createSubaccount({
+            userId,
+            businessName:   business_name,
+            bankCode:       bank_code,
+            accountNumber:  account_number,
+          });
+        } catch (providerErr) {
+          throw new AppError(
+            describeProviderError(providerErr, 'Could not create your Flutterwave payout account.'),
+            502, 'FLUTTERWAVE_SUBACCOUNT_ERROR',
+          );
+        }
+
         // Flutterwave subaccounts are usable immediately — there's no separate
         // hosted onboarding step to wait on (unlike Stripe Express), so the
         // payout destination is considered verified as soon as it's created.
@@ -441,16 +469,56 @@ export const paymentController = {
         return res.json({ success: true, data: result });
       }
 
-      // UK — Stripe Express
-      const result = await getStripeProvider().createConnectedAccount({
-        userId, email: user.email,
-      });
-      await db.update(schema.users)
-        .set({ stripe_connected_account_id: result.accountId })
-        .where(eq(schema.users.id, userId));
+      // UK — Stripe Express. Bank details collected in-app are attached
+      // directly to the connected account via the API so the member doesn't
+      // have to re-type them; Stripe's hosted onboarding link is only used
+      // for whatever requirements are still outstanding afterwards (normally
+      // identity verification), and is skipped entirely if nothing is due.
+      const { account_holder_name, sort_code, account_number: uk_account_number } = req.body as {
+        account_holder_name?: string; sort_code?: string; account_number?: string;
+      };
+      if (!account_holder_name || !sort_code || !uk_account_number) {
+        throw new AppError('account_holder_name, sort_code, and account_number are required for UK accounts.', 400);
+      }
 
-      await createAuditLog({ userId, action: 'STRIPE_CONNECT_ACCOUNT_CREATED', entity: 'users', entityId: userId });
-      res.json({ success: true, data: result });
+      const stripeProvider = getStripeProvider();
+      let accountId = user.stripe_connected_account_id;
+
+      try {
+        if (!accountId) {
+          const created = await stripeProvider.createConnectedAccount({
+            userId, email: user.email, country: user.country,
+            firstName: user.first_name, lastName: user.last_name,
+          });
+          accountId = created.accountId;
+          await db.update(schema.users)
+            .set({ stripe_connected_account_id: accountId })
+            .where(eq(schema.users.id, userId));
+          await createAuditLog({ userId, action: 'STRIPE_CONNECT_ACCOUNT_CREATED', entity: 'users', entityId: userId });
+        }
+
+        await stripeProvider.attachExternalBankAccount({
+          accountId,
+          accountHolderName: account_holder_name,
+          sortCode:          sort_code,
+          accountNumber:     uk_account_number,
+          country:           user.country,
+          currency:          user.currency.toLowerCase(),
+        });
+        await createAuditLog({ userId, action: 'STRIPE_EXTERNAL_ACCOUNT_ATTACHED', entity: 'users', entityId: userId });
+
+        const outstanding = await stripeProvider.getOutstandingRequirements(accountId);
+        const onboardingUrl = outstanding.length
+          ? (await stripeProvider.createOnboardingLink(accountId)).onboardingUrl
+          : undefined;
+
+        res.json({ success: true, data: { accountId, onboardingUrl } });
+      } catch (providerErr) {
+        throw new AppError(
+          describeProviderError(providerErr, 'Could not connect your Stripe payout account.'),
+          502, 'STRIPE_CONNECT_ERROR',
+        );
+      }
     } catch (e) { next(e); }
   },
 
@@ -487,6 +555,29 @@ export const paymentController = {
 
       const result = await chargeContributionForUser(userId, contribution_id);
       res.json({ success: true, data: result });
+    } catch (e) { next(e); }
+  },
+
+  /** GET /api/payments/banks — Flutterwave bank list, used to populate the NG payout-setup dropdown */
+  listBanks: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = req.user!.userId;
+      const user = await getUserOrThrow(userId);
+      if (user.country !== 'NG') {
+        throw new AppError('The bank list is only available for Nigerian (NG) accounts.', 400);
+      }
+
+      let banks: { code: string; name: string }[];
+      try {
+        banks = await getFlutterwaveProvider().listBanks('NG');
+      } catch (providerErr) {
+        throw new AppError(
+          describeProviderError(providerErr, 'Could not load the list of banks.'),
+          502, 'FLUTTERWAVE_BANK_LIST_ERROR',
+        );
+      }
+
+      res.json({ success: true, data: banks });
     } catch (e) { next(e); }
   },
 };

@@ -18,11 +18,21 @@ export default function TawkToWidget() {
     window.Tawk_API = {};
     window.Tawk_LoadStart = new Date();
 
+    // Mirrors Tawk.to's official embed snippet exactly (async script inserted
+    // right before the first existing <script> tag, with crossorigin='*')
+    // rather than appended to <body>, since some Tawk.to widget features rely
+    // on this precise loading order.
     const script = document.createElement('script');
     script.async = true;
     script.src = getTawkToEmbedSrc();
     script.charset = 'UTF-8';
-    document.body.appendChild(script);
+    script.setAttribute('crossorigin', '*');
+    const firstScript = document.getElementsByTagName('script')[0];
+    if (firstScript?.parentNode) {
+      firstScript.parentNode.insertBefore(script, firstScript);
+    } else {
+      document.body.appendChild(script);
+    }
   }, []);
 
   return null;

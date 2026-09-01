@@ -37,6 +37,12 @@ interface ApiResponse<T> {
 interface ConnectOnboardResponse {
   onboardingUrl?: string;
   subaccountId?: string;
+  accountId?: string;
+}
+
+interface Bank {
+  code: string;
+  name: string;
 }
 
 function getErrorMessage<T>(json: ApiResponse<T> | null, fallback: string) {
@@ -59,6 +65,10 @@ export default function ConnectPayoutPage() {
   const [businessName, setBusinessName] = useState('');
   const [bankCode, setBankCode] = useState('');
   const [accountNumber, setAccountNumber] = useState('');
+  const [sortCode, setSortCode] = useState('');
+  const [banks, setBanks] = useState<Bank[]>([]);
+  const [banksLoading, setBanksLoading] = useState(false);
+  const [banksError, setBanksError] = useState('');
 
   const loadProfile = useCallback(async () => {
     const session = getValidSession();
@@ -144,6 +154,38 @@ export default function ConnectPayoutPage() {
     // param values directly instead of the whole searchParams object/handler.
   }, [searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    if (profile?.country !== 'NG' || hasConnectedDestination) return;
+
+    const session = getValidSession();
+    if (!session?.token) return;
+
+    let cancelled = false;
+    setBanksLoading(true);
+    setBanksError('');
+
+    (async () => {
+      try {
+        const response = await window.fetch('/api/payments/banks', {
+          headers: { Authorization: 'Bearer ' + session.token },
+        });
+        const json = await response.json().catch(() => null) as ApiResponse<Bank[]> | null;
+        if (!response.ok) {
+          throw new Error(getErrorMessage(json, 'Could not load the list of banks.'));
+        }
+        if (!cancelled) setBanks(json?.data ?? []);
+      } catch (banksFetchError) {
+        if (!cancelled) {
+          setBanksError(banksFetchError instanceof Error ? banksFetchError.message : 'Could not load the list of banks.');
+        }
+      } finally {
+        if (!cancelled) setBanksLoading(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [profile?.country, hasConnectedDestination]);
+
   const handleConnect = async () => {
     if (!termsAccepted) {
       setActionError('Please accept the terms & conditions before connecting a payout destination.');
@@ -157,7 +199,11 @@ export default function ConnectPayoutPage() {
     }
 
     if (profile?.country === 'NG' && (!businessName || !bankCode || !accountNumber)) {
-      setActionError('Please provide your business name, bank code, and account number.');
+      setActionError('Please provide your account name, bank, and account number.');
+      return;
+    }
+    if (profile?.country !== 'NG' && (!businessName || !sortCode || !accountNumber)) {
+      setActionError('Please provide your account holder name, sort code, and account number.');
       return;
     }
 
@@ -175,7 +221,7 @@ export default function ConnectPayoutPage() {
         body: JSON.stringify(
           profile?.country === 'NG'
             ? { business_name: businessName, bank_code: bankCode, account_number: accountNumber }
-            : {},
+            : { account_holder_name: businessName, sort_code: sortCode, account_number: accountNumber },
         ),
       });
       const json = await response.json().catch(() => null) as ApiResponse<ConnectOnboardResponse> | null;
@@ -183,17 +229,14 @@ export default function ConnectPayoutPage() {
         throw new Error(getErrorMessage(json, 'Could not connect your payout destination.'));
       }
 
-      if (profile?.country === 'NG') {
-        setActionNotice('Your payout account is connected. You can now receive payouts.');
-        await loadProfile();
+      const onboardingUrl = json?.data?.onboardingUrl;
+      if (onboardingUrl) {
+        window.location.assign(onboardingUrl);
         return;
       }
 
-      const onboardingUrl = json?.data?.onboardingUrl;
-      if (!onboardingUrl) {
-        throw new Error('The payout service did not return an onboarding link.');
-      }
-      window.location.assign(onboardingUrl);
+      setActionNotice('Your payout account is connected. You can now receive payouts.');
+      await loadProfile();
     } catch (connectError) {
       setActionError(connectError instanceof Error ? connectError.message : 'Could not connect your payout destination.');
     } finally {
@@ -331,17 +374,27 @@ export default function ConnectPayoutPage() {
                           />
                         </div>
                         <div>
-                          <label className="block text-xs font-semibold text-gray-500 mb-1">Bank code</label>
-                          <input
+                          <label className="block text-xs font-semibold text-gray-500 mb-1">Bank name</label>
+                          <select
                             value={bankCode}
                             onChange={e => setBankCode(e.target.value)}
-                            className="w-full rounded-xl px-3.5 py-2.5 text-sm"
+                            disabled={banksLoading || Boolean(banksError)}
+                            className="w-full rounded-xl px-3.5 py-2.5 text-sm bg-white disabled:opacity-60"
                             style={{ border: '1px solid #E5E7EB' }}
-                            placeholder="e.g. 044"
-                          />
+                          >
+                            <option value="">
+                              {banksLoading ? 'Loading banks…' : banksError ? 'Could not load banks' : 'Select your bank'}
+                            </option>
+                            {banks.map(bank => (
+                              <option key={bank.code} value={bank.code}>{bank.name}</option>
+                            ))}
+                          </select>
+                          {banksError && (
+                            <p className="text-xs mt-1" style={{ color: '#EF4444' }}>{banksError}</p>
+                          )}
                         </div>
                         <div>
-                          <label className="block text-xs font-semibold text-gray-500 mb-1">Account number</label>
+                          <label className="block text-xs font-semibold text-gray-500 mb-1">Bank account number</label>
                           <input
                             value={accountNumber}
                             onChange={e => setAccountNumber(e.target.value)}
@@ -361,9 +414,39 @@ export default function ConnectPayoutPage() {
                         </button>
                       </div>
                     ) : (
-                      <div className="space-y-4">
+                      <div className="space-y-3">
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-500 mb-1">Account holder name</label>
+                          <input
+                            value={businessName}
+                            onChange={e => setBusinessName(e.target.value)}
+                            className="w-full rounded-xl px-3.5 py-2.5 text-sm"
+                            style={{ border: '1px solid #E5E7EB' }}
+                            placeholder="Name on your bank account"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-500 mb-1">Sort code</label>
+                          <input
+                            value={sortCode}
+                            onChange={e => setSortCode(e.target.value)}
+                            className="w-full rounded-xl px-3.5 py-2.5 text-sm"
+                            style={{ border: '1px solid #E5E7EB' }}
+                            placeholder="e.g. 12-34-56"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-500 mb-1">Account number</label>
+                          <input
+                            value={accountNumber}
+                            onChange={e => setAccountNumber(e.target.value)}
+                            className="w-full rounded-xl px-3.5 py-2.5 text-sm"
+                            style={{ border: '1px solid #E5E7EB' }}
+                            placeholder="8-digit account number"
+                          />
+                        </div>
                         <div className="rounded-2xl p-3 bg-white text-sm text-gray-600" style={{ border: '1px solid #E5E7EB' }}>
-                          A secure onboarding flow will verify your identity and bank details for payouts.
+                          If Stripe needs anything else to verify your identity, we&apos;ll take you to a secure Stripe page for just that step.
                         </div>
                         <button
                           onClick={() => void handleConnect()}
@@ -371,7 +454,8 @@ export default function ConnectPayoutPage() {
                           className="w-full py-3 rounded-2xl font-bold text-white inline-flex items-center justify-center gap-2 transition-all disabled:cursor-not-allowed disabled:opacity-60"
                           style={{ background: 'linear-gradient(135deg, #2eafaf, #1f8f8f)' }}
                         >
-                          {connectLoading ? 'Opening onboarding…' : 'Connect payout account'}
+                          <Banknote size={16} />
+                          {connectLoading ? 'Connecting…' : 'Connect payout account'}
                           {!connectLoading && <ExternalLink size={16} />}
                         </button>
                       </div>
