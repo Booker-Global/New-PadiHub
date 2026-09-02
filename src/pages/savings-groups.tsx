@@ -28,9 +28,9 @@ interface SavingsGroup {
   description?: string | null;
   currency: 'GBP' | 'NGN';
   contribution_amount: string | number;
-  contribution_frequency: 'weekly' | 'monthly';
+  contribution_frequency: 'daily' | 'weekly' | 'monthly';
   maximum_members: number;
-  status: 'active' | 'closed' | 'suspended';
+  status: 'draft' | 'active' | 'suspended' | 'closed' | 'expired';
   created_at: string;
 }
 
@@ -42,7 +42,7 @@ interface Contribution {
   amount_paid?: string | number | null;
   due_date: string;
   paid_date?: string | null;
-  payment_status: 'scheduled' | 'due' | 'paid' | 'failed' | 'missed';
+  payment_status: 'scheduled' | 'due' | 'paid' | 'failed' | 'missed' | 'pending_default' | 'defaulted';
 }
 
 interface ApiResponse<T> {
@@ -83,10 +83,29 @@ function titleCase(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
+function getGroupStatusMeta(status: SavingsGroup['status']) {
+  switch (status) {
+    case 'active':
+      return { label: 'Active', color: '#2EAF6F' };
+    case 'suspended':
+      return { label: 'Suspended', color: '#F59E0B' };
+    case 'draft':
+      return { label: 'Not started yet', color: '#8B5CF6' };
+    case 'expired':
+      return { label: 'Expired', color: '#EF4444' };
+    default:
+      return { label: 'Closed', color: '#6B7280' };
+  }
+}
+
 function getTimelineMeta(status: Contribution['payment_status']) {
   switch (status) {
     case 'paid':
       return { label: 'Paid', color: '#2EAF6F', bg: 'rgba(46,175,111,0.1)', icon: CheckCircle };
+    case 'defaulted':
+      return { label: 'Defaulted', color: '#EF4444', bg: 'rgba(239,68,68,0.1)', icon: AlertTriangle };
+    case 'pending_default':
+      return { label: 'Grace period', color: '#F59E0B', bg: 'rgba(245,158,11,0.1)', icon: AlertTriangle };
     case 'failed':
     case 'missed':
       return { label: titleCase(status), color: '#EF4444', bg: 'rgba(239,68,68,0.1)', icon: AlertTriangle };
@@ -280,7 +299,7 @@ export default function SavingsGroupsPage() {
                   <MotionDiv initial="hidden" animate="visible" variants={stagger} className="r-grid-2">
                     {groups.map((group, index) => {
                       const color = GROUP_COLORS[index % GROUP_COLORS.length];
-                      const statusColor = group.status === 'active' ? '#2EAF6F' : group.status === 'suspended' ? '#F59E0B' : '#6B7280';
+                      const statusMeta = getGroupStatusMeta(group.status);
 
                       return (
                         <MotionDiv
@@ -301,8 +320,8 @@ export default function SavingsGroupsPage() {
                                 </p>
                               </div>
                             </div>
-                            <span className="px-2 py-1 rounded-full text-xs font-bold" style={{ background: `${statusColor}15`, color: statusColor }}>
-                              {titleCase(group.status)}
+                            <span className="px-2 py-1 rounded-full text-xs font-bold" style={{ background: `${statusMeta.color}15`, color: statusMeta.color }}>
+                              {statusMeta.label}
                             </span>
                           </div>
 

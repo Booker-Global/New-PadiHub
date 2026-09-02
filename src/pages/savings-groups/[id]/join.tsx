@@ -20,7 +20,7 @@ interface SavingsGroup {
   maximum_members: number;
   rotation_method: 'manual' | 'random';
   current_cycle: number;
-  status: 'active' | 'closed' | 'suspended';
+  status: 'draft' | 'active' | 'suspended' | 'closed' | 'expired';
   created_at: string;
 }
 
@@ -72,8 +72,9 @@ function titleCase(value: string) {
 }
 
 function getGroupColor(group: SavingsGroup) {
-  if (group.status === 'closed') return '#6B7280';
+  if (group.status === 'closed' || group.status === 'expired') return '#6B7280';
   if (group.status === 'suspended') return '#F59E0B';
+  if (group.status === 'draft') return '#8B5CF6';
   return group.currency === 'NGN' ? '#2EAF6F' : '#2eafaf';
 }
 
@@ -337,6 +338,15 @@ export default function JoinSavingsGroupPage() {
           <div className="rounded-2xl p-4 mb-5" style={{ background: 'rgba(46,175,111,0.05)', border: '1px solid rgba(46,175,111,0.15)' }}>
             <p className="text-sm font-semibold" style={{ color: '#15803D' }}>Invitation applied</p>
             <p className="text-xs text-gray-500 mt-1">We&apos;ll use your invite token when you join this group.</p>
+          </div>
+        )}
+
+        {group.status === 'draft' && (
+          <div className="rounded-2xl p-4 mb-5" style={{ background: 'rgba(139,92,246,0.06)', border: '1px solid rgba(139,92,246,0.2)' }}>
+            <p className="text-sm font-semibold" style={{ color: '#7C3AED' }}>This group hasn&apos;t started yet</p>
+            <p className="text-xs text-gray-500 mt-1">
+              You can still join — contributions only begin once the leader starts the group with at least 3 verified active members.
+            </p>
           </div>
         )}
 
