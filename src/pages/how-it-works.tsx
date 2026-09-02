@@ -25,7 +25,7 @@ const verificationDetailsByRegion: Record<'UK' | 'NG', string[]> = {
     'Monthly only — no annual plan or free trial',
     'Save your card first, then complete Stripe Identity in an embedded PadiHub modal — never a separate Stripe-hosted redirect',
     'Your status stays Pending until verification succeeds; failed checks are not charged and trigger a try-again email',
-    'The first 50 successful UK verifications are free; from the 51st onward, a one-time £1 fee is added to the first subscription charge',
+    'See our Terms & Conditions for full identity verification details',
   ],
   NG: [
     'Monthly only — no annual plan or free trial',
@@ -38,14 +38,14 @@ const verificationDetailsByRegion: Record<'UK' | 'NG', string[]> = {
 const contributionDetailsByRegion: Record<'UK' | 'NG', string[]> = {
   UK: [
     'A visible surcharge is shown before you confirm and added on top of the contribution — never deducted from the group pot',
-    'UK fee: 1.5% + £0.20 card fee, plus your split share of that cycle’s payout fee',
-    'Worked example: £10 contribution in a 5-person group = £10.42 total charge',
+    'The surcharge covers your card fee plus your split share of that cycle’s payout fee',
+    'See our FAQ for the exact fee percentages',
     'If a charge fails, you get a fixed 72-hour grace period and one automatic retry before default',
   ],
   NG: [
     'A visible surcharge is shown before you confirm and added on top of the contribution — never deducted from the group pot',
-    'Nigeria fee: 2% transaction fee plus 7.5% VAT, plus your split share of the cycle’s payout fee with VAT shown separately',
-    'The payout-fee share uses a tiered fee on the cycle’s total pot and is split equally across contributing members',
+    'The surcharge covers your transaction fee plus your split share of that cycle’s payout fee, with VAT shown separately',
+    'See our FAQ for the exact fee percentages',
     'If a charge fails, you get a fixed 72-hour grace period and one automatic retry before default',
   ],
 };

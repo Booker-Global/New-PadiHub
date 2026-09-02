@@ -379,14 +379,19 @@ export default function CreateGroupWizard() {
               <div style={{ borderRadius: 16, padding: 16, fontSize: 14, fontWeight: 500, background: '#FEF2F2', color: '#DC2626', border: '1px solid #FECACA', marginBottom: 20 }}>
                 <p>{submitError}</p>
                 {needsVerification && (
-                  <button
-                    type="button"
-                    onClick={() => void bypassVerification()}
-                    disabled={bypassing}
-                    style={{ marginTop: 12, borderRadius: 12, padding: '8px 14px', fontSize: 13, fontWeight: 700, background: '#DC2626', color: '#fff', opacity: bypassing ? 0.7 : 1 }}
-                  >
-                    {bypassing ? 'Bypassing verification…' : 'Bypass verification (test mode)'}
-                  </button>
+                  <div className="flex gap-3 mt-3 flex-wrap items-center">
+                    <Link to={`/verify-identity?next=${encodeURIComponent(verificationReturnPath)}`} style={{ fontSize: 13, fontWeight: 700, color: '#DC2626', textDecoration: 'underline' }}>Verify your identity</Link>
+                    {import.meta.env.DEV && (
+                      <button
+                        type="button"
+                        onClick={() => void bypassVerification()}
+                        disabled={bypassing}
+                        style={{ borderRadius: 12, padding: '8px 14px', fontSize: 13, fontWeight: 700, background: '#DC2626', color: '#fff', opacity: bypassing ? 0.7 : 1 }}
+                      >
+                        {bypassing ? 'Bypassing verification…' : 'Bypass verification (test mode)'}
+                      </button>
+                    )}
+                  </div>
                 )}
                 {needsPaymentSetup && (
                   <div className="flex gap-3 mt-3 flex-wrap">
