@@ -6,12 +6,90 @@ import { AppError } from '../middleware/errorHandler.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { notificationService } from './notificationService.js';
 import { trustScoreService } from './trustScoreService.js';
+import { monitoringService } from './monitoringService.js';
+import { getStripeProvider } from '../integrations/payments/PaymentProviderFactory.js';
 import { TRUST_SCORE_DELTA_CYCLE_COMPLETED } from '../lib/constants.js';
 import { computeNextPayoutDate } from '../lib/payoutSchedule.js';
 import {
   sendUpcomingPayoutEmail,
   sendPayoutCompleteEmail,
 } from '../integrations/email/emailService.js';
+
+type SavingsGroupRow = typeof schema.savingsGroups.$inferSelect;
+type RotationRow = typeof schema.rotations.$inferSelect;
+
+/**
+ * Move a completed cycle's collected pot from the platform's Stripe balance
+ * (where every contribution charge lands — see StripeProvider.chargeContribution,
+ * which never sets on_behalf_of/transfer_data) to that cycle's recipient's
+ * Express connected account, via a separate Transfer. NG/Flutterwave payouts
+ * are unaffected by this — that wiring is tracked separately.
+ */
+async function transferCyclePotToStripeRecipient(
+  group: SavingsGroupRow, rotation: RotationRow,
+): Promise<{ success: boolean; reference?: string }> {
+  const recipientRows = await db.select({
+    stripe_connected_account_id: schema.users.stripe_connected_account_id,
+    payout_verified_at:          schema.users.payout_verified_at,
+  }).from(schema.users).where(eq(schema.users.id, rotation.recipient_id)).limit(1);
+  const recipient = recipientRows[0];
+
+  if (!recipient?.stripe_connected_account_id || !recipient.payout_verified_at) {
+    await recordTransferFailure(group, rotation, 'Recipient has no verified Stripe Express payout account.');
+    return { success: false };
+  }
+
+  const cycleContributions = await db.select({
+    amount_paid: schema.contributions.amount_paid,
+    amount_due:  schema.contributions.amount_due,
+  }).from(schema.contributions).where(and(
+    eq(schema.contributions.group_id, group.id),
+    eq(schema.contributions.cycle_number, rotation.cycle_number),
+  ));
+  const potMinorUnits = Math.round(cycleContributions.reduce(
+    (sum, c) => sum + parseFloat(c.amount_paid ?? c.amount_due), 0,
+  ) * 100);
+
+  if (potMinorUnits <= 0) {
+    await recordTransferFailure(group, rotation, 'Cycle pot total was zero — nothing to transfer.');
+    return { success: false };
+  }
+
+  try {
+    const result = await getStripeProvider().createTransfer({
+      recipientAccountId: recipient.stripe_connected_account_id,
+      amount:              potMinorUnits,
+      currency:            group.currency,
+      rotationId:          rotation.id,
+      description:         `PadiHub payout — ${group.name} cycle ${rotation.cycle_number}`,
+    });
+    return { success: true, reference: result.providerTransferReference };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await recordTransferFailure(group, rotation, message);
+    return { success: false };
+  }
+}
+
+async function recordTransferFailure(group: SavingsGroupRow, rotation: RotationRow, message: string) {
+  await db.update(schema.rotations)
+    .set({ payout_status: 'failed' })
+    .where(eq(schema.rotations.id, rotation.id));
+
+  await monitoringService.logError({
+    type: 'payment_error', endpoint: 'rotationService.advance',
+    message: `Payout transfer failed for group ${group.id} cycle ${rotation.cycle_number}: ${message}`,
+  });
+  await notificationService.create({
+    userId: rotation.recipient_id, type: 'payout_failed',
+    title: 'Payout Delayed',
+    message: `Your payout for cycle ${rotation.cycle_number} could not be sent yet. Our team has been notified and it will be retried automatically.`,
+  });
+  await createAuditLog({
+    action: 'STRIPE_PAYOUT_TRANSFER_FAILED', entity: 'rotations', entityId: rotation.id,
+    metadata: { groupId: group.id, cycleNumber: rotation.cycle_number, message },
+  });
+}
 
 export const rotationService = {
   async getCurrent(groupId: string) {
@@ -106,11 +184,29 @@ export const rotationService = {
     if (!groupRows.length) throw new AppError('Group not found.', 404);
     const group = groupRows[0];
 
-    // Mark current rotation complete
+    // Mark current rotation complete — for Stripe (UK) groups, a Transfer
+    // must actually move the collected pot to the recipient's Express
+    // account first; the platform never holds the transferred funds.
     const current = await this.getCurrent(groupId);
     if (current) {
+      let transferReference: string | undefined;
+      if (group.payment_provider === 'stripe' && current.payout_status !== 'completed') {
+        const transfer = await transferCyclePotToStripeRecipient(group, current);
+        if (!transfer.success) {
+          // Leave this cycle's rotation un-advanced so the daily job retries
+          // the transfer tomorrow — createTransfer's idempotency key is the
+          // rotation ID, so retries can never double-pay the recipient.
+          return { nextCycle: group.current_cycle, nextRecipient: current.recipient_id, transferFailed: true };
+        }
+        transferReference = transfer.reference;
+      }
+
       await db.update(schema.rotations)
-        .set({ payout_status: 'completed', completed_date: new Date() })
+        .set({
+          payout_status: 'completed',
+          completed_date: new Date(),
+          ...(transferReference ? { provider_transfer_reference: transferReference } : {}),
+        })
         .where(eq(schema.rotations.id, current.id));
 
       await notificationService.create({
@@ -127,7 +223,7 @@ export const rotationService = {
       if (recipientRow.length && groupRow2.length) {
         const g2 = groupRow2[0];
         const potAmount = `${g2.currency} ${(parseFloat(g2.contribution_amount) * g2.maximum_members).toFixed(2)}`;
-        await sendPayoutCompleteEmail(recipientRow[0].email, g2.name, potAmount, current.provider_transfer_reference ?? current.id);
+        await sendPayoutCompleteEmail(recipientRow[0].email, g2.name, potAmount, transferReference ?? current.provider_transfer_reference ?? current.id);
       }
     }
 
