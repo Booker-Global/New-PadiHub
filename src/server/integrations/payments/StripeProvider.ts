@@ -98,17 +98,17 @@ export class StripeProvider implements IPaymentProvider {
   }
 
   async createSubscription(params: {
-    customerId: string; userId: string; email: string; currency: string; tier?: 'pro' | 'elite';
+    customerId: string; userId: string; email: string; currency: string; tier?: 'basic' | 'premium';
   }): Promise<SubscriptionResult> {
     const stripe = getStripe();
-    // Pro Group (£4.99/mo) and Elite Group (£9.99/mo) are separate Stripe
+    // Basic (£4.99/mo) and Premium (£14.99/mo) are separate Stripe
     // Price objects, configured in the Stripe Dashboard — see SUBSCRIPTION_TIERS
     // in src/server/lib/constants.ts for the tier definitions this maps to.
-    const priceId = params.tier === 'elite'
-      ? process.env.STRIPE_PRICE_ID_ELITE_MONTHLY
-      : process.env.STRIPE_PRICE_ID_PRO_MONTHLY;
+    const priceId = params.tier === 'premium'
+      ? process.env.STRIPE_PRICE_ID_PREMIUM_MONTHLY
+      : process.env.STRIPE_PRICE_ID_BASIC_MONTHLY;
     if (!priceId) {
-      throw new Error(`${params.tier === 'elite' ? 'STRIPE_PRICE_ID_ELITE_MONTHLY' : 'STRIPE_PRICE_ID_PRO_MONTHLY'} environment variable is not set.`);
+      throw new Error(`${params.tier === 'premium' ? 'STRIPE_PRICE_ID_PREMIUM_MONTHLY' : 'STRIPE_PRICE_ID_BASIC_MONTHLY'} environment variable is not set.`);
     }
 
     const subscription = await stripe.subscriptions.create({

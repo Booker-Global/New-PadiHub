@@ -12,8 +12,8 @@ const fadeUp = { hidden: { opacity: 0, y: 16 }, visible: { opacity: 1, y: 0, tra
 const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.07 } } };
 
 const tierConfig = {
-  pro: { name: 'Pro Group', createLimit: 1, joinLimit: 5, price: { GB: '£4.99', NG: '₦5,000' } },
-  elite: { name: 'Elite Group', createLimit: 7, joinLimit: 10, price: { GB: '£9.99', NG: '₦10,000' } },
+  basic: { name: 'Basic', createLimit: 0, joinLimit: 3, price: { GB: '£4.99', NG: '₦5,000' } },
+  premium: { name: 'Premium', createLimit: 3, joinLimit: 8, price: { GB: '£14.99', NG: '₦10,000' } },
 } as const;
 
 type TierKey = keyof typeof tierConfig;
@@ -36,13 +36,13 @@ function getApiErrorMessage(payload: unknown, fallback: string): string {
 }
 
 function isTierKey(value: string | null | undefined): value is TierKey {
-  return value === 'pro' || value === 'elite';
+  return value === 'basic' || value === 'premium';
 }
 
 function getTierFromPlan(plan?: string | null): TierKey | null {
   if (!plan) return null;
-  if (plan.endsWith('_elite')) return 'elite';
-  if (plan.endsWith('_pro')) return 'pro';
+  if (plan.endsWith('_premium')) return 'premium';
+  if (plan.endsWith('_basic')) return 'basic';
   return null;
 }
 
@@ -145,7 +145,7 @@ export default function RenewMembershipPage() {
 
       const nextRenewal = formatDate(payload?.data?.renewalDate);
       setNotice(`Your ${plan?.name ?? 'membership'} has been reactivated${nextRenewal ? ` and renews on ${nextRenewal}` : ''}. A confirmation email has been sent.`);
-      navigate(`/subscription/success?mode=reactivated&tier=${currentTier ?? 'pro'}&country=${currentCountry}`, { replace: true });
+      navigate(`/subscription/success?mode=reactivated&tier=${currentTier ?? 'basic'}&country=${currentCountry}`, { replace: true });
     } catch (error) {
       setPageError(error instanceof Error ? error.message : 'Unable to reactivate your membership right now.');
     } finally {
@@ -215,7 +215,7 @@ export default function RenewMembershipPage() {
                 </span>
                 <h2 className="text-xl font-extrabold text-white" style={{ fontFamily: 'Nunito, sans-serif' }}>{plan?.name ?? 'No plan selected yet'}</h2>
                 <p className="text-gray-400 text-sm">
-                  {plan ? `${plan.price[currentCountry]} per month · Create ${plan.createLimit === 1 ? '1 group' : `up to ${plan.createLimit} groups`} · Join up to ${plan.joinLimit}` : 'Choose a plan first to continue.'}
+                  {plan ? `${plan.price[currentCountry]} per month · ${plan.createLimit === 0 ? 'Cannot create groups' : `Create up to ${plan.createLimit} groups`} · Join up to ${plan.joinLimit}` : 'Choose a plan first to continue.'}
                 </p>
               </div>
               <div className="text-right">

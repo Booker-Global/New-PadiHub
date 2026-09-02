@@ -8,15 +8,14 @@ const fadeUp = { hidden: { opacity: 0, y: 16 }, visible: { opacity: 1, y: 0, tra
 const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.07 } } };
 
 const billing = [
-  { date: 'Jun 1, 2026', amount: '£9.99', status: 'Paid', method: 'Visa •••• 4242' },
-  { date: 'May 1, 2026', amount: '£9.99', status: 'Paid', method: 'Visa •••• 4242' },
+  { date: 'Jun 1, 2026', amount: '£14.99', status: 'Paid', method: 'Visa •••• 4242' },
+  { date: 'May 1, 2026', amount: '£14.99', status: 'Paid', method: 'Visa •••• 4242' },
   { date: 'Apr 1, 2026', amount: '£4.99', status: 'Paid', method: 'Visa •••• 4242' },
   { date: 'Mar 1, 2026', amount: '£4.99', status: 'Paid', method: 'Visa •••• 4242' },
 ];
 
 const features = [
-  'Create 1 group on Pro or up to 7 on Elite',
-  'Join up to 5 groups on Pro or 10 on Elite',
+  'Join up to 3 groups on Basic, or create up to 3 and join 8 total on Premium',
   'Trust Score™ tracking',
   'Governance & voting tools',
   'Priority support',
@@ -55,10 +54,10 @@ export default function SubscriptionPage() {
                   </span>
                 </div>
                 <h2 className="text-xl font-extrabold text-white mb-1" style={{ fontFamily: 'Nunito, sans-serif' }}>Monthly membership</h2>
-                <p className="text-gray-400 text-sm">Manage Pro Group and Elite Group pricing, billing history and renewals.</p>
+                <p className="text-gray-400 text-sm">Manage Basic and Premium pricing, billing history and renewals.</p>
               </div>
               <div className="text-right">
-                <p className="text-3xl font-black text-white" style={{ fontFamily: 'Nunito, sans-serif' }}>£4.99–£9.99</p>
+                <p className="text-3xl font-black text-white" style={{ fontFamily: 'Nunito, sans-serif' }}>£4.99–£14.99</p>
                 <p className="text-gray-400 text-xs">per month</p>
               </div>
             </div>

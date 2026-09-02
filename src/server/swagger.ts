@@ -251,11 +251,8 @@ const spec = {
     '/identity/status': {
       get: { tags: ['Identity Verification'], summary: 'Get identity verification status', responses: { '200': { description: 'Verification status' } } },
     },
-    '/identity/bvn/verify': {
-      post: { tags: ['Identity Verification'], summary: 'Initiate BVN verification (NG users only)', responses: { '200': { description: 'OTP sent to BVN-registered phone' }, '403': { description: 'NG users only' } } },
-    },
-    '/identity/bvn/confirm': {
-      post: { tags: ['Identity Verification'], summary: 'Confirm BVN OTP (NG users only)', responses: { '200': { description: 'BVN verified' } } },
+    '/identity/ng/resolve-account': {
+      post: { tags: ['Identity Verification'], summary: 'Validate NG bank account via Flutterwave Account Resolve (NG users only) — free, interim bank-account validation, not full KYC', responses: { '200': { description: 'Account resolve result (verified/failed)' }, '403': { description: 'NG users only' } } },
     },
     '/identity/verify/webhook': {
       post: { tags: ['Identity Verification'], summary: 'Stripe Identity webhook (public)', security: [], responses: { '200': { description: 'Webhook received' } } },

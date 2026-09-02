@@ -8,12 +8,12 @@ const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@i
 
 const features = [
   { icon: Shield, title: 'Trust Score™', desc: 'A living reputation system with 6 tiers — from Explorer to Community Champion. Every contribution builds your score.', color: '#2EAF6F', tag: 'Identity' },
-  { icon: PiggyBank, title: 'Savings Groups', desc: 'Create or join rotating savings groups. Track contributions, celebrate milestones and hold each other accountable.', color: '#8B5CF6', tag: 'Savings' },
+  { icon: PiggyBank, title: 'Savings Groups', desc: 'Premium members can create rotating savings groups, while all members can join within plan limits and track contributions together.', color: '#8B5CF6', tag: 'Savings' },
   { icon: Sparkles, title: 'Community DNA™', desc: 'Living community intelligence. Understand your community\'s health, participation and growth journey.', color: '#EF4444', tag: 'Insights' },
   { icon: Users, title: 'Community Marketplace', desc: 'Discover and join communities that match your goals. Browse 200+ verified communities with full transparency.', color: '#2EAF6F', tag: 'Discovery' },
-  { icon: Vote, title: 'Governance', desc: 'Community-led decision making. Vote on proposals, elect leaders and shape your community\'s future.', color: '#F59E0B', tag: 'Governance' },
+  { icon: Vote, title: 'Governance', desc: 'Community-led decision making for eligible actions such as member admissions, contribution-status claims and payout-slot swaps, each with clear response deadlines.', color: '#F59E0B', tag: 'Governance' },
   { icon: Bell, title: 'Activity Centre', desc: 'Stay on top of contributions, achievements, governance votes and community activity — all in one place.', color: '#2eafaf', tag: 'Notifications' },
-  { icon: User, title: 'Personal Control Centre', desc: 'Full control over your profile, privacy, notifications and subscription — all in a premium settings experience.', color: '#8B5CF6', tag: 'Settings' },
+  { icon: User, title: 'Personal Control Centre', desc: 'Full control over your profile, verification status, notifications and subscription — all in one premium settings experience.', color: '#8B5CF6', tag: 'Settings' },
 ];
 
 export default function FeaturesPage() {
@@ -46,7 +46,7 @@ export default function FeaturesPage() {
             </span>
           </h2>
           <p style={{ color: '#D1D5DB', fontSize: 18, maxWidth: '40rem', margin: '0 auto' }}>
-            Every feature on PadiHub is built around one goal: making community savings safe, transparent and deeply rewarding.
+            Every feature on PadiHub is built around one goal: making community savings clear, transparent and deeply rewarding.
           </p>
         </div>
       </section>

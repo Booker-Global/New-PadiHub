@@ -322,7 +322,7 @@ export default function ConnectPayoutPage() {
                   <div className="rounded-2xl p-4 flex items-start gap-3" style={{ background: 'rgba(46,175,111,0.08)', border: '1px solid rgba(46,175,111,0.18)' }}>
                     <Shield size={18} style={{ color: '#2EAF6F', flexShrink: 0 }} />
                     <p className="text-sm text-gray-700">
-                      Your payout destination is verified. When it&apos;s your turn in the rotation, your payout will be sent here.
+                      Your payout destination is verified. When it&apos;s your turn in the rotation, your payout will be sent here. Your very first payout may take up to 7–14 days while our payment processor completes a standard review for new payout destinations; payouts after that typically arrive within about 3 business days.
                     </p>
                   </div>
                 ) : hasConnectedDestination ? (

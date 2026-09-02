@@ -4,11 +4,11 @@ import { Link } from 'react-router-dom';
 import { ArrowRight, CheckCircle, Shield, Users } from 'lucide-react';
 import { getValidSession } from '@/lib/session';
 
-const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/pricing#webpage\",\"name\":\"Membership Pricing — PadiHub\",\"url\":\"https://padihub.com/pricing\",\"description\":\"Region-aware monthly pricing for PadiHub's Pro Group and Elite Group subscriptions.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"}}";
+const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/pricing#webpage\",\"name\":\"Membership Pricing — PadiHub\",\"url\":\"https://padihub.com/pricing\",\"description\":\"Region-aware monthly pricing for PadiHub's Basic and Premium subscriptions.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"}}";
 
 type PricingRegion = 'UK' | 'NG';
 type GeoRegion = PricingRegion | 'BOTH';
-type PlanKey = 'pro' | 'elite';
+type PlanKey = 'basic' | 'premium';
 
 type PlanCard = {
   key: PlanKey;
@@ -39,46 +39,88 @@ const commonFeatures = [
   'Group management tools and notifications',
 ];
 
+const verificationNotesByRegion: Record<PricingRegion, { title: string; body: string; bullets: string[] }> = {
+  UK: {
+    title: 'Verification before the first UK charge',
+    body: 'Save your card first, then complete Stripe Identity inside an embedded PadiHub dashboard modal. Your profile stays Pending until verification succeeds.',
+    bullets: [
+      'Subscription billing starts only after identity verification succeeds',
+      'The first 50 successful UK verifications are free; from the 51st onward, a one-time £1 fee is added to the first subscription charge',
+      'If verification fails, no charge is taken and you receive a try-again email',
+    ],
+  },
+  NG: {
+    title: 'Verification before the first Nigeria charge',
+    body: 'Save your bank details first, then complete Flutterwave Account Resolve — a free preliminary bank-account name match, not full KYC. Your profile stays Pending until resolve succeeds.',
+    bullets: [
+      'Subscription billing starts only after Account Resolve succeeds',
+      'There is no fee for the Account Resolve check',
+      'If the check fails, no charge is taken and you receive a try-again email',
+    ],
+  },
+};
+
+const contributionFeeNotesByRegion: Record<PricingRegion, { title: string; body: string; bullets: string[] }> = {
+  UK: {
+    title: 'UK contribution fees are shown before you confirm',
+    body: 'Every contribution adds a visible surcharge on top of the contribution amount — never deducted from the pot.',
+    bullets: [
+      'Card fee: 1.5% + £0.20 on every contribution',
+      'Plus your equal share of that cycle’s payout fee: 0.25% of the full pot + £0.20, split across contributing members and rounded up to the next penny',
+      'Worked example: £10 contribution in a 5-person group = £10.42 total charge (£0.35 card fee + £0.07 payout-fee share)',
+    ],
+  },
+  NG: {
+    title: 'Nigeria contribution fees stay itemised',
+    body: 'Every contribution adds a visible surcharge on top of the contribution amount — never deducted from the pot.',
+    bullets: [
+      'Transaction fee: 2% of the contribution, plus 7.5% VAT on that fee',
+      'Plus your equal share of the cycle’s tiered payout fee (₦10 / ₦25 / ₦50 by pot size), with 7.5% VAT shown separately and each share rounded up to the next kobo',
+      'Subscription and verification charges are not surcharged this way',
+    ],
+  },
+};
+
 const plansByRegion: Record<PricingRegion, PlanCard[]> = {
   UK: [
     {
-      key: 'pro',
-      name: 'Pro Group',
+      key: 'basic',
+      name: 'Basic',
       price: '£4.99',
-      summary: 'For members running one group and staying active across a handful of communities.',
-      createLimitLabel: 'Create 1 savings group',
-      joinLimitLabel: 'Be a member of up to 5 groups total',
-      highlights: ['Monthly billing only', 'Ideal for one personal or community circle'],
+      summary: 'For members who want to join savings circles without running their own.',
+      createLimitLabel: 'Cannot create a savings group',
+      joinLimitLabel: 'Join up to 3 groups',
+      highlights: ['Monthly billing only — no annual plan or free trial', 'Ideal for members who just want to contribute and save'],
     },
     {
-      key: 'elite',
-      name: 'Elite Group',
-      price: '£9.99',
-      summary: 'For organisers leading multiple circles and managing a larger savings network.',
-      createLimitLabel: 'Create up to 7 savings groups',
-      joinLimitLabel: 'Be a member of up to 10 groups total',
-      highlights: ['Monthly billing only', 'Best for established organisers and admins'],
+      key: 'premium',
+      name: 'Premium',
+      price: '£14.99',
+      summary: 'For organisers leading circles and managing a larger savings network.',
+      createLimitLabel: 'Create up to 3 savings groups',
+      joinLimitLabel: 'Join up to 5 more groups (8 total)',
+      highlights: ['Monthly billing only — no annual plan or free trial', 'Best for organisers and admins'],
       recommended: true,
     },
   ],
   NG: [
     {
-      key: 'pro',
-      name: 'Pro Group',
+      key: 'basic',
+      name: 'Basic',
       price: '₦5,000',
-      summary: 'For members running one group and staying active across a handful of communities.',
-      createLimitLabel: 'Create 1 savings group',
-      joinLimitLabel: 'Be a member of up to 5 groups total',
-      highlights: ['Monthly billing only', 'Ideal for one personal or community circle'],
+      summary: 'For members who want to join savings circles without running their own.',
+      createLimitLabel: 'Cannot create a savings group',
+      joinLimitLabel: 'Join up to 3 groups',
+      highlights: ['Monthly billing only — no annual plan or free trial', 'Ideal for members who just want to contribute and save'],
     },
     {
-      key: 'elite',
-      name: 'Elite Group',
+      key: 'premium',
+      name: 'Premium',
       price: '₦10,000',
-      summary: 'For organisers leading multiple circles and managing a larger savings network.',
-      createLimitLabel: 'Create up to 7 savings groups',
-      joinLimitLabel: 'Be a member of up to 10 groups total',
-      highlights: ['Monthly billing only', 'Best for established organisers and admins'],
+      summary: 'For organisers leading circles and managing a larger savings network.',
+      createLimitLabel: 'Create up to 3 savings groups',
+      joinLimitLabel: 'Join up to 5 more groups (8 total)',
+      highlights: ['Monthly billing only — no annual plan or free trial', 'Best for organisers and admins'],
       recommended: true,
     },
   ],
@@ -130,6 +172,8 @@ export default function PricingPage() {
   const visiblePlans = plansByRegion[region];
   const regionLabel = region === 'NG' ? 'Nigeria' : 'United Kingdom';
   const currencyLabel = region === 'NG' ? 'NGN (₦)' : 'GBP (£)';
+  const verificationNote = verificationNotesByRegion[region];
+  const contributionFeeNote = contributionFeeNotesByRegion[region];
 
   return (
     <>
@@ -137,13 +181,13 @@ export default function PricingPage() {
         <title>Membership Pricing — PadiHub</title>
         <meta
           name="description"
-          content="Simple, region-aware monthly pricing for PadiHub's Pro Group and Elite Group subscriptions."
+          content="Simple, region-aware monthly pricing for PadiHub's Basic and Premium subscriptions."
         />
         <link rel="canonical" href="https://padihub.com/pricing" />
         <meta property="og:title" content="Membership Pricing — PadiHub" />
         <meta
           property="og:description"
-          content="Compare PadiHub's Pro Group and Elite Group monthly subscription tiers."
+          content="Compare PadiHub's Basic and Premium monthly subscription tiers."
         />
         <meta property="og:type" content="website" />
         <meta property="og:image" content="https://padihub.com/airo-assets/images/og/default" />
@@ -155,6 +199,8 @@ export default function PricingPage() {
       <style>{`
         .pricing-cards { display: grid; grid-template-columns: 1fr; gap: 2rem; max-width: 72rem; margin: 0 auto; }
         @media (min-width: 768px) { .pricing-cards { grid-template-columns: 1fr 1fr; } }
+        .info-grid { display: grid; grid-template-columns: 1fr; gap: 1.5rem; }
+        @media (min-width: 768px) { .info-grid { grid-template-columns: 1fr 1fr; } }
         .shared-grid { display: grid; grid-template-columns: 1fr; gap: 1.5rem; }
         @media (min-width: 640px) { .shared-grid { grid-template-columns: 1fr 1fr; } }
         @media (min-width: 1024px) { .shared-grid { grid-template-columns: repeat(4, 1fr); } }
@@ -189,7 +235,7 @@ export default function PricingPage() {
         <div style={{ maxWidth: '80rem', margin: '0 auto', padding: '0 1.5rem' }}>
           <div style={{ textAlign: 'center', marginBottom: 48 }}>
             <p style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#2EAF6F', marginBottom: 12 }}>Membership tiers</p>
-            <h2 style={{ fontSize: 'clamp(1.5rem, 4vw, 2.5rem)', fontWeight: 800, color: '#111827', marginBottom: 12, fontFamily: 'Nunito, sans-serif' }}>Compare Pro Group and Elite Group</h2>
+            <h2 style={{ fontSize: 'clamp(1.5rem, 4vw, 2.5rem)', fontWeight: 800, color: '#111827', marginBottom: 12, fontFamily: 'Nunito, sans-serif' }}>Compare Basic and Premium</h2>
             <p style={{ color: '#6B7280', fontSize: 16, maxWidth: '42rem', margin: '0 auto' }}>
               The main difference is how many groups you can create and how many groups you can be part of at once.
             </p>
@@ -288,6 +334,27 @@ export default function PricingPage() {
           <p style={{ textAlign: 'center', color: '#6B7280', fontSize: 13, marginTop: 20 }}>
             Creating a group also counts as being a member of that group.
           </p>
+          <p style={{ textAlign: 'center', color: '#6B7280', fontSize: 13, marginTop: 8, maxWidth: '40rem', marginLeft: 'auto', marginRight: 'auto' }}>
+            Your subscription is only charged after your identity/bank-account verification succeeds. Contributions carry a separate, itemised processing-fee surcharge — see our{' '}
+            <Link to="/terms" style={{ color: '#2EAF6F', fontWeight: 700, textDecoration: 'underline' }}>Terms of Service</Link> for full details.
+          </p>
+
+          <div className="info-grid" style={{ marginTop: 40 }}>
+            {[verificationNote, contributionFeeNote].map((card) => (
+              <div key={card.title} style={{ borderRadius: 24, padding: 24, background: '#fff', border: '1px solid #E5E7EB', boxShadow: '0 2px 16px rgba(0,0,0,0.04)' }}>
+                <p style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#2EAF6F', marginBottom: 10 }}>{card.title}</p>
+                <p style={{ color: '#4B5563', fontSize: 14, lineHeight: 1.7, marginBottom: 16 }}>{card.body}</p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {card.bullets.map((bullet) => (
+                    <div key={bullet} style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                      <CheckCircle size={15} style={{ color: '#2EAF6F', flexShrink: 0, marginTop: 2 }} />
+                      <span style={{ fontSize: 14, color: '#374151', lineHeight: 1.6 }}>{bullet}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </section>
 

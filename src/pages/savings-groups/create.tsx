@@ -456,8 +456,8 @@ export default function CreateGroupWizard() {
                     </div>
                     <div>
                       <label className="text-sm font-bold text-gray-700 block mb-2">Frequency</label>
-                      <div className="grid grid-cols-3 gap-3">
-                        {(['monthly', 'weekly', 'daily'] as const).map(frequency => (
+                      <div className={`grid gap-3 ${import.meta.env.DEV ? 'grid-cols-3' : 'grid-cols-2'}`}>
+                        {(import.meta.env.DEV ? (['monthly', 'weekly', 'daily'] as const) : (['monthly', 'weekly'] as const)).map(frequency => (
                           <OptionCard
                             key={frequency}
                             selected={data.frequency === frequency}
@@ -468,11 +468,14 @@ export default function CreateGroupWizard() {
                           >
                             <p className="font-bold text-gray-900 capitalize">{frequency}</p>
                             <p className="text-xs text-gray-400 mt-0.5">
-                              {frequency === 'monthly' ? 'Default — most common' : frequency === 'weekly' ? 'Every week' : 'Every day — useful for testing'}
+                              {frequency === 'monthly' ? 'Default — most common' : frequency === 'weekly' ? 'Every week' : 'Every day — dev/test only'}
                             </p>
                           </OptionCard>
                         ))}
                       </div>
+                      {!import.meta.env.DEV && (
+                        <p className="text-xs text-gray-400 mt-1.5">Daily contributions are only available in development/testing environments.</p>
+                      )}
                     </div>
 
                     {data.frequency === 'weekly' && (

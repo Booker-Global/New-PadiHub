@@ -14,11 +14,11 @@ const SHOW_MEMBER_VOICES = false;
 const benefits = [
   { icon: Users,     title: 'Access Communities',    desc: 'Join trusted savings communities across the UK and Nigeria within your plan limits.', color: '#2EAF6F' },
   { icon: Globe,     title: 'Community Marketplace', desc: 'Discover and join verified communities matched to your goals.',               color: '#2eafaf' },
-  { icon: TrendingUp,title: 'Savings Groups',        desc: 'Create and participate in structured savings groups with full transparency.',  color: '#8B5CF6' },
+  { icon: TrendingUp,title: 'Savings Groups',        desc: 'Premium members can create structured savings groups, while all members can join within their plan limits.',  color: '#8B5CF6' },
   { icon: Shield,    title: 'Trust Score™',          desc: 'Build a portable reputation that grows with every positive action.',          color: '#2EAF6F' },
   { icon: Zap,       title: 'Community DNA™',        desc: 'Deep insights into your community\'s health, values and participation.',      color: '#EF4444' },
   { icon: BarChart2, title: 'Analytics',             desc: 'Track your progress, contributions and community impact over time.',          color: '#8B5CF6' },
-  { icon: Users,     title: 'Governance',            desc: 'Participate in democratic community decisions and elections.',                color: '#2EAF6F' },
+  { icon: Users,     title: 'Governance',            desc: 'Vote on eligible member admissions, contribution claims and payout-slot swaps with clear 48-hour response windows.',                color: '#2EAF6F' },
   { icon: Bell,      title: 'Notifications',         desc: 'Stay informed with smart alerts for contributions, votes and events.',        color: '#F59E0B' },
   { icon: Heart,     title: 'Priority Support',      desc: 'Get help from our community team whenever you need it.',                     color: '#EF4444' },
 ];
@@ -83,6 +83,8 @@ export default function MembershipPage() {
         @media (min-width: 640px) { .membership-pillars { flex-direction: row; flex-wrap: wrap; justify-content: center; } }
         .membership-pill { width: 100%; justify-content: center; text-align: center; }
         @media (min-width: 640px) { .membership-pill { width: auto; } }
+        .membership-plan-grid { display: grid; grid-template-columns: 1fr; gap: 1.5rem; }
+        @media (min-width: 768px) { .membership-plan-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
       `}</style>
 
       {/* Hero */}
@@ -128,8 +130,38 @@ export default function MembershipPage() {
         </div>
       </section>
 
+      <section style={{ padding: '4rem 0', background: '#F9FAFB' }}>
+        <div style={{ maxWidth: '72rem', margin: '0 auto', padding: '0 1.25rem' }}>
+          <div style={{ textAlign: 'center', marginBottom: 40 }}>
+            <p style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#2EAF6F', marginBottom: 12 }}>Plan limits</p>
+            <h2 style={{ fontSize: 'clamp(1.5rem, 4vw, 2.25rem)', fontWeight: 800, color: '#111827', marginBottom: 16, fontFamily: 'Nunito, sans-serif' }}>Know the difference between Basic and Premium</h2>
+            <p style={{ color: '#6B7280', maxWidth: '42rem', margin: '0 auto' }}>
+              Both memberships bill monthly only — no annual option and no free trial. Region-specific prices live on our pricing page.
+            </p>
+          </div>
+
+          <div className="membership-plan-grid" style={{ marginBottom: 20 }}>
+            <div style={{ borderRadius: 24, padding: 24, background: '#fff', border: '1px solid #E5E7EB', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
+              <p style={{ fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#2EAF6F', marginBottom: 10 }}>Basic</p>
+              <p style={{ fontSize: 20, fontWeight: 800, color: '#111827', marginBottom: 10, fontFamily: 'Nunito, sans-serif' }}>Join up to 3 groups</p>
+              <p style={{ color: '#6B7280', fontSize: 14, lineHeight: 1.7 }}>Best for members who want to participate in savings circles without creating one.</p>
+            </div>
+
+            <div style={{ borderRadius: 24, padding: 24, background: '#fff', border: '1px solid #E5E7EB', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
+              <p style={{ fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#F59E0B', marginBottom: 10 }}>Premium</p>
+              <p style={{ fontSize: 20, fontWeight: 800, color: '#111827', marginBottom: 10, fontFamily: 'Nunito, sans-serif' }}>Create up to 3 groups and join up to 5 more</p>
+              <p style={{ color: '#6B7280', fontSize: 14, lineHeight: 1.7 }}>That gives you up to 8 total active group memberships, including any groups you organise.</p>
+            </div>
+          </div>
+
+          <p style={{ textAlign: 'center', color: '#6B7280', fontSize: 14 }}>
+            Subscriptions only charge after verification succeeds. <Link to="/pricing" style={{ color: '#2EAF6F', fontWeight: 700, textDecoration: 'underline' }}>See region-aware pricing</Link>.
+          </p>
+        </div>
+      </section>
+
       {/* Benefits */}
-      <section style={{ padding: '5rem 0', background: '#F9FAFB' }}>
+      <section style={{ padding: '5rem 0', background: '#fff' }}>
         <div style={{ maxWidth: '72rem', margin: '0 auto', padding: '0 1.25rem' }}>
           <div style={{ textAlign: 'center', marginBottom: 56 }}>
             <p style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#2EAF6F', marginBottom: 12 }}>Everything included</p>

@@ -18,22 +18,22 @@ const regionCopy: Record<Region, { hero: string; illustration: string; trustBar:
     hero: 'Built for members saving together in the United Kingdom.',
     illustration: 'Built for members in the United Kingdom',
     trustBar: 'United Kingdom pricing',
-    pricing: 'Showing membership options for the United Kingdom. Cancel anytime.',
-    finalCta: 'Cancel anytime · United Kingdom pricing shown',
+    pricing: 'Showing monthly-only membership options for the United Kingdom. Cancel anytime.',
+    finalCta: 'Monthly-only plans · United Kingdom pricing shown',
   },
   NG: {
     hero: 'Built for members saving together in Nigeria.',
     illustration: 'Built for members in Nigeria',
     trustBar: 'Nigeria pricing',
-    pricing: 'Showing membership options for Nigeria. Cancel anytime.',
-    finalCta: 'Cancel anytime · Nigeria pricing shown',
+    pricing: 'Showing monthly-only membership options for Nigeria. Cancel anytime.',
+    finalCta: 'Monthly-only plans · Nigeria pricing shown',
   },
   BOTH: {
     hero: 'Built for members saving together in community circles of all kinds.',
     illustration: 'Built for community savings groups',
     trustBar: 'Region-aware pricing',
-    pricing: 'Choose the membership option that fits your region. Cancel anytime.',
-    finalCta: 'Cancel anytime · Choose the region that fits your group',
+    pricing: 'Choose the monthly-only membership option that fits your region. Cancel anytime.',
+    finalCta: 'Monthly-only plans · Choose the region that fits your group',
   },
 };
 
@@ -288,7 +288,7 @@ function HeroIllustration({ region }: { region: Region }) {
             ))}
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-white text-xs font-bold">Create your first group</p>
+            <p className="text-white text-xs font-bold">Create or join your first group</p>
             <p className="text-gray-400 text-xs">{regionCopy[region].illustration}</p>
           </div>
           <ArrowRight size={14} style={{ color: '#2EAF6F' }} className="shrink-0" />
@@ -299,7 +299,7 @@ function HeroIllustration({ region }: { region: Region }) {
 }
 
 type HomeTier = {
-  key: 'pro' | 'elite';
+  key: 'basic' | 'premium';
   name: string;
   price: string;
   tagline: string;
@@ -307,17 +307,17 @@ type HomeTier = {
   recommended?: boolean;
 };
 
-// Mirrors the Pro/Elite tier data on /pricing (src/pages/pricing.tsx) so the
-// homepage teaser stays in sync with the actual two-tier subscription model
-// instead of a stale flat single-price-per-country card.
+// Mirrors the Basic/Premium tier data on /pricing (src/pages/pricing.tsx) so
+// the homepage teaser stays in sync with the actual two-tier subscription
+// model instead of a stale flat single-price-per-country card.
 const homeTiersByRegion: Record<'UK' | 'NG', HomeTier[]> = {
   UK: [
-    { key: 'pro', name: 'Pro Group', price: '£4.99', tagline: 'Create 1 group · Join up to 5', color: '#2EAF6F' },
-    { key: 'elite', name: 'Elite Group', price: '£9.99', tagline: 'Create up to 7 groups · Join up to 10', color: '#F59E0B', recommended: true },
+    { key: 'basic', name: 'Basic', price: '£4.99', tagline: 'Join up to 3 groups · Cannot create', color: '#2EAF6F' },
+    { key: 'premium', name: 'Premium', price: '£14.99', tagline: 'Create up to 3 groups · Join up to 5 more (8 total)', color: '#F59E0B', recommended: true },
   ],
   NG: [
-    { key: 'pro', name: 'Pro Group', price: '₦5,000', tagline: 'Create 1 group · Join up to 5', color: '#2EAF6F' },
-    { key: 'elite', name: 'Elite Group', price: '₦10,000', tagline: 'Create up to 7 groups · Join up to 10', color: '#F59E0B', recommended: true },
+    { key: 'basic', name: 'Basic', price: '₦5,000', tagline: 'Join up to 3 groups · Cannot create', color: '#2EAF6F' },
+    { key: 'premium', name: 'Premium', price: '₦10,000', tagline: 'Create up to 3 groups · Join up to 5 more (8 total)', color: '#F59E0B', recommended: true },
   ],
 };
 
@@ -413,7 +413,7 @@ export default function HomePage() {
               <div className="hero-cta" style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 40 }}>
                 <Button asChild size="lg" style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', color: '#fff', boxShadow: '0 0 30px rgba(46,175,111,0.5)', borderRadius: 999, fontWeight: 700, width: '100%' }}>
                   <Link to="/get-started" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-                    Get started free <ArrowRight size={18} />
+                    Get started <ArrowRight size={18} />
                   </Link>
                 </Button>
                 <Button asChild variant="outline" size="lg" style={{ borderRadius: 999, fontWeight: 700, width: '100%', borderColor: 'rgba(255,255,255,0.2)', color: '#fff', background: 'transparent' }}>
@@ -501,14 +501,14 @@ export default function HomePage() {
           <div style={{ textAlign: 'center', marginBottom: '4rem' }}>
             <p style={{ fontSize: 13, fontWeight: 700, color: '#2EAF6F', marginBottom: 12 }}>How PadiHub works</p>
             <h2 style={{ fontSize: 'clamp(1.75rem, 4vw, 2.25rem)', fontWeight: 800, color: '#111827', marginBottom: 16, fontFamily: 'Nunito, sans-serif' }}>Simple steps to saving together</h2>
-            <p style={{ color: '#6B7280', fontSize: 16, maxWidth: 480, margin: '0 auto' }}>Register, join a group, contribute monthly, and receive your payout when it's your turn.</p>
+            <p style={{ color: '#6B7280', fontSize: 16, maxWidth: 560, margin: '0 auto' }}>Register, complete verification, join or create within your plan limits, contribute on schedule, and receive your payout when it is your turn.</p>
           </div>
 
           <div className="hiw-grid" style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1.5rem' }}>
             {[
-              { step: '01', icon: Users,       title: 'Create or Join a Group', desc: 'Start your own rotating savings group or join an existing one. Set contribution amounts and group rules.', color: '#2EAF6F' },
-              { step: '02', icon: TrendingUp,  title: 'Contribute Monthly',     desc: 'Make your scheduled contribution each month. Every payment builds your Trust Score™ and keeps the group on track.', color: '#F59E0B' },
-              { step: '03', icon: CheckCircle, title: 'Receive Your Payout',    desc: "When it's your turn in the rotation, receive the full group payout directly to your account.", color: '#2eafaf' },
+              { step: '01', icon: Users,       title: 'Create or Join a Group', desc: 'Premium members can create groups, while all members can join within plan limits. New groups only start once at least 3 verified members are ready.', color: '#2EAF6F' },
+              { step: '02', icon: TrendingUp,  title: 'Contribute on Schedule', desc: 'Pay each cycle with the clearly itemised processing-fee surcharge shown before you confirm. If a charge fails, there is a fixed 72-hour grace period and one automatic retry.', color: '#F59E0B' },
+              { step: '03', icon: CheckCircle, title: 'Receive Your Payout',    desc: 'When it is your turn, the cycle pot is transferred to your payout account. First payouts to a new recipient may take around 7–14 days; later payouts typically complete within about 3 business days.', color: '#2eafaf' },
             ].map((s, i) => (
               <div key={i} style={{ borderRadius: 24, padding: '2rem', textAlign: 'center', background: '#F9FAFB', border: '1px solid #E5E7EB', boxSizing: 'border-box' }}>
                 <div style={{ width: 56, height: 56, borderRadius: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1rem', background: `${s.color}20`, flexShrink: 0 }}>
@@ -578,10 +578,10 @@ export default function HomePage() {
               </div>
               <h3 style={{ color: '#111827', fontWeight: 700, fontSize: 18, marginBottom: 8, fontFamily: 'Nunito, sans-serif' }}>Savings Groups</h3>
               <p style={{ color: '#6B7280', fontSize: 14, lineHeight: 1.6, marginBottom: 16 }}>
-                Create or join rotating savings groups. Set contribution amounts, group size, and payout order. Track every payment in real time.
+                Premium members can create rotating savings groups, while all members can join within plan limits. Track every payment in real time as your group moves from draft to active.
               </p>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {['Set contribution amounts together', 'Choose a rotation order that fits the group', 'See the full payment and payout history in one place'].map(item => (
+                {['Set contribution amounts together', 'Groups only activate once at least 3 verified members are ready', 'See the full payment and payout history in one place'].map(item => (
                   <div key={item} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 13, color: '#4B5563' }}>
                     <CheckCircle size={15} style={{ color: '#2EAF6F', flexShrink: 0, marginTop: 1 }} />
                     <span>{item}</span>
@@ -597,7 +597,7 @@ export default function HomePage() {
               </div>
               <h3 style={{ color: '#111827', fontWeight: 700, fontSize: 18, marginBottom: 8, fontFamily: 'Nunito, sans-serif' }}>Secure Payments</h3>
               <p style={{ color: '#6B7280', fontSize: 14, lineHeight: 1.6 }}>
-                Members pay through secure, region-appropriate payment flows. Payouts are processed automatically when all contributions are received.
+                Members save payment details, complete verification, and then use secure region-appropriate payment flows for contributions and payouts.
               </p>
             </div>
 
@@ -706,11 +706,17 @@ export default function HomePage() {
                   ))}
                 </ul>
                 <Button asChild style={{ width: '100%', borderRadius: 999, fontWeight: 700, background: plan.color, color: '#fff' }}>
-                  <Link to="/get-started">Get started free</Link>
+                  <Link to="/get-started">Get started</Link>
                 </Button>
               </div>
             ))}
           </div>
+          <p style={{ textAlign: 'center', color: '#6B7280', fontSize: 13, maxWidth: '44rem', margin: '20px auto 0' }}>
+            Basic lets you join up to 3 groups; Premium lets you create up to 3 groups and join up to 5 more (8 total). No annual plan or free trial.
+          </p>
+          <p style={{ textAlign: 'center', color: '#6B7280', fontSize: 13, maxWidth: '48rem', margin: '8px auto 0' }}>
+            Subscriptions only charge after verification succeeds, and contribution-processing fees are itemised on top of each contribution — never deducted from the pot.
+          </p>
           <p style={{ textAlign: 'center', color: '#9CA3AF', fontSize: 13, marginTop: 24 }}>
             <Link to="/pricing" style={{ color: '#2EAF6F', fontWeight: 700, textDecoration: 'none' }}>See full pricing details →</Link>
           </p>
@@ -730,11 +736,11 @@ export default function HomePage() {
             </span>
           </h2>
           <p style={{ color: '#D1D5DB', fontSize: 'clamp(0.95rem, 2vw, 1.125rem)', marginBottom: 40, lineHeight: 1.7 }}>
-            Join PadiHub today. Register, create or join a savings group, and start building your financial future together.
+            Join PadiHub today. Register, join a savings group, or choose Premium to create one and start building your financial future together.
           </p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, justifyContent: 'center' }}>
             <Button asChild size="lg" style={{ borderRadius: 999, padding: '0 2.5rem', fontWeight: 700, fontSize: 16, background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', color: '#fff', boxShadow: '0 0 40px rgba(46,175,111,0.5)' }}>
-              <Link to="/get-started" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>Get started free <ArrowRight size={20} /></Link>
+              <Link to="/get-started" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>Get started <ArrowRight size={20} /></Link>
             </Button>
             <Button asChild variant="outline" size="lg" style={{ borderRadius: 999, padding: '0 2.5rem', fontWeight: 700, fontSize: 16, borderColor: 'rgba(255,255,255,0.2)', color: '#fff', background: 'transparent' }}>
               <Link to="/how-it-works" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>Learn more <ChevronRight size={20} /></Link>

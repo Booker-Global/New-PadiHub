@@ -131,6 +131,13 @@ export const groupController = {
     } catch (e) { next(e); }
   },
 
+  activate: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await groupService.activateGroup(pp(req.params.id), req.user!.userId, ip(req.ip));
+      res.json({ success: true, data });
+    } catch (e) { next(e); }
+  },
+
   createInvitation: [
     validate(inviteSchema),
     async (req: Request, res: Response, next: NextFunction) => {

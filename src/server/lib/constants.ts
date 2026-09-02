@@ -52,42 +52,77 @@ export const TRUST_SCORE_DELTA_IDENTITY_VERIFIED    = 10; // completed KYC/ident
  * creator doesn't explicitly choose a value — see groupService.create().
  */
 export const GROUP_DEFAULT_STRIKE_THRESHOLD     = 2; // missed contributions before a warning
-export const GROUP_DEFAULT_SUSPENSION_THRESHOLD = 3; // missed contributions before the member is kicked out
+export const GROUP_DEFAULT_SUSPENSION_THRESHOLD = 3; // max permitted contribution defaults before Compensated Compression removes the member
 export const GROUP_DEFAULT_VOTING_THRESHOLD     = 51; // % of votes required to pass a group decision
 export const GROUP_DEFAULT_MIN_TRUST_SCORE      = 0; // no minimum Trust Score required to join, unless the creator sets one
 
 /**
+ * Group launch/lifecycle rules (Draft → Active → Suspended → Expired) — see
+ * groupService.activateGroup / reevaluateAfterMembershipChange /
+ * scheduledJobs.dailyGroupLifecycleExpiry.
+ */
+export const GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH = 3; // "Start Group" stays disabled below this
+export const GROUP_STUCK_BELOW_MIN_EXPIRY_DAYS  = 30; // draft/suspended groups auto-expire after this many days stuck below the minimum
+export const GROUP_STUCK_EXPIRY_REMINDER_DAYS_BEFORE = [7, 3, 1]; // reminder nudges before auto-expiry
+
+/**
+ * A missed/failed contribution charge gets exactly one automatic retry, at
+ * the end of a 72-hour grace period, before the member is flagged in
+ * default — see contributionService.markFailed and
+ * scheduledJobs.dailyContributionDefaultRetry. No further retries, no
+ * continuous payment authority, no substitute-member matching.
+ */
+export const CONTRIBUTION_DEFAULT_GRACE_PERIOD_MS = 72 * 60 * 60 * 1000;
+
+/** Governance votes (new-member admission, contribution claims) must be decided within this window — see voteService.ts. */
+export const GOVERNANCE_VOTE_DEADLINE_MS = 48 * 60 * 60 * 1000;
+
+/**
+ * Daily contribution frequency is disabled in production — it exists only
+ * to speed up manual/QA testing of rotation logic. Production groups may
+ * only choose Weekly or Monthly. See groupService.create/update.
+ */
+export function isDailyFrequencyAllowed(): boolean {
+  return process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test';
+}
+
+/**
  * Subscription tiers — PadiHub has exactly two monthly-only membership
  * tiers (no annual billing, no free trial). Each tier caps how many groups
- * a member may CREATE (as leader) versus how many groups they may be an
- * active MEMBER of (creating a group also counts as membership of it).
- * A user must select one of these during onboarding, before their account
- * is treated as fully verified — see paymentEligibilityService.ts for the
- * enforcement gate.
+ * a member may CREATE (as leader) versus the TOTAL number of groups they may
+ * be an active MEMBER of (creating a group also counts toward this total —
+ * see groupService.countGroupsJoined(), which counts every membership
+ * regardless of role or status). A user must select one of these during
+ * onboarding, before their account is treated as fully verified — see
+ * paymentEligibilityService.ts for the enforcement gate.
+ *
+ * Basic: join up to 3 groups total, cannot create any group.
+ * Premium: create up to 3 groups and join up to 5 more (8 group
+ * memberships total, including any groups the user created).
  */
 export const SUBSCRIPTION_TIERS = {
-  pro: {
-    key:             'pro' as const,
-    name:            'Pro Group',
+  basic: {
+    key:             'basic' as const,
+    name:            'Basic',
     priceGBP:        4.99,
     priceNGN:        5000,
-    maxGroupsCreate: 1,
-    maxGroupsJoin:   5,
+    maxGroupsCreate: 0,
+    maxGroupsJoin:   3,
   },
-  elite: {
-    key:             'elite' as const,
-    name:            'Elite Group',
-    priceGBP:        9.99,
+  premium: {
+    key:             'premium' as const,
+    name:            'Premium',
+    priceGBP:        14.99,
     priceNGN:        10000,
-    maxGroupsCreate: 7,
-    maxGroupsJoin:   10,
+    maxGroupsCreate: 3,
+    maxGroupsJoin:   8,
   },
 } as const;
 
 export type SubscriptionTierKey = keyof typeof SUBSCRIPTION_TIERS;
 
 export function isSubscriptionTierKey(value: unknown): value is SubscriptionTierKey {
-  return value === 'pro' || value === 'elite';
+  return value === 'basic' || value === 'premium';
 }
 
 /** Monthly price (as a number, in the country's own currency) for a tier. */

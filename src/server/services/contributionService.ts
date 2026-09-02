@@ -7,11 +7,12 @@ import { createAuditLog } from '../middleware/auditLogger.js';
 import { notificationService } from './notificationService.js';
 import { trustScoreService } from './trustScoreService.js';
 import { membershipService } from './membershipService.js';
-import { TRUST_SCORE_DELTA_CONTRIBUTION_PAID, TRUST_SCORE_DELTA_CONTRIBUTION_MISSED } from '../lib/constants.js';
+import { TRUST_SCORE_DELTA_CONTRIBUTION_PAID, TRUST_SCORE_DELTA_CONTRIBUTION_MISSED, CONTRIBUTION_DEFAULT_GRACE_PERIOD_MS } from '../lib/constants.js';
 import {
   sendContributionSuccessEmail,
-  sendContributionFailedEmail,
   sendContributionOverdueEmail,
+  sendPaymentGracePeriodStartedEmail,
+  sendMemberDefaultSuspensionEmail,
 } from '../integrations/email/emailService.js';
 
 export const contributionService = {
@@ -46,7 +47,18 @@ export const contributionService = {
     return id;
   },
 
-  async markPaid(contributionId: string, providerReference: string, ipAddress?: string, feeAmount?: string) {
+  async markPaid(
+    contributionId: string,
+    providerReference: string,
+    ipAddress?: string,
+    feeBreakdown?: {
+      feeAmount?: string;
+      cardFeeAmount?: string;
+      cardFeeVatAmount?: string;
+      payoutFeeShareAmount?: string;
+      payoutFeeShareVatAmount?: string;
+    },
+  ) {
     
     const rows = await db.select().from(schema.contributions)
       .where(eq(schema.contributions.id, contributionId)).limit(1);
@@ -61,7 +73,11 @@ export const contributionService = {
     await db.update(schema.contributions).set({
       payment_status:     'paid',
       amount_paid:        c.amount_due,
-      fee_amount:          feeAmount ?? c.fee_amount,
+      fee_amount:                  feeBreakdown?.feeAmount ?? c.fee_amount,
+      card_fee_amount:             feeBreakdown?.cardFeeAmount ?? c.card_fee_amount,
+      card_fee_vat_amount:         feeBreakdown?.cardFeeVatAmount ?? c.card_fee_vat_amount,
+      payout_fee_share_amount:     feeBreakdown?.payoutFeeShareAmount ?? c.payout_fee_share_amount,
+      payout_fee_share_vat_amount: feeBreakdown?.payoutFeeShareVatAmount ?? c.payout_fee_share_vat_amount,
       paid_date:          new Date(),
       provider_reference: providerReference,
     }).where(eq(schema.contributions.id, contributionId));
@@ -85,7 +101,21 @@ export const contributionService = {
     return true;
   },
 
-  async markFailed(contributionId: string, ipAddress?: string) {
+  /**
+   * A real charge attempt failed (Section 6 — distinct from markMissed,
+   * which fires when a contribution reaches its due date without any
+   * charge attempt ever completing). First failure: start the single
+   * 72-hour grace period (status -> 'pending_default'), notify the member
+   * and the group, and stop — NO charge happens again until the grace
+   * period ends. `isGraceRetry` is passed by dailyContributionDefaultRetry
+   * once, at the end of that grace period; if that single retry also
+   * fails, the contribution is marked 'defaulted' and the member is
+   * flagged via membershipService.flagDefault (which itself decides,
+   * based on the group's max-permitted-defaults setting, whether to retain
+   * the member or trigger Compensated Compression). No further retries,
+   * continuous payment authority, or substitute-member matching occurs.
+   */
+  async markFailed(contributionId: string, ipAddress?: string, isGraceRetry = false) {
     
     const rows = await db.select().from(schema.contributions)
       .where(eq(schema.contributions.id, contributionId)).limit(1);
@@ -93,26 +123,66 @@ export const contributionService = {
     const c = rows[0];
 
     // Idempotent — don't downgrade an already-paid contribution, and don't
-    // re-notify if it was already marked failed by an earlier attempt.
-    if (c.payment_status === 'paid' || c.payment_status === 'failed') return true;
-
-    await db.update(schema.contributions)
-      .set({ payment_status: 'failed' })
-      .where(eq(schema.contributions.id, contributionId));
-
-    await createAuditLog({ userId: c.member_id, action: 'CONTRIBUTION_FAILED', entity: 'contributions', entityId: contributionId, ipAddress });
-    await notificationService.create({
-      userId: c.member_id, type: 'contribution_failed',
-      title: 'Contribution Failed',
-      message: `Your contribution for cycle ${c.cycle_number} failed. Please retry.`,
-    });
+    // re-process a contribution that's already been carried past this point.
+    if (c.payment_status === 'paid' || c.payment_status === 'defaulted') return true;
 
     const userRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, c.member_id)).limit(1);
     const groupRow = await db.select({ name: schema.savingsGroups.name, currency: schema.savingsGroups.currency }).from(schema.savingsGroups).where(eq(schema.savingsGroups.id, c.group_id)).limit(1);
-    if (userRow.length && groupRow.length) {
-      const amount = `${groupRow[0].currency} ${parseFloat(c.amount_due).toFixed(2)}`;
-      await sendContributionFailedEmail(userRow[0].email, groupRow[0].name, amount);
+    const amount = groupRow.length ? `${groupRow[0].currency} ${parseFloat(c.amount_due).toFixed(2)}` : c.amount_due;
+
+    if (!isGraceRetry && c.payment_status !== 'pending_default') {
+      // First failure — start the 72-hour grace period. No default is
+      // recorded yet and no further action is taken until the single
+      // automatic retry runs at the end of the grace period.
+      const graceEndsAt = new Date(Date.now() + CONTRIBUTION_DEFAULT_GRACE_PERIOD_MS);
+      await db.update(schema.contributions)
+        .set({ payment_status: 'pending_default', grace_period_ends_at: graceEndsAt, retry_attempted: false })
+        .where(eq(schema.contributions.id, contributionId));
+
+      await createAuditLog({ userId: c.member_id, action: 'CONTRIBUTION_GRACE_PERIOD_STARTED', entity: 'contributions', entityId: contributionId, ipAddress, metadata: { graceEndsAt } });
+      await notificationService.create({
+        userId: c.member_id, type: 'contribution_grace_period_started',
+        title: 'Payment Failed — Grace Period Started',
+        message: `Your contribution for cycle ${c.cycle_number} failed. You have a 72-hour grace period before a single automatic retry on ${graceEndsAt.toLocaleString('en-GB')}.`,
+      });
+
+      const activeMembers = await db.select().from(schema.memberships)
+        .where(and(eq(schema.memberships.group_id, c.group_id), eq(schema.memberships.status, 'active')));
+      for (const m of activeMembers) {
+        if (m.user_id === c.member_id) continue;
+        await notificationService.create({
+          userId: m.user_id, type: 'group_member_payment_grace_period',
+          title: 'Member Payment Pending',
+          message: `A member's contribution for cycle ${c.cycle_number} failed and is now in a 72-hour grace period before one automatic retry.`,
+        });
+      }
+
+      if (userRow.length && groupRow.length) {
+        await sendPaymentGracePeriodStartedEmail(userRow[0].email, groupRow[0].name, amount, graceEndsAt.toLocaleString('en-GB'));
+      }
+      return true;
     }
+
+    // The single automatic retry (or a first attempt already past its own
+    // grace deadline) also failed — record the default and hand off to
+    // membershipService to decide retain-vs-Compensated-Compression.
+    await db.update(schema.contributions)
+      .set({ payment_status: 'defaulted', retry_attempted: true })
+      .where(eq(schema.contributions.id, contributionId));
+
+    await createAuditLog({ userId: c.member_id, action: 'CONTRIBUTION_DEFAULTED', entity: 'contributions', entityId: contributionId, ipAddress });
+    await notificationService.create({
+      userId: c.member_id, type: 'contribution_defaulted',
+      title: 'Contribution Defaulted',
+      message: `Your contribution for cycle ${c.cycle_number} is now in default after the automatic retry also failed.`,
+    });
+    await trustScoreService.decrease(c.member_id, TRUST_SCORE_DELTA_CONTRIBUTION_MISSED, 'CONTRIBUTION_MISSED');
+
+    if (userRow.length && groupRow.length) {
+      await sendMemberDefaultSuspensionEmail(userRow[0].email, groupRow[0].name, amount);
+    }
+
+    await membershipService.flagDefault(c.member_id, c.group_id, contributionId, ipAddress);
     return true;
   },
 

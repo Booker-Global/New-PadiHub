@@ -8,8 +8,8 @@ const fadeUp = { hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0, tra
 const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.1 } } };
 
 const tierConfig = {
-  pro: { name: 'Pro Group', price: { GB: '£4.99', NG: '₦5,000' } },
-  elite: { name: 'Elite Group', price: { GB: '£9.99', NG: '₦10,000' } },
+  basic: { name: 'Basic', price: { GB: '£4.99', NG: '₦5,000' } },
+  premium: { name: 'Premium', price: { GB: '£14.99', NG: '₦10,000' } },
 } as const;
 
 type TierKey = keyof typeof tierConfig;
@@ -23,7 +23,7 @@ const nextSteps = [
 ];
 
 function resolveSelection(plan: string | null, tier: string | null, country: string | null): { tier: TierKey; country: CountryCode } {
-  const resolvedTier = tier === 'elite' || plan?.includes('elite') ? 'elite' : 'pro';
+  const resolvedTier = tier === 'premium' || plan?.includes('premium') ? 'premium' : 'basic';
   const resolvedCountry = country === 'NG' || plan?.startsWith('ng_') || plan?.startsWith('ng-') ? 'NG' : 'GB';
   return { tier: resolvedTier, country: resolvedCountry };
 }

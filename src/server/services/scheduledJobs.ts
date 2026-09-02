@@ -12,21 +12,27 @@ import { contributionService } from './contributionService.js';
 import { rotationService } from './rotationService.js';
 import { notificationService } from './notificationService.js';
 import { monitoringService } from './monitoringService.js';
+import { groupService } from './groupService.js';
 import { chargeContributionForUser } from '../controllers/paymentController.js';
 import { getFlutterwaveProvider } from '../integrations/payments/PaymentProviderFactory.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { computeNextPayoutDate } from '../lib/payoutSchedule.js';
-import { SUBSCRIPTION_TIERS, isSubscriptionTierKey, getTierMonthlyPrice } from '../lib/constants.js';
-import { planCode } from './subscriptionService.js';
+import {
+  SUBSCRIPTION_TIERS, isSubscriptionTierKey, getTierMonthlyPrice,
+  GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH, GROUP_STUCK_BELOW_MIN_EXPIRY_DAYS, GROUP_STUCK_EXPIRY_REMINDER_DAYS_BEFORE,
+} from '../lib/constants.js';
+import { planCode, subscriptionService } from './subscriptionService.js';
 import {
   sendContributionReminderEmail,
   sendSubscriptionRenewalReminderEmail,
+  sendGroupExpiredEmail,
+  sendGroupExpiryReminderEmail,
 } from '../integrations/email/emailService.js';
 
-// Nigeria "Pro Group" price is the default fallback if a user somehow has no
+// Nigeria "Basic" tier price is the default fallback if a user somehow has no
 // recognised subscription_tier recorded — see SUBSCRIPTION_TIERS in
 // ../lib/constants.ts for the authoritative tier pricing/limits.
-const DEFAULT_FLUTTERWAVE_SUBSCRIPTION_AMOUNT_NGN = SUBSCRIPTION_TIERS.pro.priceNGN;
+const DEFAULT_FLUTTERWAVE_SUBSCRIPTION_AMOUNT_NGN = SUBSCRIPTION_TIERS.basic.priceNGN;
 
 function getFlutterwaveSubscriptionAmount(subscriptionTier?: string | null) {
   if (isSubscriptionTierKey(subscriptionTier)) {
@@ -162,12 +168,130 @@ export async function dailyFailedPaymentCheck(): Promise<void> {
   });
 }
 
+/**
+ * Section 6 — the single automatic retry at the end of a contribution's
+ * 72-hour grace period. Finds every 'pending_default' contribution whose
+ * grace_period_ends_at has passed and hasn't been retried yet, attempts
+ * the charge exactly once more, and lets contributionService.markFailed /
+ * membershipService.flagDefault decide retain-vs-Compensated-Compression
+ * if it fails again. No further retries ever happen after this.
+ */
+export async function dailyContributionDefaultRetry(): Promise<void> {
+  await runJob('daily_contribution_default_retry', async () => {
+    const now = new Date();
+    const due = await db.select().from(schema.contributions)
+      .where(and(
+        eq(schema.contributions.payment_status, 'pending_default'),
+        eq(schema.contributions.retry_attempted, false),
+        lte(schema.contributions.grace_period_ends_at, now),
+      ));
+
+    for (const c of due) {
+      try {
+        await chargeContributionForUser(c.member_id, c.id, true);
+      } catch (err) {
+        // Whether the provider threw (e.g. a hard card decline) or simply
+        // never got the chance to call markFailed, make sure the single
+        // retry is always recorded as attempted — this is the one and only
+        // retry, so it must not silently repeat on the next run.
+        console.warn(
+          `[Job] daily_contribution_default_retry: contribution ${c.id} retry failed:`,
+          err instanceof Error ? err.message : err,
+        );
+        await contributionService.markFailed(c.id, undefined, true);
+      }
+    }
+  });
+}
+
 /** Delete notifications older than 90 days */
 export async function dailyNotificationCleanup(): Promise<void> {
   await runJob('daily_notification_cleanup', async () => {
     const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
     await db.delete(schema.notifications)
       .where(lt(schema.notifications.created_at, cutoff));
+  });
+}
+
+/**
+ * Section 1 — any group stuck below GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH for
+ * GROUP_STUCK_BELOW_MIN_EXPIRY_DAYS (30) auto-expires, whether it's a
+ * never-launched Draft (anchored on created_at) or a launched-then-dropped
+ * Suspended group (anchored on suspended_at). Sends reminder nudges at
+ * 7/3/1 days before the deadline so the leader has a chance to refill it.
+ */
+export async function dailyGroupLifecycleExpiry(): Promise<void> {
+  await runJob('daily_group_lifecycle_expiry', async () => {
+    const stuckGroups = await db.select().from(schema.savingsGroups)
+      .where(inArray(schema.savingsGroups.status, ['draft', 'suspended']));
+
+    const now = Date.now();
+    for (const group of stuckGroups) {
+      const activeCount = await groupService.countActiveMembers(group.id);
+      if (activeCount >= GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH) continue;
+
+      const anchor = (group.status === 'suspended' ? group.suspended_at : null) ?? group.created_at;
+      const daysStuck = (now - new Date(anchor).getTime()) / (24 * 60 * 60 * 1000);
+      const daysRemaining = Math.ceil(GROUP_STUCK_BELOW_MIN_EXPIRY_DAYS - daysStuck);
+
+      if (daysStuck >= GROUP_STUCK_BELOW_MIN_EXPIRY_DAYS) {
+        await db.update(schema.savingsGroups).set({ status: 'expired' }).where(eq(schema.savingsGroups.id, group.id));
+        await createAuditLog({ action: 'GROUP_AUTO_EXPIRED', entity: 'savings_groups', entityId: group.id, metadata: { activeCount, daysStuck } });
+        await notificationService.create({
+          userId: group.leader_id, type: 'group_expired',
+          title: 'Group Expired',
+          message: `"${group.name}" remained below ${GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH} members for 30 days and has expired.`,
+        });
+        const leaderRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, group.leader_id)).limit(1);
+        if (leaderRow.length) await sendGroupExpiredEmail(leaderRow[0].email, group.name);
+        continue;
+      }
+
+      if (GROUP_STUCK_EXPIRY_REMINDER_DAYS_BEFORE.includes(daysRemaining)) {
+        await notificationService.create({
+          userId: group.leader_id, type: 'group_expiry_reminder',
+          title: 'Group Expiring Soon',
+          message: `"${group.name}" will expire in ${daysRemaining} day(s) unless it reaches ${GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH} active members.`,
+        });
+        const leaderRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, group.leader_id)).limit(1);
+        if (leaderRow.length) await sendGroupExpiryReminderEmail(leaderRow[0].email, group.name, daysRemaining);
+      }
+    }
+  });
+}
+
+/**
+ * Section 3 — subscription billing only stays "live" while a user's
+ * active-group-membership count is above zero; pause it the moment that
+ * count hits exactly zero, and resume it automatically once they're a
+ * verified member of an active group again. See
+ * subscriptionService.reconcileBillingForActiveGroupMembership for the
+ * bookkeeping-only mechanics and its documented limitations.
+ */
+export async function dailyBillingActiveGroupReconciliation(): Promise<void> {
+  await runJob('daily_billing_active_group_reconciliation', async () => {
+    const subs = await db.select({ user_id: schema.subscriptions.user_id })
+      .from(schema.subscriptions)
+      .where(inArray(schema.subscriptions.billing_status, ['active', 'paused']));
+
+    for (const sub of subs) {
+      await subscriptionService.reconcileBillingForActiveGroupMembership(sub.user_id);
+    }
+  });
+}
+
+/**
+ * Section 4 — governance votes (member_admission, contribution_claim,
+ * payout_swap) must auto-resolve once their 48h voting_deadline passes,
+ * since checkAndClose is otherwise only invoked reactively when a member
+ * casts a response. Without this sweep, a vote nobody responds to would
+ * stay 'open' forever instead of invalidating per the "timeout invalidates"
+ * rule.
+ */
+export async function dailyGovernanceVoteExpiry(): Promise<void> {
+  await runJob('daily_governance_vote_expiry', async () => {
+    const { voteService } = await import('./voteService.js');
+    await voteService.expireOverdueVotes();
   });
 }
 
@@ -430,7 +554,11 @@ export const dailyJobs = [
   dailyTrustScoreUpdates,
   dailyAutoChargeDueContributions,
   dailyOverdueCheck,
+  dailyContributionDefaultRetry,
   dailyFailedPaymentCheck,
+  dailyGroupLifecycleExpiry,
+  dailyBillingActiveGroupReconciliation,
+  dailyGovernanceVoteExpiry,
   dailyNotificationCleanup,
 ];
 

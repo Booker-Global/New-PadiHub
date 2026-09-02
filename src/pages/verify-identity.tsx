@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Helmet } from '@dr.pogodin/react-helmet';
+import { loadStripe } from '@stripe/stripe-js';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle,
   CheckCircle,
   ChevronLeft,
-  ExternalLink,
+  Clock,
   Shield,
 } from 'lucide-react';
 import DashboardLayout from '@/components/DashboardLayout';
@@ -31,25 +32,36 @@ interface ApiResponse<T> {
   errors?: Record<string, string[] | undefined>;
 }
 
+type IdentityVerificationStatus = 'not_started' | 'pending' | 'verified' | 'failed';
+
 interface IdentityStatus {
   verified: boolean;
+  status: IdentityVerificationStatus;
   verifiedAt?: string;
   sessionId?: string;
   bypass_available: boolean;
 }
 
 interface StripeVerificationStartResponse {
+  sessionId?: string;
+  clientSecret?: string;
   url?: string;
 }
 
-interface BvnVerificationStartResponse {
+interface Bank {
+  code: string;
+  name: string;
+}
+
+interface AccountResolveResponse {
+  verified?: boolean;
+  accountName?: string;
   message?: string;
 }
 
-interface BvnVerificationConfirmResponse {
-  verified?: boolean;
-  message?: string;
-}
+const STRIPE_PUBLISHABLE_KEY = (
+  import.meta.env as Record<string, string | undefined>
+).VITE_STRIPE_PUBLISHABLE_KEY?.trim() || '';
 
 function getErrorMessage<T>(json: ApiResponse<T> | null, fallback: string) {
   const firstFieldError = json?.errors
@@ -78,6 +90,10 @@ function formatVerifiedDate(value?: string) {
   return parsed.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+function delay(ms: number) {
+  return new Promise<void>(resolve => { window.setTimeout(resolve, ms); });
+}
+
 export default function VerifyIdentityPage() {
   const [searchParams] = useSearchParams();
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -86,15 +102,30 @@ export default function VerifyIdentityPage() {
   const [error, setError] = useState('');
   const [actionError, setActionError] = useState('');
   const [actionNotice, setActionNotice] = useState('');
-  const [bvn, setBvn] = useState('');
-  const [otp, setOtp] = useState('');
-  const [otpRequested, setOtpRequested] = useState(false);
+  const [accountNumber, setAccountNumber] = useState('');
+  const [bankCode, setBankCode] = useState('');
+  const [banks, setBanks] = useState<Bank[]>([]);
+  const [banksLoading, setBanksLoading] = useState(false);
+  const [banksError, setBanksError] = useState('');
   const [startLoading, setStartLoading] = useState(false);
-  const [confirmLoading, setConfirmLoading] = useState(false);
+  const [resolveLoading, setResolveLoading] = useState(false);
   const [bypassLoading, setBypassLoading] = useState(false);
+  const [awaitingWebhook, setAwaitingWebhook] = useState(false);
+  const pollAbortRef = useRef(false);
 
   const returnPath = getReturnPath(searchParams);
   const returnLabel = getReturnLabel(returnPath);
+
+  const fetchStatus = useCallback(async (): Promise<IdentityStatus | null> => {
+    const session = getValidSession();
+    if (!session?.token) return null;
+    const response = await window.fetch('/api/identity/status', {
+      headers: { Authorization: 'Bearer ' + session.token },
+    });
+    const json = await response.json().catch(() => null) as ApiResponse<IdentityStatus> | null;
+    if (!response.ok) return null;
+    return json?.data ?? null;
+  }, []);
 
   const loadIdentityState = useCallback(async (showLoading = true) => {
     const session = getValidSession();
@@ -124,6 +155,20 @@ export default function VerifyIdentityPage() {
 
       setStatus(statusJson?.data ?? null);
       setProfile(profileJson?.data ?? null);
+
+      if (profileJson?.data?.country === 'NG' && banks.length === 0 && !banksLoading) {
+        setBanksLoading(true);
+        try {
+          const banksResponse = await window.fetch('/api/payments/banks', { headers });
+          const banksJson = await banksResponse.json().catch(() => null) as ApiResponse<Bank[]> | null;
+          if (!banksResponse.ok) throw new Error(getErrorMessage(banksJson, 'Could not load the list of banks.'));
+          setBanks(banksJson?.data ?? []);
+        } catch (banksFetchError) {
+          setBanksError(banksFetchError instanceof Error ? banksFetchError.message : 'Could not load the list of banks.');
+        } finally {
+          setBanksLoading(false);
+        }
+      }
     } catch (loadError) {
       setStatus(null);
       setProfile(null);
@@ -131,16 +176,41 @@ export default function VerifyIdentityPage() {
     } finally {
       if (showLoading) setLoading(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     void loadIdentityState();
+    return () => { pollAbortRef.current = true; };
   }, [loadIdentityState]);
+
+  // After the embedded Stripe Identity modal closes, the terminal
+  // verified/failed result only lands via webhook (not synchronously), so
+  // briefly poll for the status to move off "pending" before giving up and
+  // just leaving the page showing "Pending".
+  const pollForWebhookResult = async () => {
+    setAwaitingWebhook(true);
+    pollAbortRef.current = false;
+    for (let attempt = 0; attempt < 10 && !pollAbortRef.current; attempt++) {
+      await delay(2000);
+      const latest = await fetchStatus();
+      if (latest && latest.status !== 'pending') {
+        setStatus(latest);
+        break;
+      }
+    }
+    setAwaitingWebhook(false);
+    await loadIdentityState(false);
+  };
 
   const handleStartStripeVerification = async () => {
     const session = getValidSession();
     if (!session?.token) {
       setActionError('Please log in again before starting identity verification.');
+      return;
+    }
+    if (!STRIPE_PUBLISHABLE_KEY) {
+      setActionError('Stripe Identity is not configured. Please contact support.');
       return;
     }
 
@@ -158,100 +228,73 @@ export default function VerifyIdentityPage() {
         throw new Error(getErrorMessage(json, 'Could not start Stripe Identity verification.'));
       }
 
-      const url = json?.data?.url;
-      if (!url) {
-        throw new Error('The verification service did not return a hosted verification link.');
+      const clientSecret = json?.data?.clientSecret;
+      if (!clientSecret) {
+        throw new Error('The verification service did not return a client secret.');
       }
 
-      window.location.href = url;
+      const stripe = await loadStripe(STRIPE_PUBLISHABLE_KEY);
+      if (!stripe) {
+        throw new Error('Could not load Stripe. Please try again.');
+      }
+
+      // Embedded modal, opened directly from our own dashboard — never a
+      // redirect to a separate Stripe-hosted page.
+      const result = await stripe.verifyIdentity(clientSecret);
+      if (result.error) {
+        throw new Error(result.error.message || 'Identity verification was not completed.');
+      }
+
+      setActionNotice('Verification submitted — we\'re confirming the result now. Your card will not be charged until it succeeds.');
+      await loadIdentityState(false);
+      await pollForWebhookResult();
     } catch (startError) {
       setActionError(startError instanceof Error ? startError.message : 'Could not start Stripe Identity verification.');
-      setStartLoading(false);
-    }
-  };
-
-  const handleStartBvnVerification = async () => {
-    const session = getValidSession();
-    if (!session?.token) {
-      setActionError('Please log in again before starting BVN verification.');
-      return;
-    }
-
-    if (!/^\d{11}$/.test(bvn)) {
-      setActionError('Enter your 11-digit BVN to continue.');
-      return;
-    }
-
-    setStartLoading(true);
-    setActionError('');
-    setActionNotice('');
-
-    try {
-      const response = await window.fetch('/api/identity/bvn/verify', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: 'Bearer ' + session.token,
-        },
-        body: JSON.stringify({ bvn }),
-      });
-      const json = await response.json().catch(() => null) as ApiResponse<BvnVerificationStartResponse> | null;
-      if (!response.ok) {
-        throw new Error(getErrorMessage(json, 'Could not start BVN verification.'));
-      }
-
-      setOtpRequested(true);
-      setOtp('');
-      setActionNotice(json?.data?.message || 'OTP sent to your BVN-registered phone number.');
-    } catch (startError) {
-      setActionError(startError instanceof Error ? startError.message : 'Could not start BVN verification.');
     } finally {
       setStartLoading(false);
     }
   };
 
-  const handleConfirmBvnVerification = async () => {
+  const handleResolveAccount = async () => {
     const session = getValidSession();
     if (!session?.token) {
-      setActionError('Please log in again before confirming your OTP.');
+      setActionError('Please log in again before validating your bank account.');
+      return;
+    }
+    if (!accountNumber.trim() || !bankCode) {
+      setActionError('Enter your account number and select your bank to continue.');
       return;
     }
 
-    if (!otp.trim()) {
-      setActionError('Enter the OTP sent to your phone.');
-      return;
-    }
-
-    setConfirmLoading(true);
+    setResolveLoading(true);
     setActionError('');
     setActionNotice('');
 
     try {
-      const response = await window.fetch('/api/identity/bvn/confirm', {
+      const response = await window.fetch('/api/identity/ng/resolve-account', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer ' + session.token,
         },
-        body: JSON.stringify({ otp: otp.trim() }),
+        body: JSON.stringify({ account_number: accountNumber.trim(), bank_code: bankCode }),
       });
-      const json = await response.json().catch(() => null) as ApiResponse<BvnVerificationConfirmResponse> | null;
+      const json = await response.json().catch(() => null) as ApiResponse<AccountResolveResponse> | null;
       if (!response.ok) {
-        throw new Error(getErrorMessage(json, 'Could not confirm your OTP.'));
+        throw new Error(getErrorMessage(json, 'Could not validate your bank account.'));
       }
 
       if (json?.data?.verified) {
-        setActionNotice(json.data.message || 'Your identity has been verified.');
-        setOtpRequested(false);
+        setActionNotice(json.data.message || 'Your bank account has been validated. Your subscription is now active.');
         await loadIdentityState(false);
         return;
       }
 
-      setActionError(json?.data?.message || 'OTP verification failed. Please try again.');
-    } catch (confirmError) {
-      setActionError(confirmError instanceof Error ? confirmError.message : 'Could not confirm your OTP.');
+      setActionError(json?.data?.message || 'Could not validate your bank account. Please double-check the details and try again.');
+    } catch (resolveError) {
+      setActionError(resolveError instanceof Error ? resolveError.message : 'Could not validate your bank account.');
     } finally {
-      setConfirmLoading(false);
+      setResolveLoading(false);
     }
   };
 
@@ -277,7 +320,6 @@ export default function VerifyIdentityPage() {
       }
 
       setActionNotice(json?.message || 'Identity verification skipped in test mode.');
-      setOtpRequested(false);
       await loadIdentityState(false);
     } catch (bypassError) {
       setActionError(bypassError instanceof Error ? bypassError.message : 'Could not skip identity verification.');
@@ -291,15 +333,17 @@ export default function VerifyIdentityPage() {
   }
 
   const isVerified = Boolean(status?.verified || profile?.identity_verified);
+  const isPending = status?.status === 'pending' && !isVerified;
+  const isFailed = status?.status === 'failed' && !isVerified;
   const verifiedDate = formatVerifiedDate(status?.verifiedAt || profile?.identity_verified_at || undefined);
   const isUkUser = profile?.country === 'GB';
   const verificationStatusLabel = isVerified
     ? 'Verified'
-    : isUkUser && status?.sessionId
-      ? 'Started — not verified yet'
-      : otpRequested
-        ? 'OTP sent'
-        : 'Not verified yet';
+    : isPending
+      ? 'Pending'
+      : isFailed
+        ? 'Needs another attempt'
+        : 'Not started';
 
   return (
     <DashboardLayout>
@@ -337,7 +381,9 @@ export default function VerifyIdentityPage() {
               <div className="mb-5">
                 <h1 className="text-2xl font-extrabold text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>Verify your identity</h1>
                 <p className="text-sm text-gray-500 mt-1">
-                  Complete identity verification to unlock savings-group creation and joining.
+                  {isUkUser
+                    ? 'Your card is saved but will not be charged until verification succeeds. Once verified, your subscription starts and you can create/join savings groups.'
+                    : 'Your card is saved but your subscription will not be charged until your bank account details are validated. Once validated, your subscription starts and you can create/join savings groups.'}
                 </p>
               </div>
 
@@ -357,19 +403,26 @@ export default function VerifyIdentityPage() {
               <div className="rounded-3xl p-5 mb-5 bg-white" style={{ border: '1px solid #E5E7EB' }}>
                 <div className="flex items-center justify-between gap-3 mb-4">
                   <div>
-                    <p className="text-xs text-gray-500 mb-1">Verification provider</p>
-                    <p className="font-bold text-gray-900">{isUkUser ? 'Stripe Identity (UK)' : 'BVN verification (Nigeria)'}</p>
+                    <p className="text-xs text-gray-500 mb-1">Verification method</p>
+                    <p className="font-bold text-gray-900">{isUkUser ? 'Stripe Identity (UK)' : 'Bank account validation — Account Resolve (Nigeria)'}</p>
                   </div>
                   <span
-                    className="text-xs font-bold px-3 py-1 rounded-full"
+                    className="text-xs font-bold px-3 py-1 rounded-full inline-flex items-center gap-1"
                     style={{
-                      color: isVerified ? '#2EAF6F' : '#F59E0B',
-                      background: isVerified ? 'rgba(46,175,111,0.12)' : 'rgba(245,158,11,0.12)',
+                      color: isVerified ? '#2EAF6F' : isFailed ? '#EF4444' : '#F59E0B',
+                      background: isVerified ? 'rgba(46,175,111,0.12)' : isFailed ? 'rgba(239,68,68,0.12)' : 'rgba(245,158,11,0.12)',
                     }}
                   >
+                    {isPending && <Clock size={12} />}
                     {verificationStatusLabel}
                   </span>
                 </div>
+
+                {!isUkUser && (
+                  <div className="rounded-2xl p-3 mb-4 text-xs text-gray-600" style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
+                    Account Resolve confirms your bank account number matches a real account holder&apos;s name — it is a preliminary bank-account check, not full identity/KYC verification. A fuller identity-verification step may be added later.
+                  </div>
+                )}
 
                 {isVerified ? (
                   <div className="space-y-4">
@@ -378,7 +431,7 @@ export default function VerifyIdentityPage() {
                       <div>
                         <p className="text-sm font-semibold text-gray-900">You&apos;re verified</p>
                         <p className="text-sm text-gray-700">
-                          Your identity verification is complete{verifiedDate ? ` as of ${verifiedDate}` : ''}. You can continue using PadiHub.
+                          Verification is complete{verifiedDate ? ` as of ${verifiedDate}` : ''} and your subscription is active. You can continue using PadiHub.
                         </p>
                       </div>
                     </div>
@@ -394,75 +447,61 @@ export default function VerifyIdentityPage() {
                 ) : isUkUser ? (
                   <div className="space-y-4">
                     <div className="rounded-2xl p-4 text-sm text-gray-700" style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
-                      Stripe&apos;s secure hosted flow will ask for an identity document and a matching selfie. It opens in a new page and returns you to PadiHub when you&apos;re done.
+                      A secure verification window will open right here on PadiHub and ask for an identity document and a matching selfie — you never leave the dashboard.
                     </div>
 
                     <button
                       onClick={() => void handleStartStripeVerification()}
-                      disabled={startLoading}
+                      disabled={startLoading || awaitingWebhook}
                       className="w-full py-3 rounded-2xl font-bold text-white inline-flex items-center justify-center gap-2 transition-all disabled:cursor-not-allowed disabled:opacity-60"
                       style={{ background: 'linear-gradient(135deg, #2eafaf, #1f8f8f)' }}
                     >
-                      {startLoading ? 'Opening Stripe Identity…' : status.sessionId ? 'Continue with Stripe Identity' : 'Verify with Stripe Identity'}
-                      {!startLoading && <ExternalLink size={16} />}
+                      {awaitingWebhook ? 'Confirming result…' : startLoading ? 'Opening verification…' : isFailed || status.sessionId ? 'Try verification again' : 'Verify with Stripe Identity'}
                     </button>
                   </div>
                 ) : (
                   <div className="space-y-4">
                     <div>
-                      <label className="block text-xs font-semibold text-gray-500 mb-1">BVN</label>
+                      <label className="block text-xs font-semibold text-gray-500 mb-1">Bank</label>
+                      <select
+                        value={bankCode}
+                        onChange={event => { setBankCode(event.target.value); setActionError(''); }}
+                        disabled={banksLoading || Boolean(banksError)}
+                        className="w-full rounded-xl px-3.5 py-2.5 text-sm"
+                        style={{ border: '1px solid #E5E7EB' }}
+                      >
+                        <option value="">
+                          {banksLoading ? 'Loading banks…' : banksError ? 'Could not load banks' : 'Select your bank'}
+                        </option>
+                        {banks.map(bank => (
+                          <option key={bank.code} value={bank.code}>{bank.name}</option>
+                        ))}
+                      </select>
+                      {banksError && <p className="text-xs mt-1" style={{ color: '#EF4444' }}>{banksError}</p>}
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-500 mb-1">Account number</label>
                       <input
-                        value={bvn}
+                        value={accountNumber}
                         onChange={event => {
-                          setBvn(event.target.value.replace(/\D/g, '').slice(0, 11));
+                          setAccountNumber(event.target.value.replace(/\D/g, '').slice(0, 10));
                           setActionError('');
                         }}
                         inputMode="numeric"
-                        maxLength={11}
+                        maxLength={10}
                         className="w-full rounded-xl px-3.5 py-2.5 text-sm"
                         style={{ border: '1px solid #E5E7EB' }}
-                        placeholder="Enter your 11-digit BVN"
+                        placeholder="Enter your account number"
                       />
                     </div>
-
-                    {!otpRequested ? (
-                      <button
-                        onClick={() => void handleStartBvnVerification()}
-                        disabled={startLoading || bvn.length !== 11}
-                        className="w-full py-3 rounded-2xl font-bold text-white inline-flex items-center justify-center gap-2 transition-all disabled:cursor-not-allowed disabled:opacity-60"
-                        style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}
-                      >
-                        {startLoading ? 'Sending OTP…' : 'Send OTP'}
-                      </button>
-                    ) : (
-                      <div className="space-y-4">
-                        <div className="rounded-2xl p-3 text-sm text-gray-700" style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
-                          Enter the OTP sent to the phone number linked to your BVN.
-                        </div>
-                        <div>
-                          <label className="block text-xs font-semibold text-gray-500 mb-1">OTP</label>
-                          <input
-                            value={otp}
-                            onChange={event => {
-                              setOtp(event.target.value.replace(/\D/g, ''));
-                              setActionError('');
-                            }}
-                            inputMode="numeric"
-                            className="w-full rounded-xl px-3.5 py-2.5 text-sm"
-                            style={{ border: '1px solid #E5E7EB' }}
-                            placeholder="Enter OTP"
-                          />
-                        </div>
-                        <button
-                          onClick={() => void handleConfirmBvnVerification()}
-                          disabled={confirmLoading || !otp.trim()}
-                          className="w-full py-3 rounded-2xl font-bold text-white inline-flex items-center justify-center gap-2 transition-all disabled:cursor-not-allowed disabled:opacity-60"
-                          style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}
-                        >
-                          {confirmLoading ? 'Verifying OTP…' : 'Confirm OTP'}
-                        </button>
-                      </div>
-                    )}
+                    <button
+                      onClick={() => void handleResolveAccount()}
+                      disabled={resolveLoading || !accountNumber.trim() || !bankCode}
+                      className="w-full py-3 rounded-2xl font-bold text-white inline-flex items-center justify-center gap-2 transition-all disabled:cursor-not-allowed disabled:opacity-60"
+                      style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}
+                    >
+                      {resolveLoading ? 'Validating…' : isFailed ? 'Try again' : 'Validate & Continue'}
+                    </button>
                   </div>
                 )}
               </div>

@@ -20,11 +20,18 @@ import {
   RefreshCw,
   ThumbsUp,
   ThumbsDown,
+  PlayCircle,
 } from 'lucide-react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { Button } from '@/components/ui/button';
 import { SkeletonPage } from '@/components/ui/loading-skeleton';
 import { getValidSession } from '@/lib/session';
+
+// Mirrors GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH in src/server/lib/constants.ts —
+// a group can only move from "draft" to "active" once it has this many
+// verified (active) members; the backend is the real gate, this is just for
+// disabling the "Start Group" button and showing progress up front.
+const GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH = 3;
 
 const fadeUp = {
   hidden: { opacity: 0, y: 16 },
@@ -42,7 +49,7 @@ interface SavingsGroup {
   country: 'GB' | 'NG';
   currency: 'GBP' | 'NGN';
   contribution_amount: string | number;
-  contribution_frequency: 'weekly' | 'monthly';
+  contribution_frequency: 'daily' | 'weekly' | 'monthly';
   maximum_members: number;
   rotation_method: 'manual' | 'random';
   current_rotation_position: number;
@@ -52,7 +59,7 @@ interface SavingsGroup {
   voting_threshold: number;
   allow_payout_swaps: boolean;
   payment_provider: 'stripe' | 'flutterwave';
-  status: 'active' | 'closed' | 'suspended';
+  status: 'draft' | 'active' | 'suspended' | 'closed' | 'expired';
   created_at: string;
   updated_at: string;
 }
@@ -77,7 +84,8 @@ interface Contribution {
   amount_paid?: string | number | null;
   due_date: string;
   paid_date?: string | null;
-  payment_status: 'scheduled' | 'due' | 'paid' | 'failed' | 'missed';
+  payment_status: 'scheduled' | 'due' | 'paid' | 'failed' | 'missed' | 'pending_default' | 'defaulted';
+  grace_period_ends_at?: string | null;
 }
 
 interface RotationInfo {
@@ -101,7 +109,7 @@ interface InvitationResult {
 interface Vote {
   id: string;
   group_id: string;
-  proposal_type: 'payout_swap' | 'exceptional_request';
+  proposal_type: 'payout_swap' | 'exceptional_request' | 'member_admission' | 'contribution_claim';
   proposer_id: string;
   proposal_text: string;
   voting_deadline: string;
@@ -150,8 +158,9 @@ function shortId(value: string) {
 }
 
 function getGroupColor(group: SavingsGroup) {
-  if (group.status === 'closed') return '#6B7280';
+  if (group.status === 'closed' || group.status === 'expired') return '#6B7280';
   if (group.status === 'suspended') return '#F59E0B';
+  if (group.status === 'draft') return '#8B5CF6';
   return group.currency === 'NGN' ? '#2EAF6F' : '#2eafaf';
 }
 
@@ -159,6 +168,10 @@ function getContributionMeta(status: Contribution['payment_status']) {
   switch (status) {
     case 'paid':
       return { color: '#2EAF6F', bg: 'rgba(46,175,111,0.1)', icon: CheckCircle, label: 'Paid' };
+    case 'pending_default':
+      return { color: '#F59E0B', bg: 'rgba(245,158,11,0.1)', icon: Clock, label: 'Grace period' };
+    case 'defaulted':
+      return { color: '#EF4444', bg: 'rgba(239,68,68,0.1)', icon: AlertTriangle, label: 'Defaulted' };
     case 'failed':
     case 'missed':
       return { color: '#EF4444', bg: 'rgba(239,68,68,0.1)', icon: AlertTriangle, label: titleCase(status) };
@@ -202,6 +215,13 @@ export default function SavingsGroupDetailPage() {
   const [inviteToken, setInviteToken] = useState('');
   const [membershipActionId, setMembershipActionId] = useState<string | null>(null);
   const [membershipActionError, setMembershipActionError] = useState('');
+  const [admissionVoteId, setAdmissionVoteId] = useState<string | null>(null);
+  const [admissionVoteError, setAdmissionVoteError] = useState('');
+  const [admissionVoteNotice, setAdmissionVoteNotice] = useState('');
+  const [claimAmount, setClaimAmount] = useState('');
+  const [claimSubmitting, setClaimSubmitting] = useState(false);
+  const [claimError, setClaimError] = useState('');
+  const [claimNotice, setClaimNotice] = useState('');
   const [votes, setVotes] = useState<Vote[]>([]);
   const [swapTarget, setSwapTarget] = useState('');
   const [swapNote, setSwapNote] = useState('');
@@ -210,6 +230,8 @@ export default function SavingsGroupDetailPage() {
   const [swapNotice, setSwapNotice] = useState('');
   const [voteActionId, setVoteActionId] = useState<string | null>(null);
   const [voteActionError, setVoteActionError] = useState('');
+  const [activating, setActivating] = useState(false);
+  const [activateError, setActivateError] = useState('');
 
   const loadData = useCallback(async () => {
     if (!id) {
@@ -367,6 +389,17 @@ export default function SavingsGroupDetailPage() {
     [votes],
   );
 
+  const openGovernanceVotes = useMemo(
+    () => votes.filter(vote => (vote.proposal_type === 'member_admission' || vote.proposal_type === 'contribution_claim') && vote.status === 'open'),
+    [votes],
+  );
+
+  function describeGovernanceVote(vote: Vote) {
+    if (vote.proposal_type === 'member_admission') return 'New Member Admission — needs a unanimous accept from every active member';
+    if (vote.proposal_type === 'contribution_claim') return 'Contribution Increase Request — needs a unanimous accept from every active member';
+    return vote.proposal_text;
+  }
+
   function parseSwapTarget(proposalText: string) {
     const match = /\[\[PAYOUT_SWAP:([^\]]+)\]\]\s*(.*)$/.exec(proposalText);
     if (!match) return { targetUserId: '', note: proposalText };
@@ -447,6 +480,35 @@ export default function SavingsGroupDetailPage() {
     }
   };
 
+  const handleActivateGroup = async () => {
+    if (!id) return;
+    const activeSession = getValidSession();
+    if (!activeSession?.token) {
+      setActivateError('Please log in to start this group.');
+      return;
+    }
+
+    setActivating(true);
+    setActivateError('');
+
+    try {
+      const response = await window.fetch(`/api/groups/${id}/activate`, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + activeSession.token },
+      });
+      const json = await response.json() as ApiResponse<null>;
+      if (!response.ok) {
+        setActivateError(getErrorMessage(json, 'Could not start this group.'));
+        return;
+      }
+      await loadData();
+    } catch {
+      setActivateError('Network error. Please check your connection and try again.');
+    } finally {
+      setActivating(false);
+    }
+  };
+
   const handleMembershipDecision = async (membershipId: string, decision: 'approve' | 'reject') => {
     const activeSession = getValidSession();
     if (!activeSession?.token) {
@@ -472,6 +534,75 @@ export default function SavingsGroupDetailPage() {
       setMembershipActionError('Network error. Please check your connection and try again.');
     } finally {
       setMembershipActionId(null);
+    }
+  };
+
+  const handleProposeAdmission = async (membershipId: string) => {
+    const activeSession = getValidSession();
+    if (!activeSession?.token) {
+      setAdmissionVoteError('Please log in to start an admission vote.');
+      return;
+    }
+
+    setAdmissionVoteId(membershipId);
+    setAdmissionVoteError('');
+    setAdmissionVoteNotice('');
+
+    try {
+      const response = await window.fetch('/api/votes/member-admission', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + activeSession.token },
+        body: JSON.stringify({ membership_id: membershipId }),
+      });
+      const json = await response.json() as ApiResponse<null>;
+      if (!response.ok) {
+        setAdmissionVoteError(getErrorMessage(json, 'Could not start an admission vote.'));
+        return;
+      }
+      setAdmissionVoteNotice('Admission vote started. Every active member has 48 hours to accept via email.');
+      await loadData();
+    } catch {
+      setAdmissionVoteError('Network error. Please check your connection and try again.');
+    } finally {
+      setAdmissionVoteId(null);
+    }
+  };
+
+  const handleProposeClaim = async () => {
+    if (!id) return;
+    const amountValue = Number.parseFloat(claimAmount);
+    if (!Number.isFinite(amountValue) || amountValue <= 0) {
+      setClaimError('Enter a valid contribution amount.');
+      return;
+    }
+    const activeSession = getValidSession();
+    if (!activeSession?.token) {
+      setClaimError('Please log in to propose a contribution increase.');
+      return;
+    }
+
+    setClaimSubmitting(true);
+    setClaimError('');
+    setClaimNotice('');
+
+    try {
+      const response = await window.fetch('/api/votes/contribution-claim', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + activeSession.token },
+        body: JSON.stringify({ group_id: id, amount: amountValue }),
+      });
+      const json = await response.json() as ApiResponse<null>;
+      if (!response.ok) {
+        setClaimError(getErrorMessage(json, 'Could not propose this contribution increase.'));
+        return;
+      }
+      setClaimNotice('Proposal submitted. Every active member has 48 hours to accept via email.');
+      setClaimAmount('');
+      await loadData();
+    } catch {
+      setClaimError('Network error. Please check your connection and try again.');
+    } finally {
+      setClaimSubmitting(false);
     }
   };
 
@@ -632,10 +763,38 @@ export default function SavingsGroupDetailPage() {
                     </p>
                   </div>
                 </div>
-                <Link to={`/savings-groups/${group.id}/contribute`} className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-sm font-bold text-white transition-all hover:opacity-90" style={{ background: `linear-gradient(135deg, ${groupColor}, ${groupColor}cc)` }}>
-                  <PiggyBank size={14} /> Make Payment
-                </Link>
+                {group.status === 'draft' ? (
+                  group.leader_id === currentUserId ? (
+                    <button
+                      onClick={() => void handleActivateGroup()}
+                      disabled={activating || activeMembers.length < GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH}
+                      className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-sm font-bold text-white transition-all hover:opacity-90"
+                      style={{
+                        background: activating || activeMembers.length < GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH ? '#4B5563' : `linear-gradient(135deg, ${groupColor}, ${groupColor}cc)`,
+                        cursor: activating || activeMembers.length < GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH ? 'not-allowed' : 'pointer',
+                      }}
+                      title={activeMembers.length < GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH
+                        ? `Needs at least ${GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH} verified members (${activeMembers.length} of ${GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH} so far)`
+                        : undefined}
+                    >
+                      <PlayCircle size={14} /> {activating ? 'Starting…' : `Start Group (${activeMembers.length}/${GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH})`}
+                    </button>
+                  ) : (
+                    <span className="px-4 py-2.5 rounded-xl text-xs font-bold" style={{ background: 'rgba(139,92,246,0.15)', color: '#C4B5FD' }}>
+                      Waiting to start · {activeMembers.length} of {GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH} verified members
+                    </span>
+                  )
+                ) : (
+                  <Link to={`/savings-groups/${group.id}/contribute`} className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-sm font-bold text-white transition-all hover:opacity-90" style={{ background: `linear-gradient(135deg, ${groupColor}, ${groupColor}cc)` }}>
+                    <PiggyBank size={14} /> Make Payment
+                  </Link>
+                )}
               </div>
+              {group.status === 'draft' && activateError && (
+                <div className="rounded-xl p-2.5 text-xs font-semibold flex items-center gap-2 mb-3" style={{ background: 'rgba(239,68,68,0.12)', color: '#FCA5A5' }}>
+                  <AlertTriangle size={13} /> {activateError}
+                </div>
+              )}
 
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
                 {[
@@ -821,7 +980,7 @@ export default function SavingsGroupDetailPage() {
                               <p className="text-xs text-gray-400 mt-1">{member.strike_count} strike{member.strike_count === 1 ? '' : 's'}</p>
                             </div>
                             {isLeaderViewing && member.status === 'pending' && (
-                              <div className="flex items-center gap-2 w-full sm:w-auto">
+                              <div className="flex items-center gap-2 w-full sm:w-auto flex-wrap">
                                 <button
                                   onClick={() => void handleMembershipDecision(member.id, 'approve')}
                                   disabled={actionBusy}
@@ -838,11 +997,27 @@ export default function SavingsGroupDetailPage() {
                                 >
                                   Decline
                                 </button>
+                                {activeMembers.length > 1 && (
+                                  <button
+                                    onClick={() => void handleProposeAdmission(member.id)}
+                                    disabled={admissionVoteId === member.id}
+                                    title="Put this admission to a unanimous vote of every active member instead of deciding yourself"
+                                    className="flex-1 sm:flex-none px-3 py-2 rounded-xl text-xs font-bold"
+                                    style={{ background: 'rgba(139,92,246,0.12)', color: '#7C3AED', cursor: admissionVoteId === member.id ? 'not-allowed' : 'pointer' }}
+                                  >
+                                    {admissionVoteId === member.id ? 'Starting vote…' : 'Put to a vote'}
+                                  </button>
+                                )}
                               </div>
                             )}
                           </div>
                         );
                       })}
+                      {(admissionVoteError || admissionVoteNotice) && (
+                        <p className="text-xs font-semibold" style={{ color: admissionVoteError ? '#B91C1C' : '#2EAF6F' }}>
+                          {admissionVoteError || admissionVoteNotice}
+                        </p>
+                      )}
                     </div>
                   )}
 
@@ -944,6 +1119,84 @@ export default function SavingsGroupDetailPage() {
                       )}
                     </div>
                   )}
+
+                  {currentMembership?.status === 'active' && (
+                    <div className="rounded-3xl p-5 bg-white" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
+                      <div className="flex items-center gap-2 mb-3">
+                        <Shield size={16} style={{ color: '#8B5CF6' }} />
+                        <h2 className="font-extrabold text-gray-900 text-sm" style={{ fontFamily: 'Nunito, sans-serif' }}>Governance votes</h2>
+                      </div>
+                      <p className="text-xs text-gray-500 mb-3">
+                        New-member admissions and contribution-increase requests require a unanimous accept from every active member within 48 hours.
+                      </p>
+
+                      {group.leader_id === currentUserId && (
+                        <div className="rounded-2xl p-3 mb-4" style={{ background: '#F9FAFB', border: '1px solid #F3F4F6' }}>
+                          <p className="text-xs font-bold text-gray-900 mb-2">Propose a contribution increase</p>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={claimAmount}
+                              onChange={event => setClaimAmount(event.target.value)}
+                              placeholder={`New amount (${group.currency})`}
+                              className="flex-1 min-w-[140px] px-3 py-2 rounded-xl border border-gray-200 text-xs focus:outline-none focus:border-purple-400 transition-colors"
+                            />
+                            <button
+                              onClick={() => void handleProposeClaim()}
+                              disabled={claimSubmitting}
+                              className="px-3 py-2 rounded-xl text-xs font-bold text-white"
+                              style={{ background: claimSubmitting ? '#D1D5DB' : 'linear-gradient(135deg, #8B5CF6, #6D28D9)', cursor: claimSubmitting ? 'not-allowed' : 'pointer' }}
+                            >
+                              {claimSubmitting ? 'Submitting…' : 'Propose'}
+                            </button>
+                          </div>
+                          {claimError && <p className="text-xs font-semibold mt-2" style={{ color: '#B91C1C' }}>{claimError}</p>}
+                          {claimNotice && <p className="text-xs font-semibold mt-2" style={{ color: '#2EAF6F' }}>{claimNotice}</p>}
+                        </div>
+                      )}
+
+                      {openGovernanceVotes.length === 0 ? (
+                        <p className="text-xs text-gray-400">No open governance votes right now.</p>
+                      ) : (
+                        <div className="flex flex-col gap-2">
+                          {openGovernanceVotes.map(vote => {
+                            const busy = voteActionId === vote.id;
+                            return (
+                              <div key={vote.id} className="rounded-2xl p-3" style={{ background: '#F9FAFB', border: '1px solid #F3F4F6' }}>
+                                <p className="text-xs font-bold text-gray-900">{describeGovernanceVote(vote)}</p>
+                                <p className="text-[11px] text-gray-400 mt-1">Voting closes {formatDate(vote.voting_deadline)}</p>
+                                <div className="flex items-center gap-2 mt-2">
+                                  <button
+                                    onClick={() => void handleCastVote(vote.id, 'approve')}
+                                    disabled={busy}
+                                    className="flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold text-white"
+                                    style={{ background: busy ? '#D1D5DB' : 'linear-gradient(135deg, #2EAF6F, #1d8a55)', cursor: busy ? 'not-allowed' : 'pointer' }}
+                                  >
+                                    <ThumbsUp size={12} /> Accept
+                                  </button>
+                                  <button
+                                    onClick={() => void handleCastVote(vote.id, 'reject')}
+                                    disabled={busy}
+                                    className="flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold"
+                                    style={{ background: '#FEE2E2', color: '#B91C1C', cursor: busy ? 'not-allowed' : 'pointer' }}
+                                  >
+                                    <ThumbsDown size={12} /> Decline
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {voteActionError && (
+                        <div className="rounded-xl p-2.5 text-xs font-semibold flex items-center gap-2 mt-3" style={{ background: 'rgba(239,68,68,0.08)', color: '#B91C1C' }}>
+                          <AlertTriangle size={13} /> {voteActionError}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -975,6 +1228,11 @@ export default function SavingsGroupDetailPage() {
                                 <div>
                                   <p className="text-sm font-semibold text-gray-800">Cycle {entry.cycle_number} · {meta.label}</p>
                                   <p className="text-xs text-gray-400 break-all">Member {shortId(entry.member_id)}</p>
+                                  {entry.payment_status === 'pending_default' && entry.grace_period_ends_at && (
+                                    <p className="text-xs font-semibold mt-0.5" style={{ color: '#F59E0B' }}>
+                                      One automatic retry on {formatDate(entry.grace_period_ends_at)} before this is marked in default
+                                    </p>
+                                  )}
                                 </div>
                                 <div className="text-right">
                                   <p className="text-sm font-bold" style={{ color: meta.color }}>{formatCurrency(amount, group.currency)}</p>

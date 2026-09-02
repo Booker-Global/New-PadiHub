@@ -21,7 +21,7 @@ interface CommunitySummary {
   id: string;
   name: string;
   currency: 'GBP' | 'NGN';
-  status: 'active' | 'closed' | 'suspended';
+  status: 'draft' | 'active' | 'suspended' | 'closed' | 'expired';
   memberCount: number;
   contributionRate: number | null;
   missedCount: number;

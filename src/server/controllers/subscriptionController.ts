@@ -4,7 +4,7 @@ import { subscriptionService } from '../services/subscriptionService.js';
 import { validate } from '../middleware/validate.js';
 
 const planSchema = z.object({
-  tier: z.enum(['pro', 'elite']),
+  tier: z.enum(['basic', 'premium']),
 });
 
 export const subscriptionController = {
@@ -15,7 +15,7 @@ export const subscriptionController = {
     } catch (e) { next(e); }
   },
 
-  /** POST /api/subscriptions/select-plan — onboarding: choose Pro Group or Elite Group */
+  /** POST /api/subscriptions/select-plan — onboarding: choose Basic or Premium */
   selectPlan: [
     validate(planSchema),
     async (req: Request, res: Response, next: NextFunction) => {

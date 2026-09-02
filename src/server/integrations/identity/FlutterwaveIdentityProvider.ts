@@ -1,9 +1,16 @@
 /**
- * Flutterwave BVN identity provider — Nigeria users only.
- * BVN verification is free to the user; PadiHub absorbs any API costs.
- * The BVN itself is never stored — only the verification reference.
+ * Nigeria identity-verification provider. Implements the same
+ * IIdentityVerificationProvider interface as the UK's StripeIdentityProvider
+ * so identityController.ts and the shared identityVerificationService can
+ * treat both markets uniformly, but the actual check it delegates to is
+ * Flutterwave's free Account Resolve API (see FlutterwaveAccountResolveProvider)
+ * — an interim "bank account validation" step (confirms a bank account
+ * number matches a real account holder name), NOT full identity/KYC
+ * verification. It is deliberately implemented behind the swappable
+ * IBankAccountValidationProvider interface so a dedicated KYC provider
+ * (Dojah or Monnify) can be substituted later without touching this class's
+ * callers.
  */
-import axios from 'axios';
 import { eq } from 'drizzle-orm';
 import { db } from '../../db/client.js';
 import * as schema from '../../db/schema.js';
@@ -13,89 +20,72 @@ import type {
   VerificationStatusResult,
   IdentityWebhookResult,
 } from './IdentityVerificationInterface.js';
-
-const FLW_BASE = 'https://api.flutterwave.com/v3';
-
-function getHeaders() {
-  const key = process.env.FLUTTERWAVE_SECRET_KEY;
-  if (!key) throw new Error('FLUTTERWAVE_SECRET_KEY environment variable is not set.');
-  return { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' };
-}
+import type { IBankAccountValidationProvider } from './BankAccountValidationInterface.js';
+import { FlutterwaveAccountResolveProvider } from './FlutterwaveAccountResolveProvider.js';
 
 export class FlutterwaveIdentityProvider implements IIdentityVerificationProvider {
-  /** Not used for BVN flow — BVN initiation is via initiateBvnVerification() */
+  private readonly bankAccountValidator: IBankAccountValidationProvider;
+
+  constructor(bankAccountValidator: IBankAccountValidationProvider = new FlutterwaveAccountResolveProvider()) {
+    this.bankAccountValidator = bankAccountValidator;
+  }
+
+  /** Not used for the Account Resolve flow — see validateBankAccount() */
   async createVerificationSession(_userId: string): Promise<VerificationSessionResult> {
-    return { sessionId: 'bvn_flow' };
+    return { sessionId: 'account_resolve_flow' };
   }
 
   async getVerificationStatus(userId: string): Promise<VerificationStatusResult> {
     const rows = await db.select({
-      identity_verified:    schema.users.identity_verified,
-      identity_verified_at: schema.users.identity_verified_at,
+      identity_verified:            schema.users.identity_verified,
+      identity_verified_at:         schema.users.identity_verified_at,
+      identity_verification_status: schema.users.identity_verification_status,
     }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
 
-    if (!rows.length) return { verified: false };
+    if (!rows.length) return { verified: false, status: 'not_started' };
     return {
       verified:   rows[0].identity_verified,
+      status:     rows[0].identity_verification_status,
       verifiedAt: rows[0].identity_verified_at ?? undefined,
     };
   }
 
-  /** BVN webhook not used — OTP confirmation is synchronous */
+  /** Account Resolve is a synchronous REST call — no webhook to receive */
   async handleWebhook(_payload: Buffer, _signature: string): Promise<IdentityWebhookResult> {
     return { handled: false };
   }
 
   /** No fee for Nigerian users */
-  async addVerificationFeeToFirstInvoice(_userId: string): Promise<void> {
-    // No-op — BVN verification is free to the user
+  async addVerificationFeeToFirstInvoice(_userId: string, _amountPence: number): Promise<void> {
+    // No-op — Account Resolve carries no member-facing fee
   }
 
-  /** Step 1: Initiate BVN consent — Flutterwave sends OTP to BVN-registered phone */
-  async initiateBvnVerification(userId: string, bvn: string): Promise<{ message: string }> {
-    const response = await axios.post(
-      `${FLW_BASE}/bvn-consents/${bvn}`,
-      {},
-      { headers: getHeaders() },
-    );
-    const reference = response.data?.data?.reference as string | undefined;
-    if (!reference) throw new Error('No verification reference returned from Flutterwave.');
-
-    // Store reference (NOT the BVN) on user record
+  /**
+   * Validate that the bank account details provided by the member resolve to
+   * a real account holder, then flip identity_verification_status. This
+   * mirrors the UK charge-gating pattern exactly: the subscription is not
+   * charged until this succeeds (see identityController.resolveNgBankAccount
+   * and identityVerificationService.ts, which is called on success).
+   */
+  async validateBankAccount(
+    userId: string,
+    details: { accountNumber: string; bankCode: string },
+  ): Promise<{ verified: boolean; accountName?: string; message: string }> {
     await db.update(schema.users)
-      .set({ bvn_verification_reference: reference })
+      .set({ identity_verification_status: 'pending' })
       .where(eq(schema.users.id, userId));
 
-    return { message: 'OTP sent to your BVN-registered phone number' };
-  }
+    const result = await this.bankAccountValidator.validateBankAccount(details);
 
-  /** Step 2: Confirm OTP to complete BVN verification */
-  async confirmBvnOtp(userId: string, otp: string): Promise<{ verified: boolean; message: string }> {
-    const rows = await db.select({ bvn_verification_reference: schema.users.bvn_verification_reference })
-      .from(schema.users).where(eq(schema.users.id, userId)).limit(1);
-    if (!rows.length || !rows[0].bvn_verification_reference) {
-      throw new Error('No pending BVN verification found. Please initiate verification first.');
+    if (!result.verified) {
+      await db.update(schema.users)
+        .set({ identity_verification_status: 'failed' })
+        .where(eq(schema.users.id, userId));
     }
+    // On success, identity_verification_status is flipped to 'verified' by
+    // identityVerificationService.completeIdentityVerification(), which also
+    // sets identity_verified=true and triggers the subscription charge.
 
-    const response = await axios.post(
-      `${FLW_BASE}/bvn-consents/verify`,
-      { reference: rows[0].bvn_verification_reference, otp },
-      { headers: getHeaders() },
-    );
-
-    const status = response.data?.data?.status as string | undefined;
-    if (status !== 'completed') {
-      return { verified: false, message: 'OTP verification failed. Please try again.' };
-    }
-
-    await db.update(schema.users)
-      .set({
-        identity_verified:          true,
-        identity_verified_at:       new Date(),
-        bvn_verification_reference: null,
-      })
-      .where(eq(schema.users.id, userId));
-
-    return { verified: true, message: 'BVN verified successfully.' };
+    return result;
   }
 }

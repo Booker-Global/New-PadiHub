@@ -21,12 +21,12 @@ interface Invoice {
 }
 
 const invoices: Invoice[] = [
-  { id: 'INV-2026-006', date: 'Jun 1, 2026', amount: '£9.99', status: 'paid', method: 'Visa •••• 4242', plan: 'Elite Group', period: 'Jun 2026' },
-  { id: 'INV-2026-005', date: 'May 1, 2026', amount: '£9.99', status: 'paid', method: 'Visa •••• 4242', plan: 'Elite Group', period: 'May 2026' },
-  { id: 'INV-2026-004', date: 'Apr 1, 2026', amount: '£4.99', status: 'paid', method: 'Visa •••• 4242', plan: 'Pro Group', period: 'Apr 2026' },
-  { id: 'INV-2026-003', date: 'Mar 1, 2026', amount: '£4.99', status: 'paid', method: 'Visa •••• 4242', plan: 'Pro Group', period: 'Mar 2026' },
-  { id: 'INV-2026-002', date: 'Feb 1, 2026', amount: '£4.99', status: 'failed', method: 'Visa •••• 4242', plan: 'Pro Group', period: 'Feb 2026' },
-  { id: 'INV-2026-001', date: 'Jan 1, 2026', amount: '£4.99', status: 'paid', method: 'Visa •••• 4242', plan: 'Pro Group', period: 'Jan 2026' },
+  { id: 'INV-2026-006', date: 'Jun 1, 2026', amount: '£14.99', status: 'paid', method: 'Visa •••• 4242', plan: 'Premium', period: 'Jun 2026' },
+  { id: 'INV-2026-005', date: 'May 1, 2026', amount: '£14.99', status: 'paid', method: 'Visa •••• 4242', plan: 'Premium', period: 'May 2026' },
+  { id: 'INV-2026-004', date: 'Apr 1, 2026', amount: '£4.99', status: 'paid', method: 'Visa •••• 4242', plan: 'Basic', period: 'Apr 2026' },
+  { id: 'INV-2026-003', date: 'Mar 1, 2026', amount: '£4.99', status: 'paid', method: 'Visa •••• 4242', plan: 'Basic', period: 'Mar 2026' },
+  { id: 'INV-2026-002', date: 'Feb 1, 2026', amount: '£4.99', status: 'failed', method: 'Visa •••• 4242', plan: 'Basic', period: 'Feb 2026' },
+  { id: 'INV-2026-001', date: 'Jan 1, 2026', amount: '£4.99', status: 'paid', method: 'Visa •••• 4242', plan: 'Basic', period: 'Jan 2026' },
 ];
 
 const statusConfig: Record<InvoiceStatus, { label: string; color: string; bg: string; icon: typeof CheckCircle }> = {
@@ -74,7 +74,7 @@ export default function BillingHistoryPage() {
 
           <MotionDiv variants={fadeUp} className="rounded-2xl p-4 mb-6" style={{ background: 'rgba(46,175,111,0.06)', border: '1px solid rgba(46,175,111,0.16)' }}>
             <p className="text-sm font-bold text-gray-900">Monthly memberships only</p>
-            <p className="text-xs text-gray-500 mt-1">This page reflects current Pro Group and Elite Group monthly pricing. Invoice downloads will use the existing payments flow as more billing endpoints are connected.</p>
+            <p className="text-xs text-gray-500 mt-1">This page reflects current Basic and Premium monthly pricing. Invoice downloads will use the existing payments flow as more billing endpoints are connected.</p>
           </MotionDiv>
 
           <MotionDiv variants={fadeUp} className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">

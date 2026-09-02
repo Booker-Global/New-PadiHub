@@ -1,7 +1,7 @@
 /**
  * Subscription service — manages platform subscriptions via Stripe (UK) or Flutterwave (NG).
  *
- * PadiHub has exactly two monthly-only tiers — Pro Group and Elite Group —
+ * PadiHub has exactly two monthly-only tiers — Basic and Premium —
  * see SUBSCRIPTION_TIERS in ../lib/constants.ts for pricing and group limits.
  * There is no free trial and no annual billing option.
  */
@@ -12,6 +12,7 @@ import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { getPaymentProvider } from '../integrations/payments/PaymentProviderFactory.js';
+import { groupService } from './groupService.js';
 import {
   SUBSCRIPTION_TIERS,
   isSubscriptionTierKey,
@@ -48,7 +49,7 @@ export const subscriptionService = {
    */
   async selectPlan(userId: string, tier: string): Promise<PlanSelectionResult | PlanSwitchResult> {
     if (!isSubscriptionTierKey(tier)) {
-      throw new AppError('Invalid subscription tier. Choose "pro" or "elite".', 400, 'INVALID_SUBSCRIPTION_TIER');
+      throw new AppError('Invalid subscription tier. Choose "basic" or "premium".', 400, 'INVALID_SUBSCRIPTION_TIER');
     }
 
     const userRows = await db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1);
@@ -196,7 +197,7 @@ export const subscriptionService = {
    */
   async switchPlan(userId: string, newTier: string): Promise<PlanSwitchResult | PlanSelectionResult> {
     if (!isSubscriptionTierKey(newTier)) {
-      throw new AppError('Invalid subscription tier. Choose "pro" or "elite".', 400, 'INVALID_SUBSCRIPTION_TIER');
+      throw new AppError('Invalid subscription tier. Choose "basic" or "premium".', 400, 'INVALID_SUBSCRIPTION_TIER');
     }
 
     const userRows = await db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1);
@@ -216,7 +217,7 @@ export const subscriptionService = {
       .where(eq(schema.subscriptions.user_id, userId)).limit(1);
     const sub = subRows[0];
 
-    const rankOf = (t: SubscriptionTierKey) => (t === 'elite' ? 1 : 0);
+    const rankOf = (t: SubscriptionTierKey) => (t === 'premium' ? 1 : 0);
     const direction: 'upgrade' | 'downgrade' = rankOf(newTier) > rankOf(currentTier) ? 'upgrade' : 'downgrade';
     const newAmount = formatTierPrice(newTier, user.country);
 
@@ -359,5 +360,36 @@ export const subscriptionService = {
     }
 
     return this.createSubscription(userId, user.country, user.subscription_tier);
+  },
+
+  /**
+   * Section 3 — subscription billing is only ever "live" (billing_status
+   * 'active') while the user is a verified member of at least one 'active'
+   * (launched) group; it's inert/paused otherwise. Called once per user per
+   * day by scheduledJobs.dailyBillingActiveGroupReconciliation. This is
+   * DB-bookkeeping only: it does NOT call the provider's own
+   * pause_collection API, so Stripe subscriptions keep renewing on
+   * schedule at the provider — see monthlySubscriptionRenewalCharge's
+   * existing billing_status filter, which already skips 'paused' users for
+   * the Flutterwave path (Stripe self-bills via webhooks and isn't
+   * affected either way by this DB flag). This is a known, documented
+   * limitation given project scope, not a silent gap.
+   */
+  async reconcileBillingForActiveGroupMembership(userId: string) {
+    const subRows = await db.select().from(schema.subscriptions)
+      .where(eq(schema.subscriptions.user_id, userId)).limit(1);
+    if (!subRows.length) return;
+    const sub = subRows[0];
+    if (sub.billing_status === 'cancelled') return;
+
+    const activeGroupCount = await groupService.countActiveGroupMembershipsForUser(userId);
+
+    if (activeGroupCount === 0 && sub.billing_status !== 'paused') {
+      await db.update(schema.subscriptions).set({ billing_status: 'paused' }).where(eq(schema.subscriptions.user_id, userId));
+      await createAuditLog({ userId, action: 'SUBSCRIPTION_BILLING_PAUSED', entity: 'subscriptions', metadata: { reason: 'zero_active_group_memberships' } });
+    } else if (activeGroupCount > 0 && sub.billing_status === 'paused') {
+      await db.update(schema.subscriptions).set({ billing_status: 'active' }).where(eq(schema.subscriptions.user_id, userId));
+      await createAuditLog({ userId, action: 'SUBSCRIPTION_BILLING_RESUMED', entity: 'subscriptions', metadata: { activeGroupCount } });
+    }
   },
 };

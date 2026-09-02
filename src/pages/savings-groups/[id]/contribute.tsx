@@ -76,6 +76,18 @@ interface ChargeResult {
   status: 'succeeded' | 'pending' | 'failed';
 }
 
+interface FeePreview {
+  amount_due: string;
+  card_fee: string;
+  card_fee_vat: string;
+  payout_fee_share: string;
+  payout_fee_share_vat: string;
+  total_fee: string;
+  total_charge: string;
+  currency: 'GBP' | 'NGN';
+  provider: 'stripe' | 'flutterwave';
+}
+
 const STRIPE_PUBLISHABLE_KEY = (
   import.meta.env as Record<string, string | undefined>
 ).VITE_STRIPE_PUBLISHABLE_KEY?.trim() || '';
@@ -145,6 +157,8 @@ export default function ContributionConfirmPage() {
   const [actionNotice, setActionNotice] = useState('');
   const [setupLoading, setSetupLoading] = useState(false);
   const [chargeLoading, setChargeLoading] = useState(false);
+  const [feePreview, setFeePreview] = useState<FeePreview | null>(null);
+  const [feePreviewError, setFeePreviewError] = useState('');
   const cardMountRef = useRef<HTMLDivElement | null>(null);
   const stripeRef = useRef<Stripe | null>(null);
   const cardElementRef = useRef<StripeCardElement | null>(null);
@@ -228,6 +242,36 @@ export default function ContributionConfirmPage() {
       ? Boolean(profile.flutterwave_card_token)
       : Boolean(profile.stripe_payment_method_id);
   }, [group, profile]);
+
+  // Fetch the itemised fee breakdown up front so the member sees the exact
+  // card/transaction fee and payout-fee share before confirming — mirrors
+  // what chargeContributionForUser will actually charge server-side.
+  useEffect(() => {
+    if (!contribution || contribution.payment_status === 'paid') return;
+    const session = getValidSession();
+    if (!session?.token) return;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await window.fetch(
+          `/api/payments/contribution-fee-preview?contribution_id=${contribution.id}`,
+          { headers: { Authorization: 'Bearer ' + session.token } },
+        );
+        const json = await response.json().catch(() => null) as ApiResponse<FeePreview> | null;
+        if (!cancelled && response.ok && json?.data) {
+          setFeePreview(json.data);
+          setFeePreviewError('');
+        } else if (!cancelled) {
+          setFeePreviewError(getErrorMessage(json, 'Could not calculate the processing fee for this contribution.'));
+        }
+      } catch {
+        if (!cancelled) setFeePreviewError('Could not calculate the processing fee for this contribution.');
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [contribution]);
 
   const needsStripePaymentMethod = Boolean(
     group &&
@@ -648,6 +692,52 @@ export default function ContributionConfirmPage() {
                     <p className="font-bold text-gray-900">{hasSavedPaymentMethod ? 'Ready to use' : 'Not saved yet'}</p>
                   </div>
                 </div>
+
+                {feePreview ? (
+                  <div className="rounded-2xl p-4 mb-4" style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
+                    <p className="text-xs font-bold text-gray-500 mb-3 uppercase tracking-wide">Itemised charge breakdown</p>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Contribution amount</span>
+                        <span className="font-bold text-gray-900">{formatCurrency(feePreview.amount_due, feePreview.currency)}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">
+                          {feePreview.provider === 'flutterwave' ? 'Transaction fee (2%)' : 'Card fee (1.5% + £0.20)'}
+                        </span>
+                        <span className="font-bold text-gray-900">{formatCurrency(feePreview.card_fee, feePreview.currency)}</span>
+                      </div>
+                      {feePreview.provider === 'flutterwave' && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-gray-600">VAT on transaction fee (7.5%)</span>
+                          <span className="font-bold text-gray-900">{formatCurrency(feePreview.card_fee_vat, feePreview.currency)}</span>
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Your share of this cycle's payout fee</span>
+                        <span className="font-bold text-gray-900">{formatCurrency(feePreview.payout_fee_share, feePreview.currency)}</span>
+                      </div>
+                      {feePreview.provider === 'flutterwave' && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-gray-600">VAT on payout-fee share (7.5%)</span>
+                          <span className="font-bold text-gray-900">{formatCurrency(feePreview.payout_fee_share_vat, feePreview.currency)}</span>
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between pt-2 mt-2" style={{ borderTop: '1px solid #E5E7EB' }}>
+                        <span className="font-bold text-gray-900">Total charge</span>
+                        <span className="font-black text-gray-900">{formatCurrency(feePreview.total_charge, feePreview.currency)}</span>
+                      </div>
+                    </div>
+                    <p className="text-xs text-gray-500 mt-3">
+                      Processing fees are added on top of your contribution, never deducted from the group pot — every member still receives the full pot when it's their turn.
+                    </p>
+                  </div>
+                ) : feePreviewError ? (
+                  <div className="rounded-2xl p-4 mb-4 flex items-start gap-3" style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.18)' }}>
+                    <AlertTriangle size={16} style={{ color: '#EF4444', flexShrink: 0, marginTop: 2 }} />
+                    <p className="text-sm text-gray-700">{feePreviewError}</p>
+                  </div>
+                ) : null}
 
                 {!hasSavedPaymentMethod ? (
                   <div className="rounded-2xl p-4" style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.18)' }}>

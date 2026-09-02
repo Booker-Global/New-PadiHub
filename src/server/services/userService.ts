@@ -1,11 +1,13 @@
 import bcrypt from 'bcryptjs';
+import { v4 as uuidv4 } from 'uuid';
 import { eq, and, inArray, desc, count, ne } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
-import { BCRYPT_ROUNDS, TRUST_SCORE_MAX, TRUST_SCORE_MIN } from '../lib/constants.js';
+import { BCRYPT_ROUNDS, TRUST_SCORE_MAX, TRUST_SCORE_MIN, SUBSCRIPTION_TIERS, isSubscriptionTierKey } from '../lib/constants.js';
 import { getPaymentProvider } from '../integrations/payments/PaymentProviderFactory.js';
+import { hashEmail } from '../lib/emailBlocklist.js';
 import { sendAccountDeletedEmail } from '../integrations/email/emailService.js';
 
 function getDeletedEmail(userId: string): string {
@@ -126,6 +128,18 @@ export const userService = {
       }
     }
 
+    // Group-membership usage against the member's tier limit (counts both
+    // active memberships and outstanding pending join requests, matching
+    // groupService.countGroupsJoined() — the same figure enforced server-side
+    // when creating/joining a group) so the dashboard can show "2 of 3 groups
+    // joined" without drifting from what the backend actually allows.
+    const pendingMemberships = memberships.filter(m => m.status === 'pending');
+    const groupsJoinedCount = activeMemberships.length + pendingMemberships.length;
+    const groupsLedCount = activeMemberships.filter(m => m.role === 'leader').length;
+    const tierLimits = isSubscriptionTierKey(user.subscription_tier)
+      ? SUBSCRIPTION_TIERS[user.subscription_tier]
+      : null;
+
     return {
       trust_score:               user.trust_score,
       trust_score_max:           TRUST_SCORE_MAX,
@@ -135,6 +149,10 @@ export const userService = {
       country:                   user.country,
       communities_count:         activeGroupIds.length,
       is_group_leader:           isGroupLeader,
+      groups_joined_count:       groupsJoinedCount,
+      groups_joined_limit:       tierLimits?.maxGroupsJoin ?? null,
+      groups_created_count:      groupsLedCount,
+      groups_created_limit:      tierLimits?.maxGroupsCreate ?? null,
       contribution_reliability: contributionReliability,
       contributions_paid_count: paidContributions.length,
       governance_participation: governanceParticipation,
@@ -308,6 +326,16 @@ export const userService = {
     await db.transaction(async (tx) => {
       await tx.delete(schema.emailVerificationTokens).where(eq(schema.emailVerificationTokens.user_id, userId));
       await tx.delete(schema.passwordResetTokens).where(eq(schema.passwordResetTokens.user_id, userId));
+
+      // Permanently block the ORIGINAL email before it's overwritten below —
+      // see src/server/lib/emailBlocklist.ts for why (prevents evading
+      // default/suspension history via delete-then-re-register).
+      const emailHash = hashEmail(user.email);
+      const alreadyBlocked = await tx.select({ id: schema.emailBlocklist.id }).from(schema.emailBlocklist)
+        .where(eq(schema.emailBlocklist.email_hash, emailHash)).limit(1);
+      if (!alreadyBlocked.length) {
+        await tx.insert(schema.emailBlocklist).values({ id: uuidv4(), email_hash: emailHash, reason: 'account_deleted' });
+      }
 
       if (closableGroupIds.length) {
         await tx.update(schema.savingsGroups)

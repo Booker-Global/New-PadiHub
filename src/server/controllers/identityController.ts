@@ -1,7 +1,18 @@
 /**
  * Identity Verification controller.
- * UK  → Stripe Identity (hosted flow)
- * NG  → Flutterwave BVN (OTP flow)
+ * UK  → Stripe Identity, triggered as an embedded modal from our own
+ *       dashboard (stripe.verifyIdentity(clientSecret)) — never a redirect
+ *       to a Stripe-hosted page.
+ * NG  → Flutterwave Account Resolve — a free, interim "bank account
+ *       validation" step (confirms a bank account number matches a real
+ *       account holder name), NOT full identity/KYC verification. Kept
+ *       behind a swappable interface so Dojah/Monnify can replace or
+ *       supplement it later — see BankAccountValidationInterface.ts.
+ *
+ * Both markets mirror the same charge-gating pattern: no subscription
+ * charge occurs until the relevant check succeeds — see
+ * identityVerificationService.ts, which is the single place that turns a
+ * success/failure into the resulting charge (or lack of one).
  */
 import type { Request, Response, NextFunction } from 'express';
 import { eq } from 'drizzle-orm';
@@ -12,13 +23,10 @@ import { StripeIdentityProvider } from '../integrations/identity/StripeIdentityP
 import { FlutterwaveIdentityProvider } from '../integrations/identity/FlutterwaveIdentityProvider.js';
 import { trustScoreService } from '../services/trustScoreService.js';
 import { notificationService } from '../services/notificationService.js';
+import { identityVerificationService } from '../services/identityVerificationService.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
-import {
-  sendIdentityVerifiedEmail,
-  sendVerificationFeeChargedEmail,
-} from '../integrations/email/emailService.js';
 import { ip } from '../lib/reqHelpers.js';
-import { TRUST_SCORE_DELTA_IDENTITY_VERIFIED, isSubscriptionTierKey, formatTierPrice } from '../lib/constants.js';
+import { TRUST_SCORE_DELTA_IDENTITY_VERIFIED } from '../lib/constants.js';
 
 const stripeIdentity      = new StripeIdentityProvider();
 const flutterwaveIdentity = new FlutterwaveIdentityProvider();
@@ -71,37 +79,9 @@ export async function stripeIdentityWebhook(req: Request, res: Response, next: N
 
   try {
     if (result.event === 'identity.verification_session.verified') {
-      await db.update(schema.users)
-        .set({ identity_verified: true, identity_verified_at: new Date() })
-        .where(eq(schema.users.id, userId));
-
-      // Add £1.50 verification fee as pending invoice item
-      await stripeIdentity.addVerificationFeeToFirstInvoice(userId);
-
-      await trustScoreService.increase(userId, TRUST_SCORE_DELTA_IDENTITY_VERIFIED, 'IDENTITY_VERIFIED');
-      await notificationService.create({
-        userId, type: 'identity_verified',
-        title: 'Identity Verified',
-        message: 'Your identity has been verified. Your Trust Score has increased.',
-      });
-
-      const userRow = await db.select({ email: schema.users.email, first_name: schema.users.first_name, subscription_tier: schema.users.subscription_tier, country: schema.users.country })
-        .from(schema.users).where(eq(schema.users.id, userId)).limit(1);
-      if (userRow.length) {
-        await sendIdentityVerifiedEmail(userRow[0].email, userRow[0].first_name);
-        const tier = isSubscriptionTierKey(userRow[0].subscription_tier) ? userRow[0].subscription_tier : 'pro';
-        await sendVerificationFeeChargedEmail(userRow[0].email, userRow[0].first_name, formatTierPrice(tier, userRow[0].country));
-      }
-
-      await createAuditLog({ userId, action: 'IDENTITY_VERIFIED', entity: 'users', entityId: userId });
-
+      await identityVerificationService.completeIdentityVerification(userId, 'GB');
     } else if (result.event === 'identity.verification_session.requires_input') {
-      await notificationService.create({
-        userId, type: 'identity_verification_failed',
-        title: 'Identity Verification Needs Attention',
-        message: 'Identity verification needs attention. Please complete your verification.',
-      });
-      await createAuditLog({ userId, action: 'IDENTITY_VERIFICATION_FAILED', entity: 'users', entityId: userId });
+      await identityVerificationService.failIdentityVerification(userId);
     }
 
     res.json({ received: true });
@@ -111,8 +91,8 @@ export async function stripeIdentityWebhook(req: Request, res: Response, next: N
   }
 }
 
-// ── NG: Initiate BVN verification ────────────────────────────────────────────
-export async function initiateBvn(req: Request, res: Response, next: NextFunction) {
+// ── NG: Resolve bank account (Flutterwave Account Resolve) ───────────────────
+export async function resolveNgBankAccount(req: Request, res: Response, next: NextFunction) {
   try {
     const userId = req.user!.userId;
     const userRows = await db.select({ country: schema.users.country })
@@ -120,41 +100,19 @@ export async function initiateBvn(req: Request, res: Response, next: NextFunctio
     if (!userRows.length) throw new AppError('User not found.', 404);
     if (userRows[0].country !== 'NG') throw new AppError('This endpoint is for Nigerian users only.', 403);
 
-    const { bvn } = req.body as { bvn?: string };
-    if (!bvn || !/^\d{11}$/.test(bvn)) throw new AppError('BVN must be exactly 11 digits.', 400);
+    const { account_number, bank_code } = req.body as { account_number?: string; bank_code?: string };
+    if (!account_number || !bank_code) {
+      throw new AppError('account_number and bank_code are required.', 400);
+    }
 
-    const result = await flutterwaveIdentity.initiateBvnVerification(userId, bvn);
-    await createAuditLog({ userId, action: 'BVN_VERIFICATION_INITIATED', entity: 'users', entityId: userId, ipAddress: ip(req.ip) });
-    res.json({ success: true, data: result });
-  } catch (e) { next(e); }
-}
-
-// ── NG: Confirm BVN OTP ───────────────────────────────────────────────────────
-export async function confirmBvn(req: Request, res: Response, next: NextFunction) {
-  try {
-    const userId = req.user!.userId;
-    const { otp } = req.body as { otp?: string };
-    if (!otp) throw new AppError('OTP is required.', 400);
-
-    const result = await flutterwaveIdentity.confirmBvnOtp(userId, otp);
+    const result = await flutterwaveIdentity.validateBankAccount(userId, { accountNumber: account_number, bankCode: bank_code });
 
     if (result.verified) {
-      await trustScoreService.increase(userId, TRUST_SCORE_DELTA_IDENTITY_VERIFIED, 'IDENTITY_VERIFIED');
-      await notificationService.create({
-        userId, type: 'identity_verified',
-        title: 'BVN Verified',
-        message: 'Your BVN has been verified. Your Trust Score has increased.',
-      });
-
-      const userRow = await db.select({ email: schema.users.email, first_name: schema.users.first_name })
-        .from(schema.users).where(eq(schema.users.id, userId)).limit(1);
-      if (userRow.length) {
-        await sendIdentityVerifiedEmail(userRow[0].email, userRow[0].first_name);
-      }
-
-      await createAuditLog({ userId, action: 'IDENTITY_VERIFIED', entity: 'users', entityId: userId, ipAddress: ip(req.ip) });
+      await identityVerificationService.completeIdentityVerification(userId, 'NG');
+      await createAuditLog({ userId, action: 'BANK_ACCOUNT_RESOLVED', entity: 'users', entityId: userId, ipAddress: ip(req.ip) });
     } else {
-      await createAuditLog({ userId, action: 'IDENTITY_VERIFICATION_FAILED', entity: 'users', entityId: userId, ipAddress: ip(req.ip) });
+      await identityVerificationService.failIdentityVerification(userId);
+      await createAuditLog({ userId, action: 'BANK_ACCOUNT_RESOLVE_FAILED', entity: 'users', entityId: userId, ipAddress: ip(req.ip) });
     }
 
     res.json({ success: true, data: result });
@@ -193,12 +151,14 @@ export async function bypassIdentityVerification(req: Request, res: Response, ne
 
     if (!userRows[0].identity_verified) {
       await db.update(schema.users)
-        .set({ identity_verified: true, identity_verified_at: new Date() })
+        .set({ identity_verified: true, identity_verified_at: new Date(), identity_verification_status: 'verified' })
         .where(eq(schema.users.id, userId));
 
       // Mirrors the real Stripe/Flutterwave verification flows — a verified
       // identity should always raise the Trust Score, even when the
-      // verification itself was bypassed for testing.
+      // verification itself was bypassed for testing. Bypass intentionally
+      // does NOT activate/charge a subscription — it only unblocks the
+      // group-joining/creation gate for testing those flows in isolation.
       await trustScoreService.increase(userId, TRUST_SCORE_DELTA_IDENTITY_VERIFIED, 'IDENTITY_VERIFIED');
 
       await notificationService.create({
