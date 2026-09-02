@@ -67,8 +67,8 @@ const sections = [
       {
         subtitle: 'Subscription Plans',
         text: (region: TermsRegion) => region === 'NG'
-          ? 'PadiHub offers exactly two monthly-only subscription tiers with no annual option and no free trial: Pro Group at ₦5,000/month, and Elite Group at ₦10,000/month. Pro Group lets a member create ONE savings group and be a member of up to 5 groups total. Elite Group lets a member create up to SEVEN savings groups and be a member of up to 10 groups total.'
-          : 'PadiHub offers exactly two monthly-only subscription tiers with no annual option and no free trial: Pro Group at £4.99/month, and Elite Group at £9.99/month. Pro Group lets a member create ONE savings group and be a member of up to 5 groups total. Elite Group lets a member create up to SEVEN savings groups and be a member of up to 10 groups total.',
+          ? 'PadiHub offers exactly two monthly-only subscription tiers with no annual option and no free trial: Basic at ₦5,000/month, and Premium at ₦10,000/month. Basic lets a member join up to 3 savings groups but cannot create one. Premium lets a member create up to 3 savings groups and join up to 5 more, for up to 8 group memberships in total.'
+          : 'PadiHub offers exactly two monthly-only subscription tiers with no annual option and no free trial: Basic at £4.99/month, and Premium at £14.99/month. Basic lets a member join up to 3 savings groups but cannot create one. Premium lets a member create up to 3 savings groups and join up to 5 more, for up to 8 group memberships in total.',
       },
       {
         subtitle: 'Cancellation',
@@ -166,21 +166,25 @@ const sections = [
   },
   {
     id: 'identity-verification',
-    title: '8. Identity Verification',
+    title: '8. Identity & Bank Account Verification',
     icon: Shield,
     color: '#2EAF6F',
     content: [
       {
         subtitle: 'Requirement to Verify',
-        text: 'To maintain the safety and integrity of PadiHub savings groups, users who create a savings group are required to complete identity verification before their group becomes active. This requirement applies to all group leaders regardless of country.',
+        text: 'To keep PadiHub savings groups safe, all users must complete a verification step before their subscription is charged and their group-joining/creation access unlocks. This requirement applies to every user, regardless of country.',
       },
       {
-        subtitle: 'UK Users — Stripe Identity',
-        text: 'UK-based users will be verified using Stripe Identity, a secure third-party identity verification service operated by Stripe, Inc. You will be asked to provide a government-issued photo ID and a selfie. PadiHub does not store your identity documents — they are processed and held by Stripe in accordance with their privacy policy.',
+        subtitle: 'UK Users — Stripe Identity, Embedded',
+        text: 'UK-based users complete Stripe Identity verification directly within the PadiHub dashboard, using an embedded verification flow — you are never redirected to a separate Stripe-hosted page. You will be asked to provide a government-issued photo ID and a selfie. PadiHub does not store your identity documents — they are processed and held by Stripe in accordance with their privacy policy.',
       },
       {
-        subtitle: 'Nigerian Users — BVN Verification',
-        text: 'Nigerian users will be verified via BVN (Bank Verification Number) confirmation through Flutterwave. You will be asked to provide your BVN, after which an OTP will be sent to your BVN-registered phone number. PadiHub does not store your BVN — only a verification reference is retained.',
+        subtitle: 'Nigerian Users — Flutterwave Account Resolve',
+        text: 'Nigerian users complete Flutterwave Account Resolve, a free check that confirms a provided bank account number matches a real account holder name. Account Resolve is a preliminary bank-account validation step — it is not full identity/KYC verification. PadiHub plans to add a dedicated KYC provider (such as Dojah or Monnify) for Nigerian users in a future update, alongside or in place of Account Resolve, without requiring you to redo this step.',
+      },
+      {
+        subtitle: 'No Charge Until Verification Succeeds',
+        text: 'For both UK and Nigerian users, your subscription is never charged until verification succeeds. Your card (UK) or bank account details (Nigeria) are saved but not charged while your profile shows a "Pending" status. If verification fails, no charge occurs, you receive an email explaining what happened with a clear "try again" action, and you may restart the entire verification and subscription process.',
       },
     ],
   },
@@ -192,37 +196,41 @@ const sections = [
     region: 'UK' as TermsRegion,
     content: [
       {
-        subtitle: 'One-Time Fee',
-        text: 'A one-time identity verification fee of £1.50 will be added to your first month\'s subscription invoice. This fee covers the cost of the Stripe Identity verification service and is charged once per account.',
+        subtitle: 'Free for the First 50 Verified Users',
+        text: 'Stripe Identity verification is free for the first 50 successfully-verified users platform-wide. This threshold is tracked using a race-safe counter so it can never let more than 50 free verifications through, even under concurrent verification attempts.',
+      },
+      {
+        subtitle: 'One-Time Fee From the 51st Verified User Onward',
+        text: 'From the 51st successfully-verified user onward, a one-time £1 fee is added to the first subscription charge collected immediately after your verification succeeds. Only a successful verification can trigger this fee or count toward the 50-user threshold — a failed or abandoned attempt is never charged.',
       },
       {
         subtitle: 'How It Appears on Your Invoice',
-        text: 'The fee will appear on your invoice as "Identity Verification Fee (one-time)". It is added automatically when you initiate identity verification and will be collected together with your first monthly subscription payment.',
-      },
-      {
-        subtitle: 'First Invoice Total',
-        text: 'Your first invoice will include your selected monthly plan plus the £1.50 identity verification fee. If you subscribe to Pro Group, your first invoice total will be £6.49. If you subscribe to Elite Group, your first invoice total will be £11.49. There is no annual billing option and no free trial.',
+        text: 'If it applies to you, the fee will appear on your first invoice as "Identity Verification Fee (one-time)", collected together with your first monthly subscription payment, which only occurs after your identity verification has succeeded.',
       },
       {
         subtitle: 'Non-Refundable',
-        text: 'The identity verification fee is non-refundable once verification has been initiated, regardless of the outcome of the verification process. By proceeding with identity verification, you agree to this charge.',
+        text: 'The identity verification fee, where charged, is non-refundable once your identity has been successfully verified. By proceeding with identity verification, you agree to this charge if it applies to you.',
       },
     ],
   },
   {
     id: 'identity-verification-fee-ng',
-    title: '10. Identity Verification Fee (Nigerian Users)',
+    title: '10. Bank Account Validation (Nigerian Users)',
     icon: Shield,
     color: '#2eafaf',
     region: 'NG' as TermsRegion,
     content: [
       {
         subtitle: 'No Charge for Nigerian Users',
-        text: 'BVN verification is provided at no additional cost to Nigerian users. There is no charge for completing BVN verification through PadiHub.',
+        text: 'Flutterwave Account Resolve is provided at no additional cost to Nigerian users. There is no charge for completing Account Resolve through PadiHub.',
+      },
+      {
+        subtitle: 'Interim Validation, Not Full KYC',
+        text: 'Account Resolve confirms that your provided bank account number matches your account holder name — it does not constitute full identity/KYC verification. PadiHub plans to add a dedicated KYC provider for Nigerian users in a future update.',
       },
       {
         subtitle: 'Standard Subscription Pricing',
-        text: 'Nigerian users can subscribe to Pro Group at ₦5,000/month or Elite Group at ₦10,000/month. Pro Group lets a member create ONE savings group and be a member of up to 5 groups total. Elite Group lets a member create up to SEVEN savings groups and be a member of up to 10 groups total. There is no annual billing option, no free trial, and no identity verification surcharge.',
+        text: 'Nigerian users can subscribe to Basic at ₦5,000/month or Premium at ₦10,000/month. Basic lets a member join up to 3 savings groups but cannot create one. Premium lets a member create up to 3 savings groups and join up to 5 more, for up to 8 group memberships in total. There is no annual billing option, no free trial, and no verification surcharge. Your subscription is only charged after your Account Resolve check succeeds.',
       },
     ],
   },
@@ -234,11 +242,19 @@ const sections = [
     content: [
       {
         subtitle: 'Fee Added to Each Contribution Charge',
-        text: 'When you save a payment method for your recurring group contributions, PadiHub\'s payment processors (Stripe for UK card charges, Flutterwave for Nigerian card charges) charge a processing fee on every contribution payment. This fee is added on top of your contribution amount and charged to you at the same time — it is never deducted from the group pot, so every member still receives their full contribution amount when it is their turn to be paid out.',
+        text: 'Every recurring group contribution charge includes a visible processing-fee surcharge added on top of your contribution amount and charged to you at the same time — it is never deducted from the group pot, so every member still receives their full contribution amount when it is their turn to be paid out.',
       },
       {
-        subtitle: 'Indicative Rates',
-        text: 'Stripe (UK card charges): approximately 1.5% + £0.20 per charge. Flutterwave (Nigerian card charges): approximately 1.4% per charge, capped at ₦2,000. These rates are indicative and may be updated to reflect PadiHub\'s final confirmed processor pricing; the current rate is always shown before you confirm a contribution charge.',
+        subtitle: 'UK Rates (Stripe)',
+        text: 'A card fee of 1.5% + £0.20 is charged on every contribution, plus an equal share of a payout fee (0.25% of that cycle\'s total pot + £0.20), split across all members contributing that cycle and rounded up to the next penny. Worked example: a £10 contribution in a 5-person group adds a £0.35 card fee and a £0.07 payout-fee share, for a £10.42 total charge. This applies to any contribution frequency (daily, weekly, or monthly).',
+      },
+      {
+        subtitle: 'Nigeria Rates (Flutterwave)',
+        text: 'A transaction fee of 2% of the contribution plus 7.5% VAT on that fee is charged on every contribution, plus an equal share of a tiered payout fee on that cycle\'s total pot (₦10 under ₦5,000; ₦25 for ₦5,001–₦50,000; ₦50 above ₦50,000) plus 7.5% VAT on that tiered fee, split across all contributing members and rounded up to the next kobo. Both the transaction fee and payout-fee share are itemised on-screen with their VAT components shown separately before you confirm a contribution.',
+      },
+      {
+        subtitle: 'Subscription Charges Are Not Surcharged',
+        text: 'Unlike contribution charges, processing fees on subscription and identity-verification charges are absorbed by PadiHub, not passed on to you as a surcharge (aside from the identity-verification fee described above, where applicable).',
       },
       {
         subtitle: 'Consent',
@@ -247,8 +263,28 @@ const sections = [
     ],
   },
   {
+    id: 'payout-timing',
+    title: '12. Payout Timing',
+    icon: Shield,
+    color: '#2eafaf',
+    content: [
+      {
+        subtitle: 'How Payouts Work',
+        text: 'PadiHub charges member contributions to its platform balance and then transfers each cycle\'s total pot to that cycle\'s recipient. This keeps every contribution charge separate from the payout transfer.',
+      },
+      {
+        subtitle: 'First Payout May Be Delayed',
+        text: 'The first payout made to a new recipient may be delayed by approximately 7–14 days while our payment processor completes its standard risk review for new payout destinations. This is a standard processor requirement and not specific to any individual member.',
+      },
+      {
+        subtitle: 'Standard Payout Timing',
+        text: 'After a recipient\'s first payout has completed, subsequent payouts are typically completed within approximately 3 business days.',
+      },
+    ],
+  },
+  {
     id: 'contact',
-    title: '12. Contact',
+    title: '13. Contact',
     icon: FileText,
     color: '#2EAF6F',
     content: [
@@ -335,11 +371,11 @@ export default function TermsPage() {
               These terms govern your use of PadiHub. We've written them in plain language so you know exactly what to expect.
             </div>
             <div className="flex flex-wrap gap-4 text-sm text-gray-400">
-              <span>Last updated: 1 June 2026</span>
+              <span>Last updated: 2 September 2026</span>
               <span>·</span>
-              <span>Effective: 1 June 2026</span>
+              <span>Effective: 2 September 2026</span>
               <span>·</span>
-              <span>Version 1.0</span>
+              <span>Version 2.0</span>
             </div>
           </div>
         </div>

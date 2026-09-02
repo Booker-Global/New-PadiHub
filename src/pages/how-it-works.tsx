@@ -46,20 +46,17 @@ const stepsMeta = [
 export default function HowItWorksPage() {
   const region = useResolvedPricingRegion();
   const steps = how_it_works.steps.map(step => {
-    if (step.title === 'Register') {
-      return {
-        ...step,
-        details: step.details.flatMap((detail, detailIndex) => detailIndex === 1
-          ? [detail, 'Verify your identity']
-          : [detail]),
-      };
-    }
-
     if (step.title === 'Subscribe') {
       return {
         ...step,
         desc: 'Choose the monthly plan that matches how you want to save and grow with your community.',
-        details: [...planDetailsByRegion[region], 'Cancel anytime'],
+        details: [
+          ...planDetailsByRegion[region],
+          region === 'NG'
+            ? 'Resolve your bank account details, then subscribe — your subscription is only charged once resolve succeeds'
+            : 'Verify your identity right here on PadiHub, then subscribe — your card is only charged once verification succeeds',
+          'Cancel anytime',
+        ],
       };
     }
 
@@ -67,8 +64,15 @@ export default function HowItWorksPage() {
       return {
         ...step,
         details: step.details.map((detail, detailIndex) => detailIndex === 1
-          ? 'Pay securely'
+          ? 'Pay securely — an itemised processing-fee surcharge is shown before you confirm'
           : detail),
+      };
+    }
+
+    if (step.title === 'Receive Your Payout') {
+      return {
+        ...step,
+        details: [...step.details, 'Your first payout may take 7–14 days; payouts after that typically arrive within 3 business days'],
       };
     }
 

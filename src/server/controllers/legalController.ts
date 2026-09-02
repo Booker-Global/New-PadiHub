@@ -2,20 +2,32 @@ import type { Request, Response } from 'express';
 
 const TERMS_SECTIONS = [
   {
-    title: 'Identity Verification',
-    content: 'To maintain the safety and integrity of PadiHub savings groups, users who create a savings group are required to complete identity verification before their group becomes active. UK-based users will be verified using Stripe Identity, a secure third-party identity verification service. Nigerian users will be verified via BVN (Bank Verification Number) confirmation through Flutterwave.',
+    title: 'Identity & Bank Account Verification',
+    content: 'To maintain the safety and integrity of PadiHub savings groups, users are required to complete a verification step before their subscription is charged and their group-joining/creation access unlocks. UK-based users complete Stripe Identity verification directly within the PadiHub dashboard (an embedded modal — you are never redirected to a separate Stripe-hosted page). Nigerian users complete Flutterwave Account Resolve, a free check that confirms a provided bank account number matches a real account holder name. Account Resolve is an interim bank-account validation step, not a full identity/KYC verification — PadiHub intends to add a dedicated KYC provider (such as Dojah or Monnify) for Nigerian users in a future update, alongside or in place of Account Resolve.',
+  },
+  {
+    title: 'Charge-Gating — Verification Before Any Charge',
+    content: 'For both UK and Nigerian users, no subscription charge is made until verification succeeds. When you select a plan, your card details (UK) or bank account details (Nigeria) are saved but not charged. Your profile shows a "Pending" status while verification is in progress. If verification fails, you are not charged, you receive an email explaining what happened with a clear "try again" action, and you may restart the whole verification and subscription process at any time.',
   },
   {
     title: 'Identity Verification Fee (UK Users)',
-    content: "A one-time identity verification fee of £1.50 will be added to your first month's subscription invoice. This fee covers the cost of securely verifying your identity through Stripe Identity. This charge will appear on your invoice as 'Identity Verification Fee (one-time)'. This fee is non-refundable once verification has been initiated. By proceeding with identity verification, you agree to this charge.",
+    content: 'Stripe Identity verification is free for the first 50 successfully-verified users platform-wide. From the 51st successfully-verified user onward, a one-time £1 fee is added to the first subscription charge collected immediately after your verification succeeds. This fee is only ever applied to a successful verification — a failed or abandoned attempt is never charged and does not count toward the 50-user threshold. By proceeding with identity verification, you agree to this charge if it applies to you.',
   },
   {
-    title: 'Identity Verification Fee (Nigerian Users)',
-    content: 'BVN verification for Nigerian users is provided at no additional cost. There is no charge to Nigerian users for completing BVN verification through PadiHub.',
+    title: 'Bank Account Validation (Nigerian Users)',
+    content: 'Flutterwave Account Resolve is provided at no additional cost. There is no charge to Nigerian users for completing Account Resolve through PadiHub. Please note this check validates that your bank account number matches your provided account name — it does not constitute full identity/KYC verification, and a fuller identity verification step is planned for a future update.',
   },
   {
     title: 'Subscription Fees',
-    content: 'PadiHub offers exactly two monthly-only subscription tiers with no annual option and no free trial: Pro Group at £4.99/month (UK) or ₦5,000/month (Nigeria), and Elite Group at £9.99/month (UK) or ₦10,000/month (Nigeria). Pro Group lets a member create ONE savings group and be a member of up to 5 groups total. Elite Group lets a member create up to SEVEN savings groups and be a member of up to 10 groups total. Which currency/country is shown depends on the visitor\'s location (IP-based), not a manual toggle.',
+    content: 'PadiHub offers exactly two monthly-only subscription tiers with no annual option and no free trial: Basic at £4.99/month (UK) or ₦5,000/month (Nigeria), and Premium at £14.99/month (UK) or ₦10,000/month (Nigeria). Basic lets a member join up to 3 savings groups but cannot create one. Premium lets a member create up to 3 savings groups and join up to 5 more, for up to 8 group memberships in total. Which currency/country is shown depends on the visitor\'s location (IP-based), not a manual toggle.',
+  },
+  {
+    title: 'Contribution Processing Fee Surcharges',
+    content: 'Every contribution charge includes a visible processing-fee surcharge added on top of your contribution amount — it is never deducted from the group pot. UK (Stripe): a 1.5% + £0.20 card fee, plus an equal share of a 0.25% + £0.20 payout fee calculated on that cycle\'s total pot and split across all contributing members that cycle (each member\'s share is rounded up to the next penny). Nigeria (Flutterwave): a 2% transaction fee plus 7.5% VAT on that fee, plus an equal share of a tiered payout fee (₦10 for cycle pots under ₦5,000, ₦25 for ₦5,001–₦50,000, ₦50 above ₦50,000) plus 7.5% VAT on that tiered fee, split across all contributing members (rounded up to the next kobo). These fees are itemised on-screen, with VAT shown separately for Flutterwave, before you confirm any contribution. Subscription and verification charges are not surcharged this way — those processor fees are absorbed by PadiHub.',
+  },
+  {
+    title: 'Payout Timing',
+    content: 'Because PadiHub uses a separate-charges-and-transfers model (contributions are charged to PadiHub\'s platform balance, then transferred to each cycle\'s recipient), the very first payout made to a new recipient\'s connected account may be delayed by approximately 7–14 days while the platform\'s payment processor completes its standard risk review for new payout destinations. Standard payouts thereafter are typically completed within approximately 3 business days.',
   },
   {
     title: 'Savings Groups',
@@ -38,7 +50,7 @@ const TERMS_SECTIONS = [
 const PRIVACY_SECTIONS = [
   {
     title: 'Data We Collect',
-    content: 'We collect your name, email address, country, and payment information necessary to provide the PadiHub service. For UK users undergoing identity verification, we collect identity document data processed by Stripe Identity. For Nigerian users, we initiate BVN consent via Flutterwave but do not store your BVN.',
+    content: 'We collect your name, email address, country, and payment information necessary to provide the PadiHub service. For UK users undergoing identity verification, we collect identity document data processed by Stripe Identity. For Nigerian users, we collect the bank account number and account name you provide for Flutterwave Account Resolve, a bank-account validation check — we do not store your BVN.',
   },
   {
     title: 'How We Use Your Data',
@@ -46,7 +58,7 @@ const PRIVACY_SECTIONS = [
   },
   {
     title: 'Data Sharing',
-    content: 'We share data with Stripe (payment processing and identity verification for UK users), Flutterwave (payment processing and BVN verification for Nigerian users), and Resend (transactional email delivery). We do not sell your personal data.',
+    content: 'We share data with Stripe (payment processing and identity verification for UK users), Flutterwave (payment processing and Account Resolve bank-account validation for Nigerian users), and Resend (transactional email delivery). We do not sell your personal data.',
   },
   {
     title: 'Data Retention',
@@ -62,8 +74,8 @@ export const legalController = {
   terms: (_req: Request, res: Response) => {
     res.json({
       success:      true,
-      version:      '1.0',
-      effective_date: '2026-01-01',
+      version:      '2.0',
+      effective_date: '2026-09-02',
       sections:     TERMS_SECTIONS,
     });
   },
@@ -71,8 +83,8 @@ export const legalController = {
   privacy: (_req: Request, res: Response) => {
     res.json({
       success:      true,
-      version:      '1.0',
-      effective_date: '2026-01-01',
+      version:      '1.1',
+      effective_date: '2026-09-02',
       sections:     PRIVACY_SECTIONS,
     });
   },

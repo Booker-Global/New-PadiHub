@@ -288,6 +288,10 @@ export default function PricingPage() {
           <p style={{ textAlign: 'center', color: '#6B7280', fontSize: 13, marginTop: 20 }}>
             Creating a group also counts as being a member of that group.
           </p>
+          <p style={{ textAlign: 'center', color: '#6B7280', fontSize: 13, marginTop: 8, maxWidth: '40rem', marginLeft: 'auto', marginRight: 'auto' }}>
+            Your subscription is only charged after your identity/bank-account verification succeeds. Contributions carry a separate, itemised processing-fee surcharge — see our{' '}
+            <Link to="/terms" style={{ color: '#2EAF6F', fontWeight: 700, textDecoration: 'underline' }}>Terms of Service</Link> for full details.
+          </p>
         </div>
       </section>
 
