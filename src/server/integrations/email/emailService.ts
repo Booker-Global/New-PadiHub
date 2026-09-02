@@ -327,7 +327,96 @@ export async function sendGroupNewMemberJoinedEmail(
   `));
 }
 
-// ─── Contribution emails ──────────────────────────────────────────────────────
+/** Notify the group leader that "Start Group" launched the group (Draft → Active). */
+export async function sendGroupActivatedEmail(to: string, groupName: string): Promise<void> {
+  await send(to, `${groupName} is now active`, wrap(`
+    ${h2('Your group has started')}
+    ${p(`<strong>${groupName}</strong> has reached its minimum member count and is now <strong>Active</strong>. Contributions and the payout rotation are live.`)}
+    ${btn('View Group', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
+  `));
+}
+
+/** Notify the group leader that an Active group dropped below the minimum member count and was Suspended. */
+export async function sendGroupSuspendedLowMembersEmail(
+  to: string, groupName: string, activeCount: number, minRequired: number,
+): Promise<void> {
+  await send(to, `${groupName} has been suspended — below minimum members`, wrap(`
+    ${h2('Group suspended')}
+    ${p(`<strong>${groupName}</strong> dropped to ${activeCount} active member(s), below the required minimum of ${minRequired}, and has been <strong>Suspended</strong>.`)}
+    ${p('Contribution collection is paused while suspended. Invite more members via your existing invite link to reactivate the group automatically. Groups left below the minimum for 30 days will auto-expire.')}
+    ${btn('Invite Members', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
+  `));
+}
+
+/** Notify the group leader that a Suspended group was refilled and is Active again. */
+export async function sendGroupReactivatedEmail(to: string, groupName: string): Promise<void> {
+  await send(to, `${groupName} is active again`, wrap(`
+    ${h2('Group reactivated')}
+    ${p(`<strong>${groupName}</strong> is back above the minimum member count and is <strong>Active</strong> again. Contribution collection has resumed.`)}
+  `));
+}
+
+/** Notify the group leader that a group stuck below the minimum member count for 30 days has auto-expired. */
+export async function sendGroupExpiredEmail(to: string, groupName: string): Promise<void> {
+  await send(to, `${groupName} has expired`, wrap(`
+    ${h2('Group expired')}
+    ${p(`<strong>${groupName}</strong> remained below the minimum member count for 30 days and has automatically <strong>Expired</strong>. No further contributions or payouts will occur for this group.`)}
+    ${p('You can create a new group at any time.')}
+  `));
+}
+
+/** Reminder nudge before a below-minimum group auto-expires. */
+export async function sendGroupExpiryReminderEmail(
+  to: string, groupName: string, daysRemaining: number,
+): Promise<void> {
+  await send(to, `${groupName} will expire in ${daysRemaining} day${daysRemaining === 1 ? '' : 's'}`, wrap(`
+    ${h2('Group expiring soon')}
+    ${p(`<strong>${groupName}</strong> has been below the minimum member count for a while and will automatically expire in <strong>${daysRemaining} day${daysRemaining === 1 ? '' : 's'}</strong> if not refilled.`)}
+    ${p('Invite more members via your existing invite link to keep the group active.')}
+    ${btn('Invite Members', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
+  `));
+}
+
+/**
+ * "Member-exit notice" (Section 8) — sent to every REMAINING member
+ * whenever anyone departs a group for any reason, under Compensated
+ * Compression. Explicitly discloses BOTH the payout-timing change and the
+ * pool-size change, per Section 5/8's requirement — never just "someone left".
+ */
+export async function sendMemberExitCompressionEmail(
+  to: string, groupName: string, departedName: string,
+  reason: 'voluntary' | 'removed_by_leader' | 'defaulted',
+): Promise<void> {
+  const reasonText = reason === 'voluntary' ? 'left the group'
+    : reason === 'defaulted' ? 'was suspended after repeated contribution defaults'
+    : 'was removed by the group leader';
+  await send(to, `Payout schedule updated in ${groupName}`, wrap(`
+    ${h2('Group membership and payout schedule updated')}
+    ${p(`<strong>${departedName}</strong> ${reasonText} in <strong>${groupName}</strong>.`)}
+    ${p('As a result: the final period has been removed from the group\'s timeline, everyone behind that slot has moved up one position in the payout order (your payout date may now be earlier), and the future payout pool is reduced by their share since they will no longer contribute.')}
+    ${p('Your own contribution amount is unchanged. Check the group page for your updated position and next payout date.')}
+    ${btn('View Group', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
+  `));
+}
+
+/**
+ * Sent to every member when a member defaults but is RETAINED in the group
+ * (default count below the group's max-permitted-defaults setting) — makes
+ * clear the payout amount/schedule is unaffected this cycle, and that
+ * recovering the specific missed amount from the defaulting member is the
+ * group's own responsibility, not the platform's.
+ */
+export async function sendDefaultRetainedNotificationEmail(
+  to: string, groupName: string, defaultingName: string, amountDue: string, currency: string,
+  defaultCount: number, maxPermittedDefaults: number,
+): Promise<void> {
+  await send(to, `Contribution default in ${groupName}`, wrap(`
+    ${h2('A member missed their contribution')}
+    ${p(`<strong>${defaultingName}</strong> defaulted on a contribution of <strong>${currency} ${amountDue}</strong> in <strong>${groupName}</strong> (default ${defaultCount} of ${maxPermittedDefaults} permitted before removal).`)}
+    ${p(`${defaultingName} remains in the group and the payout amount/schedule for this and future cycles is <strong>unchanged</strong>.`)}
+    ${p('Recovering the missed amount from the defaulting member is the group\'s/organiser\'s own responsibility — PadiHub does not guarantee, insure, or recover missed contributions on the group\'s behalf.')}
+  `));
+}
 
 export async function sendContributionReminderEmail(
   to: string, groupName: string, amount: string, dueDate: string,
@@ -387,6 +476,42 @@ export async function sendContributionOverdueEmail(
     )}
     ${p('<strong style="color:#DC2626;">Warning:</strong> This missed contribution has been recorded as a strike. Repeated missed contributions may result in suspension from the group.')}
     ${btn('View Dashboard', `${process.env.APP_URL ?? 'https://padihub.com'}/dashboard`)}
+  `));
+}
+
+/**
+ * "Payment overdue notice" (Section 8) — sent to the member the moment a
+ * charge attempt fails and their 72-hour grace period starts (Section 6).
+ * One automatic retry happens at the end of the grace period; no other
+ * repeat/forced charging occurs.
+ */
+export async function sendPaymentGracePeriodStartedEmail(
+  to: string, groupName: string, amount: string, graceEndsAt: string,
+): Promise<void> {
+  await send(to, `Payment failed — 72-hour grace period started for ${groupName}`, wrap(`
+    ${h2('Your contribution payment failed')}
+    ${p(`Your contribution of <strong>${amount}</strong> to <strong>${groupName}</strong> could not be charged.`)}
+    ${p(`You have a 72-hour grace period. We'll automatically retry the charge once, on <strong>${graceEndsAt}</strong>. No further retries happen after that.`)}
+    ${p('You can also update your payment method now to make sure the retry succeeds.')}
+    ${btn('Update Payment Method', `${process.env.APP_URL ?? 'https://padihub.com'}/payments/methods`)}
+  `));
+}
+
+/**
+ * Sent to the defaulting member when the single grace-period retry also
+ * fails and they are flagged In Default. If this pushes them past the
+ * group's max-permitted-defaults setting, Compensated Compression removes
+ * them and sendMemberExitCompressionEmail goes to the rest of the group;
+ * otherwise sendDefaultRetainedNotificationEmail is sent to the group instead.
+ */
+export async function sendMemberDefaultSuspensionEmail(
+  to: string, groupName: string, amount: string,
+): Promise<void> {
+  await send(to, `Contribution default recorded — ${groupName}`, wrap(`
+    ${h2('Your contribution is now in default')}
+    ${p(`The single automatic retry of your <strong>${amount}</strong> contribution to <strong>${groupName}</strong> also failed, so it's now recorded as a default.`)}
+    ${p('Depending on your group\'s settings, this may result in your removal from the group and a recalculation of the group\'s payout schedule.')}
+    ${p('Note: recovering an already-defaulted contribution amount from you is a matter between you and the group/organiser, not PadiHub.')}
   `));
 }
 

@@ -10,10 +10,14 @@ import {
   INVITE_TTL, GROUP_DEFAULT_STRIKE_THRESHOLD, GROUP_DEFAULT_SUSPENSION_THRESHOLD,
   GROUP_DEFAULT_VOTING_THRESHOLD, GROUP_DEFAULT_MIN_TRUST_SCORE,
   SUBSCRIPTION_TIERS, isSubscriptionTierKey,
+  GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH, isDailyFrequencyAllowed,
 } from '../lib/constants.js';
 import {
   sendGroupInvitationEmail,
   sendGroupClosedEmail,
+  sendGroupActivatedEmail,
+  sendGroupSuspendedLowMembersEmail,
+  sendGroupReactivatedEmail,
 } from '../integrations/email/emailService.js';
 
 function assignProvider(country: string) {
@@ -24,7 +28,7 @@ export const groupService = {
   async list(filters?: { status?: string; country?: string }) {
     
     return db.select().from(schema.savingsGroups)
-      .where(filters?.status ? eq(schema.savingsGroups.status, filters.status as 'active' | 'closed' | 'suspended') : undefined);
+      .where(filters?.status ? eq(schema.savingsGroups.status, filters.status as 'draft' | 'active' | 'closed' | 'suspended' | 'expired') : undefined);
   },
 
   async getById(groupId: string) {
@@ -59,6 +63,60 @@ export const groupService = {
         eq(schema.memberships.status, 'pending'),
       ));
     return (rows[0]?.value ?? 0) + (pendingRows[0]?.value ?? 0);
+  },
+
+  /** How many active (verified) members a group currently has. */
+  async countActiveMembers(groupId: string): Promise<number> {
+    const rows = await db.select({ value: count() }).from(schema.memberships)
+      .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')));
+    return rows[0]?.value ?? 0;
+  },
+
+  /**
+   * Re-checks a group's member count against the Draft/Active/Suspended
+   * lifecycle rules (Section 1) after ANY membership change (join, approve,
+   * leave, remove, Compensated Compression). An 'active' group that drops
+   * below GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH is suspended (collection
+   * pauses automatically — the contribution-schedule/rotation-advance jobs
+   * only ever touch 'active' groups); a 'suspended' group that gets
+   * refilled back up to the minimum is reactivated automatically. Never
+   * touches 'draft' (handled by activateGroup), 'closed', or 'expired'
+   * groups.
+   */
+  async reevaluateAfterMembershipChange(groupId: string): Promise<void> {
+    const group = await this.getById(groupId);
+    if (group.status !== 'active' && group.status !== 'suspended') return;
+
+    const activeCount = await this.countActiveMembers(groupId);
+
+    if (group.status === 'active' && activeCount < GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH) {
+      await db.update(schema.savingsGroups)
+        .set({ status: 'suspended', suspended_at: new Date() })
+        .where(eq(schema.savingsGroups.id, groupId));
+      await createAuditLog({ action: 'GROUP_SUSPENDED_LOW_MEMBERS', entity: 'savings_groups', entityId: groupId, metadata: { activeCount } });
+      await notificationService.create({
+        userId: group.leader_id, type: 'group_suspended_low_members',
+        title: 'Group Suspended',
+        message: `"${group.name}" dropped below ${GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH} active members and has been suspended. Collection is paused — invite more members to reactivate it.`,
+      });
+      const leaderRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, group.leader_id)).limit(1);
+      if (leaderRow.length) await sendGroupSuspendedLowMembersEmail(leaderRow[0].email, group.name, activeCount, GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH);
+      return;
+    }
+
+    if (group.status === 'suspended' && activeCount >= GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH) {
+      await db.update(schema.savingsGroups)
+        .set({ status: 'active', suspended_at: null })
+        .where(eq(schema.savingsGroups.id, groupId));
+      await createAuditLog({ action: 'GROUP_REACTIVATED', entity: 'savings_groups', entityId: groupId, metadata: { activeCount } });
+      await notificationService.create({
+        userId: group.leader_id, type: 'group_reactivated',
+        title: 'Group Reactivated',
+        message: `"${group.name}" is back to ${activeCount} active members and collection has resumed.`,
+      });
+      const leaderRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, group.leader_id)).limit(1);
+      if (leaderRow.length) await sendGroupReactivatedEmail(leaderRow[0].email, group.name);
+    }
   },
 
   /**
@@ -115,6 +173,16 @@ export const groupService = {
     voting_threshold?: number; allow_payout_swaps?: boolean;
     min_trust_score?: number;
   }, ipAddress?: string) {
+    // Production payment frequency is Weekly/Monthly only — Daily exists
+    // solely to speed up manual/QA testing of rotation logic.
+    if (data.contribution_frequency === 'daily' && !isDailyFrequencyAllowed()) {
+      throw new AppError(
+        'Daily contribution frequency is only available in development/testing. Choose Weekly or Monthly.',
+        400,
+        'FREQUENCY_NOT_ALLOWED_IN_PRODUCTION',
+      );
+    }
+
     // Identity verification is required to create a group
     const leaderRows = await db.select({
       identity_verified: schema.users.identity_verified,
@@ -188,7 +256,7 @@ export const groupService = {
       voting_threshold:         data.voting_threshold ?? GROUP_DEFAULT_VOTING_THRESHOLD,
       allow_payout_swaps:       data.allow_payout_swaps ?? true,
       payment_provider:         payment_provider as 'stripe' | 'flutterwave',
-      status:                   'active',
+      status:                   'draft',
     });
 
     // Auto-add leader as member
@@ -206,7 +274,7 @@ export const groupService = {
     await notificationService.create({
       userId: data.leader_id, type: 'group_created',
       title: 'Group Created',
-      message: `Your savings group "${data.name}" has been created successfully.`,
+      message: `Your savings group "${data.name}" has been created as a draft. Invite at least ${GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH} members, then use "Start Group" to launch it.`,
     });
 
     return this.getById(id);
@@ -223,6 +291,73 @@ export const groupService = {
 
     await db.update(schema.savingsGroups).set(data).where(eq(schema.savingsGroups.id, groupId));
     await createAuditLog({ userId: leaderId, action: 'GROUP_UPDATED', entity: 'savings_groups', entityId: groupId, ipAddress });
+    return this.getById(groupId);
+  },
+
+  /**
+   * "Start Group" — the Creator-triggered Draft → Active transition
+   * (Section 1). Requires at least GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH
+   * verified active members. Assigns payout rotation slots: the Organiser
+   * (group leader) always takes position 1, the rest ordered by Trust
+   * Score (highest first, ties broken by earliest join date) — this
+   * guarantees the first 3 slots are always the Organiser or the
+   * highest-Trust-Score members, exactly as required, while giving every
+   * later slot a principled, non-arbitrary order too.
+   */
+  async activateGroup(groupId: string, leaderId: string, ipAddress?: string) {
+    const group = await this.getById(groupId);
+    if (group.leader_id !== leaderId) throw new AppError('Only the group leader can start this group.', 403);
+    if (group.status !== 'draft') {
+      throw new AppError(
+        group.status === 'active' ? 'This group has already been started.' : `This group can't be started from its current status (${group.status}).`,
+        400,
+      );
+    }
+
+    const activeMembers = await db.select().from(schema.memberships)
+      .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')));
+    if (activeMembers.length < GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH) {
+      throw new AppError(
+        `You need at least ${GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH} verified members to start this group — you currently have ${activeMembers.length}.`,
+        400,
+        'GROUP_MIN_MEMBERS_NOT_MET',
+      );
+    }
+
+    const memberUserIds = activeMembers.map(m => m.user_id);
+    const userRows = await db.select({ id: schema.users.id, trust_score: schema.users.trust_score })
+      .from(schema.users).where(inArray(schema.users.id, memberUserIds));
+    const trustById = new Map(userRows.map(u => [u.id, u.trust_score]));
+
+    const leaderMembership = activeMembers.find(m => m.user_id === group.leader_id);
+    const others = activeMembers
+      .filter(m => m.user_id !== group.leader_id)
+      .sort((a, b) => (trustById.get(b.user_id) ?? 0) - (trustById.get(a.user_id) ?? 0)
+        || new Date(a.join_date).getTime() - new Date(b.join_date).getTime());
+    const ordered = leaderMembership ? [leaderMembership, ...others] : others;
+
+    for (let i = 0; i < ordered.length; i++) {
+      await db.update(schema.memberships).set({ rotation_order: i + 1 }).where(eq(schema.memberships.id, ordered[i].id));
+    }
+
+    await db.update(schema.savingsGroups).set({
+      status: 'active', activated_at: new Date(),
+      current_rotation_position: 1, current_cycle: 1,
+    }).where(eq(schema.savingsGroups.id, groupId));
+
+    await createAuditLog({ userId: leaderId, action: 'GROUP_ACTIVATED', entity: 'savings_groups', entityId: groupId, ipAddress, metadata: { memberCount: ordered.length } });
+
+    const memberUsers = await db.select({ id: schema.users.id, email: schema.users.email })
+      .from(schema.users).where(inArray(schema.users.id, memberUserIds));
+    for (const u of memberUsers) {
+      await notificationService.create({
+        userId: u.id, type: 'group_activated',
+        title: 'Group Started',
+        message: `"${group.name}" has started — contributions and payout rotation are now live.`,
+      });
+      await sendGroupActivatedEmail(u.email, group.name);
+    }
+
     return this.getById(groupId);
   },
 
@@ -254,7 +389,9 @@ export const groupService = {
   async createInvitation(groupId: string, invitedBy: string, email?: string) {
     
     const group = await this.getById(groupId);
-    if (group.status !== 'active') throw new AppError('Group is not active.', 400);
+    if (group.status === 'closed' || group.status === 'expired') {
+      throw new AppError('This group is no longer accepting members.', 400);
+    }
 
     const token = uuidv4();
     const id = uuidv4();

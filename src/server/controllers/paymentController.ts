@@ -135,7 +135,7 @@ async function computeContributionFeeBreakdown(contribution: typeof schema.contr
  * the contribution paid/failed, since markPaid/markFailed are idempotent
  * against contributions already in a terminal state).
  */
-export async function chargeContributionForUser(userId: string, contributionId: string) {
+export async function chargeContributionForUser(userId: string, contributionId: string, isGraceRetry = false) {
   const { contribution, user, group } = await getContributionContext(userId, contributionId);
   if (contribution.payment_status === 'paid') {
     throw new AppError('This contribution has already been paid.', 409, 'CONTRIBUTION_ALREADY_PAID');
@@ -183,7 +183,7 @@ export async function chargeContributionForUser(userId: string, contributionId: 
   if (result.status === 'succeeded') {
     await contributionService.markPaid(contributionId, result.providerReference, undefined, feeBreakdownStrings);
   } else if (result.status === 'failed') {
-    await contributionService.markFailed(contributionId);
+    await contributionService.markFailed(contributionId, undefined, isGraceRetry);
   }
 
   await createAuditLog({

@@ -128,6 +128,10 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
     { column: 'description',     sqlType: 'TEXT NULL' },
     { column: 'payout_day',      sqlType: 'INT NULL' },
     { column: 'min_trust_score', sqlType: 'INT NOT NULL DEFAULT 0' },
+    { column: 'activated_at',    sqlType: 'TIMESTAMP NULL' },
+    { column: 'suspended_at',    sqlType: 'TIMESTAMP NULL' },
+    { column: 'claim_active_amount',       sqlType: 'DECIMAL(12,2) NULL' },
+    { column: 'claim_reverts_after_cycle', sqlType: 'INT NULL' },
   ],
   contributions: [
     { column: 'amount_paid',        sqlType: 'DECIMAL(12,2) NULL' },
@@ -138,9 +142,12 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
     { column: 'payout_fee_share_vat_amount',  sqlType: 'DECIMAL(12,2) NULL' },
     { column: 'paid_date',          sqlType: 'TIMESTAMP NULL' },
     { column: 'provider_reference', sqlType: 'VARCHAR(255) NULL' },
+    { column: 'grace_period_ends_at', sqlType: 'TIMESTAMP NULL' },
+    { column: 'retry_attempted',      sqlType: 'BOOLEAN NOT NULL DEFAULT false' },
   ],
   memberships: [
     { column: 'rotation_order', sqlType: 'INT NULL' },
+    { column: 'default_count',  sqlType: 'INT NOT NULL DEFAULT 0' },
   ],
   rotations: [
     { column: 'provider_transfer_reference', sqlType: 'VARCHAR(255) NULL' },
@@ -151,6 +158,33 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
     { column: 'renewal_date',             sqlType: 'TIMESTAMP NULL' },
     { column: 'pending_tier',             sqlType: "ENUM('basic','premium') NULL" },
   ],
+  votes: [
+    { column: 'target_member_id',    sqlType: 'VARCHAR(36) NULL' },
+    { column: 'metadata',            sqlType: 'JSON NULL' },
+    { column: 'requires_unanimous',  sqlType: 'BOOLEAN NOT NULL DEFAULT false' },
+  ],
+};
+
+/**
+ * Enum columns that gained new allowed values after first being deployed.
+ * `ADD COLUMN` above can't fix these (the column already exists) — MySQL
+ * requires `MODIFY COLUMN` restating the full value list. Additive only:
+ * every value ever shipped stays in the list forever, so this never changes
+ * the meaning of existing rows, it only allows new values going forward.
+ */
+const REQUIRED_ENUM_VALUES: Record<string, Record<string, string[]>> = {
+  savings_groups: {
+    status: ['draft', 'active', 'suspended', 'closed', 'expired'],
+  },
+  contributions: {
+    payment_status: ['scheduled', 'due', 'paid', 'failed', 'missed', 'pending_default', 'defaulted'],
+  },
+  votes: {
+    proposal_type: ['payout_swap', 'exceptional_request', 'member_admission', 'contribution_claim'],
+  },
+  subscriptions: {
+    billing_status: ['active', 'past_due', 'cancelled', 'trialing', 'paused'],
+  },
 };
 
 /**
@@ -162,24 +196,41 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
  * touch the affected columns.
  */
 export async function ensureSchemaSync(): Promise<void> {
-  // `platform_counters` is a brand-new table (not just a new column on an
-  // existing one), so the ALTER-TABLE-based loop below can't self-heal it —
-  // create it directly if a deploy skipped `npm run db:push`. Used for the
-  // atomic "first 50 free" identity-verification counter (see
-  // identityVerificationService.ts).
-  try {
-    await poolConnection.query(
-      `CREATE TABLE IF NOT EXISTS \`platform_counters\` (
+  // Brand-new tables (not just new columns on an existing one) can't be
+  // self-healed by the ALTER-TABLE-based loop below — create them directly
+  // if a deploy skipped `npm run db:push`.
+  const newTableDdls: Record<string, string> = {
+    platform_counters: `CREATE TABLE IF NOT EXISTS \`platform_counters\` (
         \`name\` VARCHAR(100) NOT NULL PRIMARY KEY,
         \`value\` INT NOT NULL DEFAULT 0,
         \`updated_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
       )`,
-    );
-  } catch (err) {
-    console.error(
-      '[PadiHub] Schema sync check failed for table platform_counters — run `npm run db:push`:',
-      err instanceof Error ? err.message : err,
-    );
+    // Permanent hashed-email blocklist — see schema.ts emailBlocklist doc
+    // comment for why this must never be relaxed.
+    email_blocklist: `CREATE TABLE IF NOT EXISTS \`email_blocklist\` (
+        \`id\` VARCHAR(36) NOT NULL PRIMARY KEY,
+        \`email_hash\` VARCHAR(64) NOT NULL UNIQUE,
+        \`reason\` VARCHAR(255) NOT NULL DEFAULT 'account_deleted',
+        \`created_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )`,
+    vote_email_tokens: `CREATE TABLE IF NOT EXISTS \`vote_email_tokens\` (
+        \`id\` VARCHAR(36) NOT NULL PRIMARY KEY,
+        \`vote_id\` VARCHAR(36) NOT NULL,
+        \`member_id\` VARCHAR(36) NOT NULL,
+        \`token\` VARCHAR(255) NOT NULL UNIQUE,
+        \`responded_at\` TIMESTAMP NULL,
+        \`created_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )`,
+  };
+  for (const [table, ddl] of Object.entries(newTableDdls)) {
+    try {
+      await poolConnection.query(ddl);
+    } catch (err) {
+      console.error(
+        `[PadiHub] Schema sync check failed for table ${table} — run \`npm run db:push\`:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
   }
 
   for (const [table, requiredColumns] of Object.entries(REQUIRED_COLUMNS)) {
@@ -206,6 +257,32 @@ export async function ensureSchemaSync(): Promise<void> {
         `[PadiHub] Schema sync check failed for table ${table} — some requests may still return "Unknown column" errors until \`npm run db:push\` is run:`,
         err instanceof Error ? err.message : err,
       );
+    }
+  }
+
+  for (const [table, columns] of Object.entries(REQUIRED_ENUM_VALUES)) {
+    for (const [column, values] of Object.entries(columns)) {
+      try {
+        const [rows] = await poolConnection.query(
+          'SELECT COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?',
+          [dbConfig.database, table, column],
+        );
+        const columnType = (rows as Array<{ COLUMN_TYPE: string }>)[0]?.COLUMN_TYPE;
+        if (!columnType) continue; // column itself missing — handled above, or table not yet created
+
+        const missing = values.filter(v => !columnType.includes(`'${v}'`));
+        if (!missing.length) continue;
+
+        console.warn(`[PadiHub] Schema drift detected: ${table}.${column} is missing enum value(s) ${missing.join(', ')} — widening it now.`);
+        const enumList = values.map(v => `'${v}'`).join(',');
+        await poolConnection.query(`ALTER TABLE \`${table}\` MODIFY COLUMN \`${column}\` ENUM(${enumList}) NOT NULL`);
+        console.log(`[PadiHub] ✓ Widened enum ${table}.${column} to include: ${values.join(', ')}.`);
+      } catch (err) {
+        console.error(
+          `[PadiHub] Schema sync check failed for enum ${table}.${column} — some requests may fail until \`npm run db:push\` is run:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
     }
   }
 }

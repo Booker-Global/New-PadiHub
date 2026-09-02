@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { eq, and, inArray } from 'drizzle-orm';
+import { eq, and, inArray, gt } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -11,7 +11,8 @@ import { assertPaymentSetupComplete } from './paymentEligibilityService.js';
 import { TRUST_SCORE_DELTA_MEMBER_SUSPENDED, SUBSCRIPTION_TIERS, isSubscriptionTierKey } from '../lib/constants.js';
 import {
   sendMemberRemovedEmail,
-  sendGroupMemberSuspendedNotificationEmail,
+  sendMemberExitCompressionEmail,
+  sendDefaultRetainedNotificationEmail,
   sendInvitationAcceptedEmail,
   sendGroupJoinRequestEmail,
   sendGroupJoinRequestSubmittedEmail,
@@ -39,7 +40,9 @@ export const membershipService = {
    */
   async join(userId: string, groupId: string, inviteToken?: string, ipAddress?: string) {
     const group = await groupService.getById(groupId);
-    if (group.status !== 'active') throw new AppError('Group is not active.', 400);
+    if (group.status === 'closed' || group.status === 'expired') {
+      throw new AppError('This group is no longer accepting members.', 400);
+    }
 
     // Check capacity (active members only — pending requests don't occupy a seat yet)
     const members = await this.getForGroup(groupId);
@@ -125,6 +128,11 @@ export const membershipService = {
         const leaderName = `${leaderRow[0].first_name} ${leaderRow[0].last_name}`;
         await sendInvitationAcceptedEmail(leaderRow[0].email, group.name, memberName, leaderName);
       }
+
+      // A refill (suspended → active, back to >= min members) is handled
+      // here; draft groups only launch via the leader's explicit "Start
+      // Group" action (groupService.activateGroup), never automatically.
+      await groupService.reevaluateAfterMembershipChange(groupId);
 
       return { success: true, status: 'active' as const, message: 'You have joined the group.' };
     }
@@ -220,6 +228,8 @@ export const membershipService = {
       });
     }
 
+    await groupService.reevaluateAfterMembershipChange(group.id);
+
     return { success: true, rotation_order: nextRotationOrder };
   },
 
@@ -258,67 +268,212 @@ export const membershipService = {
     const group = await groupService.getById(groupId);
     if (group.leader_id === userId) throw new AppError('Group leader cannot leave. Close the group instead.', 400);
 
-    await db.update(schema.memberships)
-      .set({ status: 'removed' })
-      .where(and(eq(schema.memberships.user_id, userId), eq(schema.memberships.group_id, groupId)));
-
-    await createAuditLog({ userId, action: 'MEMBER_LEFT', entity: 'savings_groups', entityId: groupId, ipAddress });
-    return true;
+    return this.departMember(userId, groupId, 'voluntary', ipAddress);
   },
 
   async remove(leaderId: string, memberId: string, groupId: string, ipAddress?: string) {
     const group = await groupService.getById(groupId);
     if (group.leader_id !== leaderId) throw new AppError('Only the group leader can remove members.', 403);
 
-    await db.update(schema.memberships)
-      .set({ status: 'removed' })
-      .where(and(eq(schema.memberships.user_id, memberId), eq(schema.memberships.group_id, groupId)));
+    return this.departMember(memberId, groupId, 'removed_by_leader', ipAddress);
+  },
 
-    await createAuditLog({ userId: leaderId, action: 'MEMBER_REMOVED', entity: 'savings_groups', entityId: groupId, ipAddress, metadata: { memberId } });
-    await notificationService.create({
-      userId: memberId, type: 'removed_from_group',
-      title: 'Removed from Group',
-      message: `You have been removed from "${group.name}".`,
-    });
+  /**
+   * "Compensated Compression" (Section 5) — the single shared path for
+   * EVERY member departure, whatever the reason (voluntary leave,
+   * leader-initiated removal, or default-triggered suspension via
+   * flagDefault below). Removes the member, deletes their own still-pending
+   * ("final") rotation slot from the group's timeline if one exists, keeps
+   * every remaining member's contribution amount unchanged, and moves
+   * everyone who was behind the departed member up one payout slot — so
+   * the future payout pool shrinks by exactly the departed member's share
+   * and nobody's position skips or collides.
+   */
+  async departMember(
+    userId: string, groupId: string,
+    reason: 'voluntary' | 'removed_by_leader' | 'defaulted',
+    ipAddress?: string,
+  ) {
+    const group = await groupService.getById(groupId);
 
-    // Email the removed member, and notify every other active member — a
-    // removal affects the whole rotation, not just the person removed.
-    const userRow = await db.select({
-      email: schema.users.email, first_name: schema.users.first_name, last_name: schema.users.last_name,
-    }).from(schema.users).where(eq(schema.users.id, memberId)).limit(1);
-    if (userRow.length) {
-      await sendMemberRemovedEmail(userRow[0].email, group.name, 'Removed by group leader.');
+    const memberRows = await db.select().from(schema.memberships)
+      .where(and(eq(schema.memberships.user_id, userId), eq(schema.memberships.group_id, groupId))).limit(1);
+    if (!memberRows.length) throw new AppError('Membership not found.', 404);
+    const membership = memberRows[0];
+    if (membership.status !== 'active') return true; // already departed — idempotent
 
-      const removedName = `${userRow[0].first_name} ${userRow[0].last_name}`;
-      const otherMembers = await db.select().from(schema.memberships)
-        .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')));
-      const otherMemberIds = otherMembers.map(other => other.user_id).filter(id => id !== memberId);
-      const otherUserEmailsById = new Map(
-        otherMemberIds.length
-          ? (await db.select({ id: schema.users.id, email: schema.users.email })
-              .from(schema.users).where(inArray(schema.users.id, otherMemberIds)))
-              .map(row => [row.id, row.email] as const)
-          : [],
-      );
-      for (const other of otherMembers) {
-        if (other.user_id === memberId) continue;
-        const otherEmail = otherUserEmailsById.get(other.user_id);
-        if (otherEmail) {
-          await sendGroupMemberSuspendedNotificationEmail(otherEmail, group.name, removedName);
-        }
-        await notificationService.create({
-          userId: other.user_id, type: 'group_member_suspended',
-          title: 'Group Membership Update',
-          message: `${removedName} has been removed from "${group.name}" by the group leader.`,
-        });
+    const departedOrder = membership.rotation_order;
+    // 'defaulted' keeps the existing distinct 'suspended' status (as the
+    // strike-threshold flow already did) so history shows *why* someone
+    // left; voluntary leaves and leader removals use 'removed'.
+    const newStatus = reason === 'defaulted' ? 'suspended' : 'removed';
+
+    await db.update(schema.memberships).set({ status: newStatus }).where(eq(schema.memberships.id, membership.id));
+
+    if (departedOrder != null) {
+      // Shift everyone behind the departed slot up by one.
+      const behind = await db.select().from(schema.memberships)
+        .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active'), gt(schema.memberships.rotation_order, departedOrder)));
+      for (const m of behind) {
+        await db.update(schema.memberships).set({ rotation_order: (m.rotation_order ?? 1) - 1 }).where(eq(schema.memberships.id, m.id));
+      }
+
+      // Delete the final (now-unneeded) period from the group's timeline —
+      // any rotation not yet paid out that was scheduled to pay the
+      // departed member their turn.
+      await db.delete(schema.rotations).where(and(
+        eq(schema.rotations.group_id, groupId),
+        eq(schema.rotations.recipient_id, userId),
+        eq(schema.rotations.payout_status, 'pending'),
+      ));
+
+      // Keep the "next recipient" pointer correct after the shift.
+      if (group.current_rotation_position > departedOrder) {
+        await db.update(schema.savingsGroups)
+          .set({ current_rotation_position: group.current_rotation_position - 1 })
+          .where(eq(schema.savingsGroups.id, groupId));
       }
     }
+
+    await createAuditLog({
+      userId, action: 'MEMBER_DEPARTED_COMPENSATED_COMPRESSION', entity: 'memberships',
+      entityId: membership.id, ipAddress, metadata: { groupId, reason, departedOrder },
+    });
+
+    if (reason === 'defaulted') {
+      await trustScoreService.decrease(userId, TRUST_SCORE_DELTA_MEMBER_SUSPENDED, 'MEMBER_SUSPENDED');
+    }
+
+    const departedUserRow = await db.select({
+      email: schema.users.email, first_name: schema.users.first_name, last_name: schema.users.last_name,
+    }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
+
+    const departedReasonText = reason === 'voluntary'
+      ? 'You left the group.'
+      : reason === 'removed_by_leader'
+        ? 'Removed by group leader.'
+        : 'Suspended after repeated contribution defaults.';
+
+    await notificationService.create({
+      userId, type: reason === 'defaulted' ? 'membership_suspended' : 'removed_from_group',
+      title: reason === 'defaulted' ? 'Membership Suspended' : 'Removed from Group',
+      message: reason === 'voluntary'
+        ? `You have left "${group.name}".`
+        : `You have been ${reason === 'defaulted' ? 'suspended from' : 'removed from'} "${group.name}". ${departedReasonText}`,
+    });
+
+    if (departedUserRow.length) {
+      await sendMemberRemovedEmail(departedUserRow[0].email, group.name, departedReasonText);
+    }
+
+    // Every remaining member's payout timing and pool size just changed —
+    // disclose both explicitly (Section 8's "member-exit notice").
+    const departedName = departedUserRow.length
+      ? `${departedUserRow[0].first_name} ${departedUserRow[0].last_name}` : 'A member';
+    const otherMembers = await db.select().from(schema.memberships)
+      .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')));
+    const otherUserEmailsById = new Map(
+      otherMembers.length
+        ? (await db.select({ id: schema.users.id, email: schema.users.email })
+            .from(schema.users).where(inArray(schema.users.id, otherMembers.map(m => m.user_id))))
+            .map(row => [row.id, row.email] as const)
+        : [],
+    );
+    for (const other of otherMembers) {
+      const otherEmail = otherUserEmailsById.get(other.user_id);
+      if (otherEmail) {
+        await sendMemberExitCompressionEmail(otherEmail, group.name, departedName, reason);
+      }
+      await notificationService.create({
+        userId: other.user_id, type: 'group_member_suspended',
+        title: 'Payout Schedule Updated',
+        message: `${departedName} has left "${group.name}". The remaining payout pool and schedule have been recalculated — check the group page for your updated position.`,
+      });
+    }
+
+    await groupService.reevaluateAfterMembershipChange(groupId);
     return true;
   },
 
   /**
+   * A contribution's single 72h-grace + single-retry both failed (Section
+   * 6) — increment the member's default count and compare it against the
+   * group's max-permitted-defaults setting (savingsGroups.suspension_threshold,
+   * reused). Below the threshold: the member is retained, this cycle's
+   * payout amount for other recipients is unaffected (the pot is simply
+   * short by the defaulted amount), and recovering that specific shortfall
+   * is explicitly the group's own responsibility, not the platform's —
+   * every member is told this plainly. At/above the threshold: the member
+   * is removed via the same Compensated Compression path as any other
+   * departure (departMember above), which itself recalculates the
+   * schedule/amount and discloses that change to the group.
+   */
+  async flagDefault(userId: string, groupId: string, contributionId: string, ipAddress?: string) {
+    const group = await groupService.getById(groupId);
+    const memberRows = await db.select().from(schema.memberships)
+      .where(and(eq(schema.memberships.user_id, userId), eq(schema.memberships.group_id, groupId))).limit(1);
+    if (!memberRows.length) return null;
+    const membership = memberRows[0];
+
+    const newDefaultCount = membership.default_count + 1;
+    await db.update(schema.memberships).set({ default_count: newDefaultCount }).where(eq(schema.memberships.id, membership.id));
+    await createAuditLog({
+      userId, action: 'CONTRIBUTION_DEFAULT_FLAGGED', entity: 'memberships',
+      entityId: membership.id, ipAddress, metadata: { groupId, contributionId, newDefaultCount, maxPermittedDefaults: group.suspension_threshold },
+    });
+
+    if (newDefaultCount >= group.suspension_threshold) {
+      await this.departMember(userId, groupId, 'defaulted', ipAddress);
+      return { action: 'compressed' as const, newDefaultCount };
+    }
+
+    // Retained — tell everyone (including the defaulting member) the
+    // payout amount/schedule is unchanged for now, and that recovering the
+    // specific missed amount from the defaulting member is the group's/
+    // owner's own responsibility to pursue, not the platform's.
+    const contributionRows = await db.select({ amount_due: schema.contributions.amount_due, cycle_number: schema.contributions.cycle_number })
+      .from(schema.contributions).where(eq(schema.contributions.id, contributionId)).limit(1);
+    const contribution = contributionRows[0];
+
+    const activeMembers = await db.select().from(schema.memberships)
+      .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')));
+    const memberUserRow = await db.select({ first_name: schema.users.first_name, last_name: schema.users.last_name })
+      .from(schema.users).where(eq(schema.users.id, userId)).limit(1);
+    const defaultingName = memberUserRow.length ? `${memberUserRow[0].first_name} ${memberUserRow[0].last_name}` : 'A member';
+
+    const emailsById = new Map(
+      activeMembers.length
+        ? (await db.select({ id: schema.users.id, email: schema.users.email })
+            .from(schema.users).where(inArray(schema.users.id, activeMembers.map(m => m.user_id))))
+            .map(row => [row.id, row.email] as const)
+        : [],
+    );
+    for (const m of activeMembers) {
+      const email = emailsById.get(m.user_id);
+      if (email) {
+        await sendDefaultRetainedNotificationEmail(
+          email, group.name, defaultingName, contribution?.amount_due ?? '0.00', group.currency,
+          newDefaultCount, group.suspension_threshold,
+        );
+      }
+      await notificationService.create({
+        userId: m.user_id, type: 'contribution_default_retained',
+        title: 'Contribution Default',
+        message: `${defaultingName} defaulted on their contribution for cycle ${contribution?.cycle_number ?? '?'}. They remain in the group and the payout schedule/amount is unchanged for now. Recovering the missed amount is the group's own responsibility.`,
+      });
+    }
+
+    return { action: 'retained' as const, newDefaultCount };
+  },
+
+  /**
    * Increment a member's strike count and enforce suspension threshold.
-   * Called by contributionService.markMissed after flagging a missed contribution.
+   * Called by contributionService.markMissed for contributions that reach
+   * their due date without any charge attempt ever completing (e.g. no
+   * payment method on file) — a distinct, rarer path from the
+   * charge-attempted 72h-grace/single-retry default flow (see flagDefault
+   * above), but suspension from either path goes through the same
+   * Compensated Compression (departMember).
    */
   async applyStrike(userId: string, groupId: string, ipAddress?: string) {
     const group = await groupService.getById(groupId);
@@ -339,60 +494,9 @@ export const membershipService = {
       metadata: { newStrikeCount, groupId },
     });
 
-    // Suspension threshold reached — suspend the member
+    // Suspension threshold reached — depart via Compensated Compression
     if (newStrikeCount >= group.suspension_threshold) {
-      await db.update(schema.memberships)
-        .set({ status: 'suspended' })
-        .where(eq(schema.memberships.id, membership.id));
-
-      await trustScoreService.decrease(userId, TRUST_SCORE_DELTA_MEMBER_SUSPENDED, 'MEMBER_SUSPENDED');
-      await createAuditLog({
-        userId, action: 'MEMBER_SUSPENDED', entity: 'memberships',
-        entityId: membership.id, ipAddress,
-        metadata: { groupId, reason: 'strike_threshold_reached' },
-      });
-      await notificationService.create({
-        userId, type: 'membership_suspended',
-        title: 'Membership Suspended',
-        message: `Your membership in "${group.name}" has been suspended due to repeated missed contributions.`,
-      });
-
-      // Email the suspended member, and notify every other active member —
-      // a suspension affects the whole rotation, not just the person removed.
-      const suspendedUserRow = await db.select({
-        email: schema.users.email, first_name: schema.users.first_name, last_name: schema.users.last_name,
-      }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
-      if (suspendedUserRow.length) {
-        await sendMemberRemovedEmail(
-          suspendedUserRow[0].email, group.name,
-          'Suspended after repeated missed contributions.',
-        );
-
-        const suspendedName = `${suspendedUserRow[0].first_name} ${suspendedUserRow[0].last_name}`;
-        const otherMembers = await db.select().from(schema.memberships)
-          .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')));
-        const otherMemberIds = otherMembers.map(other => other.user_id).filter(id => id !== userId);
-        const otherUserEmailsById = new Map(
-          otherMemberIds.length
-            ? (await db.select({ id: schema.users.id, email: schema.users.email })
-                .from(schema.users).where(inArray(schema.users.id, otherMemberIds)))
-                .map(row => [row.id, row.email] as const)
-            : [],
-        );
-        for (const other of otherMembers) {
-          if (other.user_id === userId) continue;
-          const otherEmail = otherUserEmailsById.get(other.user_id);
-          if (otherEmail) {
-            await sendGroupMemberSuspendedNotificationEmail(otherEmail, group.name, suspendedName);
-          }
-          await notificationService.create({
-            userId: other.user_id, type: 'group_member_suspended',
-            title: 'Group Membership Update',
-            message: `${suspendedName} has been suspended from "${group.name}" after repeated missed contributions.`,
-          });
-        }
-      }
-
+      await this.departMember(userId, groupId, 'defaulted', ipAddress);
       return { action: 'suspended' as const, newStrikeCount };
     }
 
