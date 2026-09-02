@@ -578,6 +578,40 @@ export async function sendVoteResultEmail(
   `));
 }
 
+/**
+ * Governance vote notice with working single-click accept/decline links
+ * (Section 4/8) — used for new-member admission, contribution "claim", and
+ * payout-swap proposals. The links themselves are the authentication
+ * (GET /api/votes/respond?token=...&decision=...), so no login is required
+ * to respond — this is deliberately email-based, not push/in-app-only.
+ */
+export async function sendGovernanceVoteEmail(
+  to: string, groupName: string, subjectLine: string, description: string,
+  deadline: string, acceptUrl: string, declineUrl: string,
+): Promise<void> {
+  await send(to, `${subjectLine} — ${groupName}`, wrap(`
+    ${h2(subjectLine)}
+    ${p(description)}
+    ${table(
+      detail('Group', groupName) +
+      detail('Respond by', deadline),
+    )}
+    ${btn('Accept', acceptUrl)}
+    <div style="margin-top:12px;">
+      <a href="${declineUrl}" style="color:#DC2626;font-size:14px;text-decoration:underline;">Decline instead</a>
+    </div>
+  `));
+}
+
+/** Generic result notice for any governance vote (member admission, contribution claim, payout swap). */
+export async function sendVoteOutcomeEmail(to: string, groupName: string, subjectLine: string, message: string): Promise<void> {
+  await send(to, `${subjectLine} — ${groupName}`, wrap(`
+    ${h2(subjectLine)}
+    ${p(message)}
+    ${btn('View Group', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
+  `));
+}
+
 // ─── Subscription emails ──────────────────────────────────────────────────────
 
 export async function sendSubscriptionCreatedEmail(

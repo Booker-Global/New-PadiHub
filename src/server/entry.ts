@@ -244,6 +244,9 @@ app.put('/api/rotations/:id/advance',    authenticate, rotationController.advanc
 app.get('/api/votes',            authenticate, voteController.list);
 app.post('/api/votes',           authenticate, ...voteController.create);
 app.post('/api/votes/payout-swap', authenticate, ...voteController.proposeSwap);
+app.post('/api/votes/member-admission', authenticate, ...voteController.proposeAdmission);
+app.post('/api/votes/contribution-claim', authenticate, ...voteController.proposeClaim);
+app.get('/api/votes/respond',    voteController.respond);
 app.put('/api/votes/:id',        authenticate, ...voteController.cast);
 app.put('/api/votes/:id/close',  authenticate, voteController.close);
 

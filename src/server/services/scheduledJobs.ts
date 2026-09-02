@@ -280,6 +280,21 @@ export async function dailyBillingActiveGroupReconciliation(): Promise<void> {
   });
 }
 
+/**
+ * Section 4 — governance votes (member_admission, contribution_claim,
+ * payout_swap) must auto-resolve once their 48h voting_deadline passes,
+ * since checkAndClose is otherwise only invoked reactively when a member
+ * casts a response. Without this sweep, a vote nobody responds to would
+ * stay 'open' forever instead of invalidating per the "timeout invalidates"
+ * rule.
+ */
+export async function dailyGovernanceVoteExpiry(): Promise<void> {
+  await runJob('daily_governance_vote_expiry', async () => {
+    const { voteService } = await import('./voteService.js');
+    await voteService.expireOverdueVotes();
+  });
+}
+
 // ─── Weekly Jobs ──────────────────────────────────────────────────────────────
 
 /** Delete expired, unused group invitations */
@@ -543,6 +558,7 @@ export const dailyJobs = [
   dailyFailedPaymentCheck,
   dailyGroupLifecycleExpiry,
   dailyBillingActiveGroupReconciliation,
+  dailyGovernanceVoteExpiry,
   dailyNotificationCleanup,
 ];
 

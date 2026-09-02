@@ -185,6 +185,23 @@ export const membershipService = {
     const group = await groupService.getById(membership.group_id);
     if (group.leader_id !== leaderId) throw new AppError('Only the group leader can approve join requests.', 403);
 
+    return this._activatePendingMembership(membershipId, ipAddress);
+  },
+
+  /**
+   * Shared "admit this pending membership" logic used both by direct
+   * leader approval (approveJoinRequest above) and by a unanimous
+   * member_admission governance vote passing (voteService). Assigns the
+   * next rotation slot — appending mid-cycle admissions to the end of the
+   * payout sequence, per Section 4 — and notifies/emails everyone.
+   */
+  async _activatePendingMembership(membershipId: string, ipAddress?: string) {
+    const membershipRows = await db.select().from(schema.memberships).where(eq(schema.memberships.id, membershipId)).limit(1);
+    if (!membershipRows.length) throw new AppError('Membership not found.', 404);
+    const membership = membershipRows[0];
+    if (membership.status !== 'pending') return { success: true, rotation_order: membership.rotation_order ?? undefined };
+
+    const group = await groupService.getById(membership.group_id);
     const activeMembers = (await this.getForGroup(group.id)).filter(m => m.status === 'active');
     if (activeMembers.length >= group.maximum_members) throw new AppError('Group is full.', 400, 'GROUP_FULL');
 
@@ -193,12 +210,12 @@ export const membershipService = {
       .set({ status: 'active', rotation_order: nextRotationOrder })
       .where(eq(schema.memberships.id, membershipId));
 
-    await createAuditLog({ userId: leaderId, action: 'MEMBERSHIP_APPROVED', entity: 'savings_groups', entityId: group.id, ipAddress, metadata: { membershipId, memberId: membership.user_id } });
+    await createAuditLog({ userId: membership.user_id, action: 'MEMBERSHIP_APPROVED', entity: 'savings_groups', entityId: group.id, ipAddress, metadata: { membershipId, memberId: membership.user_id } });
 
     const [newMemberRow, leaderRow, otherMembersEmails] = await Promise.all([
       db.select({ email: schema.users.email, first_name: schema.users.first_name, last_name: schema.users.last_name })
         .from(schema.users).where(eq(schema.users.id, membership.user_id)).limit(1),
-      db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, leaderId)).limit(1),
+      db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, group.leader_id)).limit(1),
       activeMembers.length
         ? db.select({ id: schema.users.id, email: schema.users.email })
           .from(schema.users).where(inArray(schema.users.id, activeMembers.map(m => m.user_id)))
@@ -243,12 +260,29 @@ export const membershipService = {
     const group = await groupService.getById(membership.group_id);
     if (group.leader_id !== leaderId) throw new AppError('Only the group leader can reject join requests.', 403);
 
+    return this._invalidatePendingMembership(membershipId, ipAddress, leaderId);
+  },
+
+  /**
+   * Shared "invalidate this pending membership" logic used by direct
+   * leader rejection (rejectJoinRequest above) and by a member_admission
+   * governance vote closing as rejected/expired (a single "no" or a 48h
+   * timeout both invalidate the invite, per Section 4).
+   */
+  async _invalidatePendingMembership(membershipId: string, ipAddress?: string, actorId?: string) {
+    const membershipRows = await db.select().from(schema.memberships).where(eq(schema.memberships.id, membershipId)).limit(1);
+    if (!membershipRows.length) throw new AppError('Membership not found.', 404);
+    const membership = membershipRows[0];
+    if (membership.status !== 'pending') return { success: true };
+
+    const group = await groupService.getById(membership.group_id);
+
     // No 'rejected' enum value exists on memberships.status (adding one would
     // require a schema migration/db:push before it's safe to write) — reuse
     // 'removed', which already means "not part of this group".
     await db.update(schema.memberships).set({ status: 'removed' }).where(eq(schema.memberships.id, membershipId));
 
-    await createAuditLog({ userId: leaderId, action: 'MEMBERSHIP_REJECTED', entity: 'savings_groups', entityId: group.id, ipAddress, metadata: { membershipId, memberId: membership.user_id } });
+    await createAuditLog({ userId: actorId ?? membership.user_id, action: 'MEMBERSHIP_REJECTED', entity: 'savings_groups', entityId: group.id, ipAddress, metadata: { membershipId, memberId: membership.user_id } });
 
     const requesterRow = await db.select({ email: schema.users.email })
       .from(schema.users).where(eq(schema.users.id, membership.user_id)).limit(1);
@@ -262,6 +296,29 @@ export const membershipService = {
     });
 
     return { success: true };
+  },
+
+  /**
+   * Group leader kicks off unanimous member-admission governance voting
+   * (Section 4) for an existing pending join request, instead of deciding
+   * unilaterally. Every existing active member (including the leader, who
+   * is auto-approved as the proposer) must accept within 48 hours via
+   * emailed accept/decline links; a single decline or a timeout invalidates
+   * the invite (voteService handles closing/expiry and calls back into
+   * _activatePendingMembership / _invalidatePendingMembership above).
+   */
+  async initiateAdmissionVote(leaderId: string, membershipId: string, ipAddress?: string) {
+    const membershipRows = await db.select().from(schema.memberships).where(eq(schema.memberships.id, membershipId)).limit(1);
+    if (!membershipRows.length) throw new AppError('Join request not found.', 404);
+    const membership = membershipRows[0];
+    if (membership.status !== 'pending') throw new AppError('This join request has already been decided.', 400);
+
+    const group = await groupService.getById(membership.group_id);
+    if (group.leader_id !== leaderId) throw new AppError('Only the group leader can start an admission vote.', 403);
+
+    const { voteService } = await import('./voteService.js');
+    const voteId = await voteService.proposeMemberAdmission(group.id, leaderId, membershipId, ipAddress);
+    return { success: true, vote_id: voteId };
   },
 
   async leave(userId: string, groupId: string, ipAddress?: string) {
