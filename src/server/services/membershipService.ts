@@ -397,7 +397,15 @@ export const membershipService = {
       entityId: membership.id, ipAddress, metadata: { groupId, reason, departedOrder },
     });
 
-    if (reason === 'defaulted') {
+    // Voluntary departures carry no penalty — leaving a group by choice
+    // isn't a trustworthiness signal. Both involuntary paths (kicked out by
+    // the leader, or suspended after breaching the group's default
+    // threshold) recalculate the member's Trust Score downward, per the
+    // Trust Score scale (constants.ts). Contribution defaults are already
+    // separately penalised per-attempt in contributionService.markFailed
+    // (TRUST_SCORE_DELTA_CONTRIBUTION_MISSED) before this suspension-level
+    // step runs — this is the additional "removed from the group" penalty.
+    if (reason === 'defaulted' || reason === 'removed_by_leader') {
       await trustScoreService.decrease(userId, TRUST_SCORE_DELTA_MEMBER_SUSPENDED, 'MEMBER_SUSPENDED');
     }
 
