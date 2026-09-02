@@ -73,6 +73,24 @@ export const groupService = {
   },
 
   /**
+   * How many groups a user is a verified (active) member of that are
+   * themselves in the 'active' lifecycle status (Section 3) — this is the
+   * gate for subscription billing: billing stays inert/paused until this
+   * is > 0, and a daily job pauses it again if this hits exactly 0.
+   */
+  async countActiveGroupMembershipsForUser(userId: string): Promise<number> {
+    const rows = await db.select({ value: count() })
+      .from(schema.memberships)
+      .innerJoin(schema.savingsGroups, eq(schema.memberships.group_id, schema.savingsGroups.id))
+      .where(and(
+        eq(schema.memberships.user_id, userId),
+        eq(schema.memberships.status, 'active'),
+        eq(schema.savingsGroups.status, 'active'),
+      ));
+    return rows[0]?.value ?? 0;
+  },
+
+  /**
    * Re-checks a group's member count against the Draft/Active/Suspended
    * lifecycle rules (Section 1) after ANY membership change (join, approve,
    * leave, remove, Compensated Compression). An 'active' group that drops

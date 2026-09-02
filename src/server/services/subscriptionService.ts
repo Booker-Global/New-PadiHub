@@ -12,6 +12,7 @@ import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { getPaymentProvider } from '../integrations/payments/PaymentProviderFactory.js';
+import { groupService } from './groupService.js';
 import {
   SUBSCRIPTION_TIERS,
   isSubscriptionTierKey,
@@ -359,5 +360,36 @@ export const subscriptionService = {
     }
 
     return this.createSubscription(userId, user.country, user.subscription_tier);
+  },
+
+  /**
+   * Section 3 — subscription billing is only ever "live" (billing_status
+   * 'active') while the user is a verified member of at least one 'active'
+   * (launched) group; it's inert/paused otherwise. Called once per user per
+   * day by scheduledJobs.dailyBillingActiveGroupReconciliation. This is
+   * DB-bookkeeping only: it does NOT call the provider's own
+   * pause_collection API, so Stripe subscriptions keep renewing on
+   * schedule at the provider — see monthlySubscriptionRenewalCharge's
+   * existing billing_status filter, which already skips 'paused' users for
+   * the Flutterwave path (Stripe self-bills via webhooks and isn't
+   * affected either way by this DB flag). This is a known, documented
+   * limitation given project scope, not a silent gap.
+   */
+  async reconcileBillingForActiveGroupMembership(userId: string) {
+    const subRows = await db.select().from(schema.subscriptions)
+      .where(eq(schema.subscriptions.user_id, userId)).limit(1);
+    if (!subRows.length) return;
+    const sub = subRows[0];
+    if (sub.billing_status === 'cancelled') return;
+
+    const activeGroupCount = await groupService.countActiveGroupMembershipsForUser(userId);
+
+    if (activeGroupCount === 0 && sub.billing_status !== 'paused') {
+      await db.update(schema.subscriptions).set({ billing_status: 'paused' }).where(eq(schema.subscriptions.user_id, userId));
+      await createAuditLog({ userId, action: 'SUBSCRIPTION_BILLING_PAUSED', entity: 'subscriptions', metadata: { reason: 'zero_active_group_memberships' } });
+    } else if (activeGroupCount > 0 && sub.billing_status === 'paused') {
+      await db.update(schema.subscriptions).set({ billing_status: 'active' }).where(eq(schema.subscriptions.user_id, userId));
+      await createAuditLog({ userId, action: 'SUBSCRIPTION_BILLING_RESUMED', entity: 'subscriptions', metadata: { activeGroupCount } });
+    }
   },
 };

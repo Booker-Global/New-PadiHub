@@ -12,6 +12,7 @@ import {
 import { AppError } from '../middleware/errorHandler.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { notificationService } from './notificationService.js';
+import { isEmailBlocked } from '../lib/emailBlocklist.js';
 import {
   sendVerificationEmail,
   sendWelcomeEmail,
@@ -29,6 +30,18 @@ export const authService = {
     email: string; password: string; phone_number?: string; country: string;
   }, ipAddress?: string) {
     
+    // A previously deleted account's email is permanently blocked from
+    // re-registering (Section 7) — checked before the normal duplicate-email
+    // check so the error is specific and doesn't leak whether the email was
+    // ever a live account.
+    if (await isEmailBlocked(data.email)) {
+      throw new AppError(
+        'This email address cannot be used to create an account.',
+        403,
+        'EMAIL_BLOCKED',
+      );
+    }
+
     let existing: typeof schema.users.$inferSelect[];
     try {
       existing = await db.select().from(schema.users)
@@ -188,7 +201,19 @@ export const authService = {
         'DB_UNAVAILABLE',
       );
     }
-    if (!rows.length) throw new AppError('Invalid email or password.', 401, 'INVALID_CREDENTIALS');
+    if (!rows.length) {
+      // A previously deleted account's email is blocked from ever
+      // signing in again (Section 7) — give a specific, clear message
+      // rather than the generic "invalid credentials".
+      if (await isEmailBlocked(email)) {
+        throw new AppError(
+          'This email address cannot be used to log in.',
+          403,
+          'EMAIL_BLOCKED',
+        );
+      }
+      throw new AppError('Invalid email or password.', 401, 'INVALID_CREDENTIALS');
+    }
     const user = rows[0];
 
     if (!user.email_verified) throw new AppError('Please verify your email before logging in.', 403, 'EMAIL_NOT_VERIFIED');

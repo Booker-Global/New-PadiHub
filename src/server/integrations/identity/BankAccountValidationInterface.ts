@@ -13,6 +13,15 @@ export interface BankAccountValidationResult {
  * dedicated KYC provider (Dojah or Monnify, still being decided) can be
  * added alongside or in place of it later just by implementing this
  * interface — no caller needs to change.
+ *
+ * TODO(NG paid KYC tier): a full BVN-based identity verification flow is a
+ * planned future PAID tier for Nigeria, separate from this free interim
+ * Account Resolve check. It is NOT being built now — this is only a marker
+ * for where it slots in later: it would implement this same
+ * IBankAccountValidationProvider interface (or a new, similarly-shaped
+ * IIdentityVerificationProvider for full KYC) and be selected instead of /
+ * alongside FlutterwaveAccountResolveProvider for users on that paid tier,
+ * without requiring changes to any caller of this interface.
  */
 export interface IBankAccountValidationProvider {
   validateBankAccount(details: { accountNumber: string; bankCode: string }): Promise<BankAccountValidationResult>;

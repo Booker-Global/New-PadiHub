@@ -1,4 +1,5 @@
 import bcrypt from 'bcryptjs';
+import { v4 as uuidv4 } from 'uuid';
 import { eq, and, inArray, desc, count, ne } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
@@ -6,6 +7,7 @@ import { AppError } from '../middleware/errorHandler.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { BCRYPT_ROUNDS, TRUST_SCORE_MAX, TRUST_SCORE_MIN, SUBSCRIPTION_TIERS, isSubscriptionTierKey } from '../lib/constants.js';
 import { getPaymentProvider } from '../integrations/payments/PaymentProviderFactory.js';
+import { hashEmail } from '../lib/emailBlocklist.js';
 import { sendAccountDeletedEmail } from '../integrations/email/emailService.js';
 
 function getDeletedEmail(userId: string): string {
@@ -324,6 +326,16 @@ export const userService = {
     await db.transaction(async (tx) => {
       await tx.delete(schema.emailVerificationTokens).where(eq(schema.emailVerificationTokens.user_id, userId));
       await tx.delete(schema.passwordResetTokens).where(eq(schema.passwordResetTokens.user_id, userId));
+
+      // Permanently block the ORIGINAL email before it's overwritten below —
+      // see src/server/lib/emailBlocklist.ts for why (prevents evading
+      // default/suspension history via delete-then-re-register).
+      const emailHash = hashEmail(user.email);
+      const alreadyBlocked = await tx.select({ id: schema.emailBlocklist.id }).from(schema.emailBlocklist)
+        .where(eq(schema.emailBlocklist.email_hash, emailHash)).limit(1);
+      if (!alreadyBlocked.length) {
+        await tx.insert(schema.emailBlocklist).values({ id: uuidv4(), email_hash: emailHash, reason: 'account_deleted' });
+      }
 
       if (closableGroupIds.length) {
         await tx.update(schema.savingsGroups)

@@ -58,9 +58,10 @@ export const users = mysqlTable('users', {
   // Resolve carries no member-facing fee).
   identity_verification_fee_amount: decimal('identity_verification_fee_amount', { precision: 12, scale: 2 }),
   stripe_identity_session_id:  varchar('stripe_identity_session_id', { length: 255 }),
-  // Deprecated — was used by the retired BVN/OTP verification flow, replaced
-  // by Flutterwave Account Resolve (synchronous, no stored reference needed).
-  // Left in place only to avoid a destructive column drop; always null now.
+  // TODO(NG paid KYC tier): reserved for a future PAID full BVN identity-
+  // verification tier for Nigeria (distinct from the free interim
+  // Flutterwave Account Resolve bank-account-validation check — see
+  // BankAccountValidationInterface.ts). Not implemented yet; always null.
   bvn_verification_reference:  varchar('bvn_verification_reference', { length: 255 }),
   last_login_at:               timestamp('last_login_at'),
   active:                      boolean('active').notNull().default(true),

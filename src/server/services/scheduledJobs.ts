@@ -21,7 +21,7 @@ import {
   SUBSCRIPTION_TIERS, isSubscriptionTierKey, getTierMonthlyPrice,
   GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH, GROUP_STUCK_BELOW_MIN_EXPIRY_DAYS, GROUP_STUCK_EXPIRY_REMINDER_DAYS_BEFORE,
 } from '../lib/constants.js';
-import { planCode } from './subscriptionService.js';
+import { planCode, subscriptionService } from './subscriptionService.js';
 import {
   sendContributionReminderEmail,
   sendSubscriptionRenewalReminderEmail,
@@ -256,6 +256,26 @@ export async function dailyGroupLifecycleExpiry(): Promise<void> {
         const leaderRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, group.leader_id)).limit(1);
         if (leaderRow.length) await sendGroupExpiryReminderEmail(leaderRow[0].email, group.name, daysRemaining);
       }
+    }
+  });
+}
+
+/**
+ * Section 3 — subscription billing only stays "live" while a user's
+ * active-group-membership count is above zero; pause it the moment that
+ * count hits exactly zero, and resume it automatically once they're a
+ * verified member of an active group again. See
+ * subscriptionService.reconcileBillingForActiveGroupMembership for the
+ * bookkeeping-only mechanics and its documented limitations.
+ */
+export async function dailyBillingActiveGroupReconciliation(): Promise<void> {
+  await runJob('daily_billing_active_group_reconciliation', async () => {
+    const subs = await db.select({ user_id: schema.subscriptions.user_id })
+      .from(schema.subscriptions)
+      .where(inArray(schema.subscriptions.billing_status, ['active', 'paused']));
+
+    for (const sub of subs) {
+      await subscriptionService.reconcileBillingForActiveGroupMembership(sub.user_id);
     }
   });
 }
@@ -522,6 +542,7 @@ export const dailyJobs = [
   dailyContributionDefaultRetry,
   dailyFailedPaymentCheck,
   dailyGroupLifecycleExpiry,
+  dailyBillingActiveGroupReconciliation,
   dailyNotificationCleanup,
 ];
 
