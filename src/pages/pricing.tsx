@@ -45,7 +45,7 @@ const verificationNotesByRegion: Record<PricingRegion, { title: string; body: st
     body: 'Save your card first, then complete Stripe Identity inside an embedded PadiHub dashboard modal. Your profile stays Pending until verification succeeds.',
     bullets: [
       'Subscription billing starts only after identity verification succeeds',
-      'The first 50 successful UK verifications are free; from the 51st onward, a one-time £1 fee is added to the first subscription charge',
+      'A verification fee may apply to your first subscription charge — see our Terms & Conditions for details',
       'If verification fails, no charge is taken and you receive a try-again email',
     ],
   },
@@ -65,18 +65,18 @@ const contributionFeeNotesByRegion: Record<PricingRegion, { title: string; body:
     title: 'UK contribution fees are shown before you confirm',
     body: 'Every contribution adds a visible surcharge on top of the contribution amount — never deducted from the pot.',
     bullets: [
-      'Card fee: 1.5% + £0.20 on every contribution',
-      'Plus your equal share of that cycle’s payout fee: 0.25% of the full pot + £0.20, split across contributing members and rounded up to the next penny',
-      'Worked example: £10 contribution in a 5-person group = £10.42 total charge (£0.35 card fee + £0.07 payout-fee share)',
+      'A card fee plus your equal share of that cycle’s payout fee is added to every contribution',
+      'The surcharge is fully itemised on-screen before you confirm',
+      'See our FAQ for the exact fee percentages',
     ],
   },
   NG: {
     title: 'Nigeria contribution fees stay itemised',
     body: 'Every contribution adds a visible surcharge on top of the contribution amount — never deducted from the pot.',
     bullets: [
-      'Transaction fee: 2% of the contribution, plus 7.5% VAT on that fee',
-      'Plus your equal share of the cycle’s tiered payout fee (₦10 / ₦25 / ₦50 by pot size), with 7.5% VAT shown separately and each share rounded up to the next kobo',
+      'A transaction fee plus your equal share of the cycle’s tiered payout fee is added to every contribution, with VAT shown separately',
       'Subscription and verification charges are not surcharged this way',
+      'See our FAQ for the exact fee percentages',
     ],
   },
 };

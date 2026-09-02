@@ -209,11 +209,8 @@ export const groupService = {
     }).from(schema.users).where(eq(schema.users.id, data.leader_id)).limit(1);
 
     if (leaderRows.length && !leaderRows[0].identity_verified) {
-      const verificationUrl = leaderRows[0].country === 'NG'
-        ? '/api/identity/ng/resolve-account'
-        : '/api/identity/verify/start';
       throw new AppError(
-        `Identity verification is required before creating a group. Start verification at: ${verificationUrl}`,
+        'Identity verification is required before creating a group. Complete verification at /verify-identity.',
         403,
         'VERIFICATION_REQUIRED',
       );
