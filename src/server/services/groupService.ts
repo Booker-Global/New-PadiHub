@@ -124,7 +124,7 @@ export const groupService = {
 
     if (leaderRows.length && !leaderRows[0].identity_verified) {
       const verificationUrl = leaderRows[0].country === 'NG'
-        ? '/api/identity/bvn/verify'
+        ? '/api/identity/ng/resolve-account'
         : '/api/identity/verify/start';
       throw new AppError(
         `Identity verification is required before creating a group. Start verification at: ${verificationUrl}`,
@@ -145,9 +145,23 @@ export const groupService = {
     const groupsLed = await this.countGroupsLed(data.leader_id);
     if (groupsLed >= SUBSCRIPTION_TIERS[tier].maxGroupsCreate) {
       throw new AppError(
-        `Your ${SUBSCRIPTION_TIERS[tier].name} plan allows you to create up to ${SUBSCRIPTION_TIERS[tier].maxGroupsCreate} group${SUBSCRIPTION_TIERS[tier].maxGroupsCreate === 1 ? '' : 's'}. Upgrade your plan to create more.`,
+        SUBSCRIPTION_TIERS[tier].maxGroupsCreate === 0
+          ? `Your ${SUBSCRIPTION_TIERS[tier].name} plan doesn't allow creating groups — upgrade to Premium to create up to ${SUBSCRIPTION_TIERS.premium.maxGroupsCreate} groups.`
+          : `You've reached your ${SUBSCRIPTION_TIERS[tier].name} plan's limit of ${SUBSCRIPTION_TIERS[tier].maxGroupsCreate} created groups.`,
         403,
         'GROUP_CREATE_LIMIT_REACHED',
+      );
+    }
+    // Creating a group also counts as a membership of it, so it must not push
+    // the leader past their tier's TOTAL group-membership cap (created +
+    // joined groups combined) — see countGroupsJoined(), which counts every
+    // membership regardless of role or status.
+    const groupsJoined = await this.countGroupsJoined(data.leader_id);
+    if (groupsJoined >= SUBSCRIPTION_TIERS[tier].maxGroupsJoin) {
+      throw new AppError(
+        `You've reached your ${SUBSCRIPTION_TIERS[tier].name} plan's limit of ${SUBSCRIPTION_TIERS[tier].maxGroupsJoin} group memberships. Leave a group to create another.`,
+        403,
+        'GROUP_MEMBERSHIP_LIMIT_REACHED',
       );
     }
 

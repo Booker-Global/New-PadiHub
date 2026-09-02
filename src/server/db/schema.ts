@@ -16,11 +16,11 @@ export const users = mysqlTable('users', {
   currency:                    varchar('currency', { length: 3 }).notNull().default('GBP'),
   trust_score:                 int('trust_score').notNull().default(0),
   subscription_status:         mysqlEnum('subscription_status', ['free', 'trial', 'active', 'expired', 'cancelled']).notNull().default('free'),
-  // The subscription tier the user chose during onboarding — 'pro' or 'elite'
+  // The subscription tier the user chose during onboarding — 'basic' or 'premium'
   // (see SUBSCRIPTION_TIERS in src/server/lib/constants.ts). Null until the
   // user picks a plan; group creation/joining requires this to be set — see
   // paymentEligibilityService.ts.
-  subscription_tier:           mysqlEnum('subscription_tier', ['pro', 'elite']),
+  subscription_tier:           mysqlEnum('subscription_tier', ['basic', 'premium']),
   stripe_customer_id:          varchar('stripe_customer_id', { length: 100 }),
   stripe_payment_method_id:    varchar('stripe_payment_method_id', { length: 100 }),
   stripe_connected_account_id: varchar('stripe_connected_account_id', { length: 100 }),
@@ -44,7 +44,23 @@ export const users = mysqlTable('users', {
   email_verified:              boolean('email_verified').notNull().default(false),
   identity_verified:           boolean('identity_verified').notNull().default(false),
   identity_verified_at:        timestamp('identity_verified_at'),
+  // Granular status shown on the member's profile while identity/bank-account
+  // verification is in progress — 'pending' covers the window between
+  // triggering Stripe Identity's embedded modal (UK) or Flutterwave Account
+  // Resolve (NG, an interim bank-account-validation check, not full KYC) and
+  // the provider's success/failure result. No subscription/verification
+  // charge occurs until this reaches 'verified' — see identityVerificationService.ts.
+  identity_verification_status: mysqlEnum('identity_verification_status', ['not_started', 'pending', 'verified', 'failed']).notNull().default('not_started'),
+  // UK only — the actual identity-verification fee charged to this member's
+  // first invoice: '0.00' if they were among the first 50 successfully-verified
+  // users platform-wide (see platform_counters), '1.00' otherwise. Null until
+  // verification succeeds. Always null for NG users (Flutterwave Account
+  // Resolve carries no member-facing fee).
+  identity_verification_fee_amount: decimal('identity_verification_fee_amount', { precision: 12, scale: 2 }),
   stripe_identity_session_id:  varchar('stripe_identity_session_id', { length: 255 }),
+  // Deprecated — was used by the retired BVN/OTP verification flow, replaced
+  // by Flutterwave Account Resolve (synchronous, no stored reference needed).
+  // Left in place only to avoid a destructive column drop; always null now.
   bvn_verification_reference:  varchar('bvn_verification_reference', { length: 255 }),
   last_login_at:               timestamp('last_login_at'),
   active:                      boolean('active').notNull().default(true),
@@ -147,9 +163,16 @@ export const contributions = mysqlTable('contributions', {
   cycle_number:       int('cycle_number').notNull(),
   amount_due:         decimal('amount_due', { precision: 12, scale: 2 }).notNull(),
   amount_paid:        decimal('amount_paid', { precision: 12, scale: 2 }),
-  // Provider processing fee charged on top of amount_due (not deducted from
-  // the group pot) — see src/server/lib/paymentFees.ts. Null until charged.
+  // Provider processing + payout-fee surcharge charged on top of amount_due
+  // (not deducted from the group pot) — see src/server/lib/paymentFees.ts.
+  // fee_amount is the TOTAL surcharge (all four components below, summed);
+  // the itemised components are stored separately for frontend display and
+  // disclosure purposes. All null until charged.
   fee_amount:         decimal('fee_amount', { precision: 12, scale: 2 }),
+  card_fee_amount:         decimal('card_fee_amount', { precision: 12, scale: 2 }),
+  card_fee_vat_amount:     decimal('card_fee_vat_amount', { precision: 12, scale: 2 }),
+  payout_fee_share_amount:     decimal('payout_fee_share_amount', { precision: 12, scale: 2 }),
+  payout_fee_share_vat_amount: decimal('payout_fee_share_vat_amount', { precision: 12, scale: 2 }),
   due_date:           timestamp('due_date').notNull(),
   paid_date:          timestamp('paid_date'),
   payment_status:     mysqlEnum('payment_status', ['scheduled', 'due', 'paid', 'failed', 'missed']).notNull().default('scheduled'),
@@ -230,7 +253,7 @@ export const subscriptions = mysqlTable('subscriptions', {
   // the tier they'll move to at that point. Applied and cleared by the
   // renewal job (scheduledJobs.ts) / Stripe invoice.payment_succeeded
   // webhook (webhookStripeController.ts). Null when no downgrade is pending.
-  pending_tier:            mysqlEnum('pending_tier', ['pro', 'elite']),
+  pending_tier:            mysqlEnum('pending_tier', ['basic', 'premium']),
   created_at:              timestamp('created_at').notNull().defaultNow(),
   updated_at:              timestamp('updated_at').notNull().defaultNow().onUpdateNow(),
 });
@@ -292,3 +315,16 @@ export const auditLogs = mysqlTable('audit_logs', {
   userIdx:   index('audit_logs_user_idx').on(t.user_id),
   actionIdx: index('audit_logs_action_idx').on(t.action),
 }));
+
+// ─── Platform Counters ────────────────────────────────────────────────────────
+// Generic atomic counters shared across the platform. Currently used to track
+// how many users have ever successfully completed Stripe Identity verification
+// (name: 'identity_verifications_free_used'), so the first 50 platform-wide can
+// be verified for free and the 51st onward gets a £1 surcharge — incremented
+// inside a single DB transaction (INSERT ... ON DUPLICATE KEY UPDATE, then a
+// read of the same row) so concurrent verifications can't race past the cap.
+export const platformCounters = mysqlTable('platform_counters', {
+  name:       varchar('name', { length: 100 }).primaryKey(),
+  value:      int('value').notNull().default(0),
+  updated_at: timestamp('updated_at').notNull().defaultNow().onUpdateNow(),
+});

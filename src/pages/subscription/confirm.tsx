@@ -7,17 +7,17 @@ const fadeUp = { hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0, tra
 const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.08 } } };
 
 const tierConfig = {
-  pro: {
-    name: 'Pro Group',
+  basic: {
+    name: 'Basic',
     price: { GB: '£4.99', NG: '₦5,000' },
     region: { GB: '🇬🇧 United Kingdom', NG: '🇳🇬 Nigeria' },
-    features: ['Create 1 savings group', 'Join up to 5 savings groups', 'Trust Score™, governance and voting tools', 'Priority onboarding support'],
+    features: ['Join up to 3 savings groups', 'Cannot create a savings group', 'Trust Score™, governance and voting tools', 'Priority onboarding support'],
   },
-  elite: {
-    name: 'Elite Group',
-    price: { GB: '£9.99', NG: '₦10,000' },
+  premium: {
+    name: 'Premium',
+    price: { GB: '£14.99', NG: '₦10,000' },
     region: { GB: '🇬🇧 United Kingdom', NG: '🇳🇬 Nigeria' },
-    features: ['Create up to 7 savings groups', 'Join up to 10 savings groups', 'Trust Score™, governance and voting tools', 'Priority onboarding support'],
+    features: ['Create up to 3 savings groups', 'Join up to 5 more savings groups (8 total)', 'Trust Score™, governance and voting tools', 'Priority onboarding support'],
   },
 } as const;
 
@@ -25,7 +25,7 @@ type TierKey = keyof typeof tierConfig;
 type CountryCode = 'GB' | 'NG';
 
 function resolveSelection(plan: string | null, tier: string | null, country: string | null): { tier: TierKey; country: CountryCode } {
-  const resolvedTier = tier === 'elite' || plan?.includes('elite') ? 'elite' : 'pro';
+  const resolvedTier = tier === 'premium' || plan?.includes('premium') ? 'premium' : 'basic';
   const resolvedCountry = country === 'NG' || plan?.startsWith('ng_') || plan?.startsWith('ng-') ? 'NG' : 'GB';
   return { tier: resolvedTier, country: resolvedCountry };
 }

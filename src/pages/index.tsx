@@ -299,7 +299,7 @@ function HeroIllustration({ region }: { region: Region }) {
 }
 
 type HomeTier = {
-  key: 'pro' | 'elite';
+  key: 'basic' | 'premium';
   name: string;
   price: string;
   tagline: string;
@@ -307,17 +307,17 @@ type HomeTier = {
   recommended?: boolean;
 };
 
-// Mirrors the Pro/Elite tier data on /pricing (src/pages/pricing.tsx) so the
-// homepage teaser stays in sync with the actual two-tier subscription model
-// instead of a stale flat single-price-per-country card.
+// Mirrors the Basic/Premium tier data on /pricing (src/pages/pricing.tsx) so
+// the homepage teaser stays in sync with the actual two-tier subscription
+// model instead of a stale flat single-price-per-country card.
 const homeTiersByRegion: Record<'UK' | 'NG', HomeTier[]> = {
   UK: [
-    { key: 'pro', name: 'Pro Group', price: '£4.99', tagline: 'Create 1 group · Join up to 5', color: '#2EAF6F' },
-    { key: 'elite', name: 'Elite Group', price: '£9.99', tagline: 'Create up to 7 groups · Join up to 10', color: '#F59E0B', recommended: true },
+    { key: 'basic', name: 'Basic', price: '£4.99', tagline: 'Join up to 3 groups · Cannot create', color: '#2EAF6F' },
+    { key: 'premium', name: 'Premium', price: '£14.99', tagline: 'Create up to 3 groups · Join up to 5 more', color: '#F59E0B', recommended: true },
   ],
   NG: [
-    { key: 'pro', name: 'Pro Group', price: '₦5,000', tagline: 'Create 1 group · Join up to 5', color: '#2EAF6F' },
-    { key: 'elite', name: 'Elite Group', price: '₦10,000', tagline: 'Create up to 7 groups · Join up to 10', color: '#F59E0B', recommended: true },
+    { key: 'basic', name: 'Basic', price: '₦5,000', tagline: 'Join up to 3 groups · Cannot create', color: '#2EAF6F' },
+    { key: 'premium', name: 'Premium', price: '₦10,000', tagline: 'Create up to 3 groups · Join up to 5 more', color: '#F59E0B', recommended: true },
   ],
 };
 

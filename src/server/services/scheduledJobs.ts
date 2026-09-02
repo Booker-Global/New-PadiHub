@@ -23,10 +23,10 @@ import {
   sendSubscriptionRenewalReminderEmail,
 } from '../integrations/email/emailService.js';
 
-// Nigeria "Pro Group" price is the default fallback if a user somehow has no
+// Nigeria "Basic" tier price is the default fallback if a user somehow has no
 // recognised subscription_tier recorded — see SUBSCRIPTION_TIERS in
 // ../lib/constants.ts for the authoritative tier pricing/limits.
-const DEFAULT_FLUTTERWAVE_SUBSCRIPTION_AMOUNT_NGN = SUBSCRIPTION_TIERS.pro.priceNGN;
+const DEFAULT_FLUTTERWAVE_SUBSCRIPTION_AMOUNT_NGN = SUBSCRIPTION_TIERS.basic.priceNGN;
 
 function getFlutterwaveSubscriptionAmount(subscriptionTier?: string | null) {
   if (isSubscriptionTierKey(subscriptionTier)) {

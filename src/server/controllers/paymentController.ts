@@ -14,8 +14,8 @@ import { getStripeProvider, getFlutterwaveProvider } from '../integrations/payme
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { contributionService } from '../services/contributionService.js';
 import { getPaymentEligibility } from '../services/paymentEligibilityService.js';
-import { subscriptionService } from '../services/subscriptionService.js';
-import { calculateProcessingFee } from '../lib/paymentFees.js';
+import { calculateContributionFees } from '../lib/paymentFees.js';
+import { qs } from '../lib/reqHelpers.js';
 
 const FLUTTERWAVE_SETUP_TX_REF_PREFIX = 'padihub-flw-setup';
 const DEFAULT_FLUTTERWAVE_SETUP_AMOUNT = 50;
@@ -94,6 +94,38 @@ function getFlutterwaveSetupAmount() {
 }
 
 /**
+ * Compute this contribution's itemised fee surcharge without charging
+ * anything. Shared by the fee-preview endpoint (so the frontend can itemise
+ * the charge before the member confirms) and the actual charge flow below,
+ * so the numbers shown to the member always match what they're charged.
+ */
+async function computeContributionFeeBreakdown(contribution: typeof schema.contributions.$inferSelect, group: typeof schema.savingsGroups.$inferSelect) {
+  const amountInSmallestUnit = Math.round(Number.parseFloat(contribution.amount_due) * 100);
+  if (!Number.isFinite(amountInSmallestUnit) || amountInSmallestUnit <= 0) {
+    throw new AppError('Contribution amount is invalid.', 400, 'INVALID_CONTRIBUTION_AMOUNT');
+  }
+
+  // The cycle pot and contributing-member count are both fixed the moment a
+  // cycle's contribution schedule is generated (before any charging begins),
+  // so the payout-fee split can be computed synchronously here regardless of
+  // contribution frequency (daily/weekly/monthly).
+  const cycleContributions = await contributionService.getForGroup(group.id, contribution.cycle_number);
+  const contributingMemberCount = Math.max(cycleContributions.length, 1);
+  const cyclePotAmount = cycleContributions.reduce(
+    (sum, c) => sum + Math.round(Number.parseFloat(c.amount_due) * 100), 0,
+  ) || amountInSmallestUnit;
+
+  const breakdown = calculateContributionFees({
+    provider: group.payment_provider,
+    contributionAmount: amountInSmallestUnit,
+    cyclePotAmount,
+    contributingMemberCount,
+  });
+
+  return { amountInSmallestUnit, breakdown, contributingMemberCount, cyclePotAmount };
+}
+
+/**
  * Core contribution-charge logic, shared by the interactive
  * POST /api/payments/charge-contribution endpoint and the automated daily
  * scheduled job. Charges the member's saved payment method via the group's
@@ -123,17 +155,13 @@ export async function chargeContributionForUser(userId: string, contributionId: 
     throw new AppError('Add a payment method before contributing.', 400, 'NO_PAYMENT_METHOD');
   }
 
-  const amountInSmallestUnit = Math.round(Number.parseFloat(contribution.amount_due) * 100);
-  if (!Number.isFinite(amountInSmallestUnit) || amountInSmallestUnit <= 0) {
-    throw new AppError('Contribution amount is invalid.', 400, 'INVALID_CONTRIBUTION_AMOUNT');
-  }
-
-  // The provider processing fee is added on top of the contribution amount
-  // (the member pays amount_due + fee) rather than deducted from the group
-  // pot — see paymentFees.ts. Members consent to this when accepting the
-  // payment terms & conditions while saving a payment method.
-  const feeInSmallestUnit = calculateProcessingFee(group.payment_provider, amountInSmallestUnit);
-  const totalChargeInSmallestUnit = amountInSmallestUnit + feeInSmallestUnit;
+  // The provider processing fee AND this member's share of the cycle's
+  // payout fee are both added on top of the contribution amount (the member
+  // pays amount_due + fees) rather than deducted from the group pot — see
+  // paymentFees.ts. Members consent to this when accepting the payment
+  // terms & conditions while saving a payment method.
+  const { amountInSmallestUnit, breakdown } = await computeContributionFeeBreakdown(contribution, group);
+  const totalChargeInSmallestUnit = amountInSmallestUnit + breakdown.totalFee;
 
   const result = await provider.chargeContribution({
     customerId,
@@ -145,9 +173,15 @@ export async function chargeContributionForUser(userId: string, contributionId: 
     description:    `PadiHub contribution — ${group.name} cycle ${contribution.cycle_number}`,
   });
 
-  const feeAmount = (feeInSmallestUnit / 100).toFixed(2);
+  const feeBreakdownStrings = {
+    feeAmount:                  (breakdown.totalFee / 100).toFixed(2),
+    cardFeeAmount:              (breakdown.cardFee / 100).toFixed(2),
+    cardFeeVatAmount:           (breakdown.cardFeeVat / 100).toFixed(2),
+    payoutFeeShareAmount:       (breakdown.payoutFeeShare / 100).toFixed(2),
+    payoutFeeShareVatAmount:    (breakdown.payoutFeeShareVat / 100).toFixed(2),
+  };
   if (result.status === 'succeeded') {
-    await contributionService.markPaid(contributionId, result.providerReference, undefined, feeAmount);
+    await contributionService.markPaid(contributionId, result.providerReference, undefined, feeBreakdownStrings);
   } else if (result.status === 'failed') {
     await contributionService.markFailed(contributionId);
   }
@@ -157,7 +191,7 @@ export async function chargeContributionForUser(userId: string, contributionId: 
     action: 'CONTRIBUTION_CHARGE_INITIATED',
     entity: 'contributions',
     entityId: contributionId,
-    metadata: { ...result, feeAmount } as unknown as Record<string, unknown>,
+    metadata: { ...result, ...feeBreakdownStrings } as unknown as Record<string, unknown>,
   });
 
   return result;
@@ -254,18 +288,15 @@ export const paymentController = {
         metadata: { paymentMethodId: payment_method_id },
       });
 
-      // Kick off the real, billable platform subscription now that a
-      // verified card is on file — no-op if one is already active, throws
-      // (non-fatally, logged only) if the member skipped plan selection.
-      try {
-        await subscriptionService.activateSubscription(userId);
-      } catch (subErr) {
-        console.error('[PaymentController] Failed to activate subscription after saving card:', subErr);
-      }
-
+      // The platform subscription is intentionally NOT created/charged here.
+      // For UK members, the card is only ever saved (never charged) at this
+      // point — the subscription is only created once Stripe Identity
+      // verification succeeds, via identityVerificationService, so the
+      // member is never billed before their identity is confirmed. The
+      // frontend should trigger identity verification next.
       res.json({
         success: true,
-        data: { payment_method_id },
+        data: { payment_method_id, next_step: 'verify_identity' },
       });
     } catch (e) { next(e); }
   },
@@ -412,17 +443,18 @@ export const paymentController = {
         },
       });
 
-      try {
-        await subscriptionService.activateSubscription(userId);
-      } catch (subErr) {
-        console.error('[PaymentController] Failed to activate subscription after saving Flutterwave card:', subErr);
-      }
-
+      // The platform subscription is intentionally NOT created/charged here.
+      // For NG members, this only saves a reusable card token — the
+      // subscription is only created once Flutterwave Account Resolve
+      // succeeds, via identityVerificationService, mirroring the UK
+      // charge-gating pattern exactly. The frontend should trigger the
+      // Account Resolve bank-details step next.
       res.json({
         success: true,
         data: {
           transaction_id: result.transactionId,
           tx_ref: result.txRef,
+          next_step: 'verify_identity',
         },
       });
     } catch (e) { next(e); }
@@ -555,6 +587,38 @@ export const paymentController = {
 
       const result = await chargeContributionForUser(userId, contribution_id);
       res.json({ success: true, data: result });
+    } catch (e) { next(e); }
+  },
+
+  /**
+   * GET /api/payments/contribution-fee-preview?contribution_id=...
+   * Returns the itemised fee breakdown a contribution would be charged,
+   * without charging anything — used by the contribution page to itemise
+   * the card/transaction fee and payout-fee share before the member confirms.
+   */
+  contributionFeePreview: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = req.user!.userId;
+      const contributionId = qs(req.query.contribution_id);
+      if (!contributionId) throw new AppError('contribution_id is required.', 400);
+
+      const { contribution, group } = await getContributionContext(userId, contributionId);
+      const { amountInSmallestUnit, breakdown } = await computeContributionFeeBreakdown(contribution, group);
+
+      res.json({
+        success: true,
+        data: {
+          amount_due:            (amountInSmallestUnit / 100).toFixed(2),
+          card_fee:              (breakdown.cardFee / 100).toFixed(2),
+          card_fee_vat:          (breakdown.cardFeeVat / 100).toFixed(2),
+          payout_fee_share:      (breakdown.payoutFeeShare / 100).toFixed(2),
+          payout_fee_share_vat:  (breakdown.payoutFeeShareVat / 100).toFixed(2),
+          total_fee:             (breakdown.totalFee / 100).toFixed(2),
+          total_charge:          ((amountInSmallestUnit + breakdown.totalFee) / 100).toFixed(2),
+          currency:              group.currency,
+          provider:              group.payment_provider,
+        },
+      });
     } catch (e) { next(e); }
   },
 

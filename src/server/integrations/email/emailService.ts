@@ -589,26 +589,36 @@ export async function sendSupportTicketClosedEmail(
 export async function sendIdentityVerifiedEmail(to: string, firstName: string): Promise<void> {
   await send(to, 'Your identity has been verified — PadiHub', wrap(`
     ${h2(`Identity verified, ${firstName}!`)}
-    ${p('Your identity has been successfully verified on PadiHub.')}
+    ${p('Your identity has been successfully verified on PadiHub, and your subscription is now active.')}
     ${p('As a result, your Trust Score has increased slightly. Everyone starts from the bottom of the scale and builds their Trust Score up over time through real group activity — on-time contributions, completed cycles, and positive participation.')}
-    ${p('No further action is needed. You can now create and join savings groups once you\'ve also selected a subscription plan and added your payment details.')}
-    ${btn('View Your Trust Score', `${process.env.APP_URL ?? 'https://padihub.com'}/trust`)}
+    ${p('No further action is needed. You can now create and join savings groups per your plan\'s limits.')}
+    ${btn('Go to Dashboard', `${process.env.APP_URL ?? 'https://padihub.com'}/dashboard`)}
   `));
 }
 
 export async function sendVerificationFeeChargedEmail(
-  to: string, firstName: string, monthlySubscriptionAmount: string,
+  to: string, firstName: string, monthlySubscriptionAmount: string, verificationFeeAmount: string,
 ): Promise<void> {
   await send(to, 'Identity Verification Fee Added to Your First Invoice', wrap(`
     ${h2(`Identity Verification Fee — ${firstName}`)}
     ${p('As part of completing your identity verification, a one-time fee has been added to your first subscription invoice.')}
     ${table(
-      detail('Verification fee', '£1.50') +
+      detail('Verification fee', verificationFeeAmount) +
       detail('Monthly subscription', monthlySubscriptionAmount) +
       detail('Invoice description', 'Identity Verification Fee (one-time)'),
     )}
     ${p(`This fee covers the cost of securely verifying your identity through Stripe Identity. Subsequent monthly payments will be <strong>${monthlySubscriptionAmount}</strong>.`)}
     ${p('This charge is non-refundable once verification has been completed.')}
     ${btn('View Subscription', `${process.env.APP_URL ?? 'https://padihub.com'}/dashboard`)}
+  `));
+}
+
+export async function sendIdentityVerificationFailedEmail(to: string, firstName: string): Promise<void> {
+  await send(to, 'We couldn\'t verify your identity — try again', wrap(`
+    ${h2(`Verification unsuccessful, ${firstName}`)}
+    ${p('We were unable to complete your identity/bank-account verification, so no charge has been made to your card and your subscription has not started.')}
+    ${p('This can happen for a number of reasons — a document photo that didn\'t match, bank details that didn\'t resolve to your name, or a step that timed out. You can try again as many times as you need to.')}
+    ${btn('Try Verification Again', `${process.env.APP_URL ?? 'https://padihub.com'}/verify-identity`)}
+    ${p('If you keep running into trouble, our support team is happy to help — just reply to this email or open a support ticket.')}
   `));
 }

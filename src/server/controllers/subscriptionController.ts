@@ -4,7 +4,7 @@ import { subscriptionService } from '../services/subscriptionService.js';
 import { validate } from '../middleware/validate.js';
 
 const planSchema = z.object({
-  tier: z.enum(['pro', 'elite']),
+  tier: z.enum(['basic', 'premium']),
 });
 
 export const subscriptionController = {

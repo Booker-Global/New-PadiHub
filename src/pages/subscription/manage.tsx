@@ -13,17 +13,17 @@ const fadeUp = { hidden: { opacity: 0, y: 16 }, visible: { opacity: 1, y: 0, tra
 const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.07 } } };
 
 const tierConfig = {
-  pro: {
-    name: 'Pro Group',
+  basic: {
+    name: 'Basic',
     price: { GB: '£4.99', NG: '₦5,000' },
-    createLimit: 1,
-    joinLimit: 5,
+    createLimit: 0,
+    joinLimit: 3,
   },
-  elite: {
-    name: 'Elite Group',
-    price: { GB: '£9.99', NG: '₦10,000' },
-    createLimit: 7,
-    joinLimit: 10,
+  premium: {
+    name: 'Premium',
+    price: { GB: '£14.99', NG: '₦10,000' },
+    createLimit: 3,
+    joinLimit: 8,
   },
 } as const;
 
@@ -57,7 +57,7 @@ type SwitchPlanResult = {
 };
 
 function isTierKey(value: string | null | undefined): value is TierKey {
-  return value === 'pro' || value === 'elite';
+  return value === 'basic' || value === 'premium';
 }
 
 function getApiErrorMessage(payload: unknown, fallback: string): string {
@@ -76,8 +76,8 @@ function formatDate(value?: string | null): string | null {
 
 function getTierFromPlan(plan?: string | null): TierKey | null {
   if (!plan) return null;
-  if (plan.endsWith('_elite')) return 'elite';
-  if (plan.endsWith('_pro')) return 'pro';
+  if (plan.endsWith('_premium')) return 'premium';
+  if (plan.endsWith('_basic')) return 'basic';
   return null;
 }
 
@@ -152,7 +152,7 @@ export default function ManageMembershipPage() {
   );
   const currentCountry = (stats?.country ?? getCountryFromStatus(status) ?? 'GB') as CountryCode;
   const renewalDate = formatDate(status?.renewal_date);
-  const nextTier = currentTier === 'elite' ? 'pro' : 'elite';
+  const nextTier = currentTier === 'premium' ? 'basic' : 'premium';
   const plan = currentTier ? tierConfig[currentTier] : null;
   const switchPlan = currentTier ? tierConfig[nextTier] : null;
   const priceLabel = currentTier ? plan?.price[currentCountry] : null;
@@ -170,7 +170,7 @@ export default function ManageMembershipPage() {
     if (!switchTarget) return '';
     const targetPlan = tierConfig[switchTarget];
     const targetPrice = targetPlan.price[currentCountry];
-    const direction = currentTier === 'pro' && switchTarget === 'elite' ? 'upgrade' : 'downgrade';
+    const direction = currentTier === 'basic' && switchTarget === 'premium' ? 'upgrade' : 'downgrade';
 
     if (!status?.provider_subscription_id || status.billing_status === 'cancelled') {
       return `Your ${targetPlan.name} preference will update now. Billing will start when you reactivate or add a verified payment method.`;
@@ -185,7 +185,7 @@ export default function ManageMembershipPage() {
 
   const planFeatures = plan
     ? [
-      `Create ${plan.createLimit === 1 ? '1 group' : `up to ${plan.createLimit} groups`}`,
+      plan.createLimit === 0 ? 'Cannot create a savings group' : `Create up to ${plan.createLimit} groups`,
       `Join up to ${plan.joinLimit} savings groups`,
       'Governance, voting and Trust Score access',
       'Priority support and onboarding guidance',
@@ -348,7 +348,7 @@ export default function ManageMembershipPage() {
                   <p className="text-gray-400 text-sm">
                     {plan
                       ? `${priceLabel} per month${renewalDate ? ` · Next billing ${renewalDate}` : ''}`
-                      : 'Choose Pro Group or Elite Group to set your monthly membership.'}
+                      : 'Choose Basic or Premium to set your monthly membership.'}
                   </p>
                 </div>
                 <div className="text-right">
@@ -384,7 +384,7 @@ export default function ManageMembershipPage() {
                   <div>
                     <p className="font-bold text-gray-900 text-sm">Switch to {switchPlan.name}</p>
                     <p className="text-xs text-gray-500 mt-1">
-                      {switchPrice} per month · Create {switchPlan.createLimit === 1 ? '1 group' : `up to ${switchPlan.createLimit} groups`} · Join up to {switchPlan.joinLimit} groups
+                      {switchPrice} per month · {switchPlan.createLimit === 0 ? 'Cannot create groups' : `Create up to ${switchPlan.createLimit} groups`} · Join up to {switchPlan.joinLimit} groups
                     </p>
                   </div>
                   <button
@@ -400,14 +400,14 @@ export default function ManageMembershipPage() {
                   </button>
                 </div>
                 <p className="text-xs text-gray-500 mt-3">
-                  {currentTier === 'elite'
+                  {currentTier === 'premium'
                     ? `Downgrades stay on your current plan until ${renewalDate ?? 'your next billing date'}.`
                     : `Upgrades apply immediately and keep your monthly billing schedule anchored to ${renewalDate ?? 'your current renewal date'}.`}
                 </p>
               </div>
             ) : (
               <div className="rounded-2xl p-4 text-sm text-gray-500" style={{ background: '#F9FAFB' }}>
-                Select a plan first, then you can switch between Pro Group and Elite Group here.
+                Select a plan first, then you can switch between Basic and Premium here.
               </div>
             )}
           </MotionDiv>

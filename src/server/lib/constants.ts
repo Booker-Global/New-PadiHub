@@ -59,35 +59,40 @@ export const GROUP_DEFAULT_MIN_TRUST_SCORE      = 0; // no minimum Trust Score r
 /**
  * Subscription tiers — PadiHub has exactly two monthly-only membership
  * tiers (no annual billing, no free trial). Each tier caps how many groups
- * a member may CREATE (as leader) versus how many groups they may be an
- * active MEMBER of (creating a group also counts as membership of it).
- * A user must select one of these during onboarding, before their account
- * is treated as fully verified — see paymentEligibilityService.ts for the
- * enforcement gate.
+ * a member may CREATE (as leader) versus the TOTAL number of groups they may
+ * be an active MEMBER of (creating a group also counts toward this total —
+ * see groupService.countGroupsJoined(), which counts every membership
+ * regardless of role or status). A user must select one of these during
+ * onboarding, before their account is treated as fully verified — see
+ * paymentEligibilityService.ts for the enforcement gate.
+ *
+ * Basic: join up to 3 groups total, cannot create any group.
+ * Premium: create up to 3 groups and join up to 5 more (8 group
+ * memberships total, including any groups the user created).
  */
 export const SUBSCRIPTION_TIERS = {
-  pro: {
-    key:             'pro' as const,
-    name:            'Pro Group',
+  basic: {
+    key:             'basic' as const,
+    name:            'Basic',
     priceGBP:        4.99,
     priceNGN:        5000,
-    maxGroupsCreate: 1,
-    maxGroupsJoin:   5,
+    maxGroupsCreate: 0,
+    maxGroupsJoin:   3,
   },
-  elite: {
-    key:             'elite' as const,
-    name:            'Elite Group',
-    priceGBP:        9.99,
+  premium: {
+    key:             'premium' as const,
+    name:            'Premium',
+    priceGBP:        14.99,
     priceNGN:        10000,
-    maxGroupsCreate: 7,
-    maxGroupsJoin:   10,
+    maxGroupsCreate: 3,
+    maxGroupsJoin:   8,
   },
 } as const;
 
 export type SubscriptionTierKey = keyof typeof SUBSCRIPTION_TIERS;
 
 export function isSubscriptionTierKey(value: unknown): value is SubscriptionTierKey {
-  return value === 'pro' || value === 'elite';
+  return value === 'basic' || value === 'premium';
 }
 
 /** Monthly price (as a number, in the country's own currency) for a tier. */

@@ -79,7 +79,8 @@ export const membershipService = {
     const groupsJoined = await groupService.countGroupsJoined(userId);
     if (groupsJoined >= SUBSCRIPTION_TIERS[tier].maxGroupsJoin) {
       throw new AppError(
-        `Your ${SUBSCRIPTION_TIERS[tier].name} plan allows you to be a member of up to ${SUBSCRIPTION_TIERS[tier].maxGroupsJoin} groups. Leave a group or upgrade your plan to join another.`,
+        `You've reached your ${SUBSCRIPTION_TIERS[tier].name} plan's limit of ${SUBSCRIPTION_TIERS[tier].maxGroupsJoin} groups`
+          + (tier === 'basic' ? ' — upgrade to Premium to join more.' : '.'),
         403,
         'GROUP_JOIN_LIMIT_REACHED',
       );

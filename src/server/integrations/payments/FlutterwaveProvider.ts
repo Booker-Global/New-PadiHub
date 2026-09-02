@@ -164,16 +164,16 @@ export class FlutterwaveProvider implements IPaymentProvider {
   }
 
   async createSubscription(params: {
-    customerId: string; userId: string; email: string; currency: string; tier?: 'pro' | 'elite';
+    customerId: string; userId: string; email: string; currency: string; tier?: 'basic' | 'premium';
   }): Promise<SubscriptionResult> {
-    // Pro Group (₦5,000/mo) and Elite Group (₦10,000/mo) map to separate
+    // Basic (₦5,000/mo) and Premium (₦10,000/mo) map to separate
     // Flutterwave payment plans — see SUBSCRIPTION_TIERS in
     // src/server/lib/constants.ts for the tier definitions.
-    const planId = params.tier === 'elite'
-      ? process.env.FLUTTERWAVE_PLAN_ID_NG_ELITE_MONTHLY
+    const planId = params.tier === 'premium'
+      ? process.env.FLUTTERWAVE_PLAN_ID_NG_PREMIUM_MONTHLY
       : process.env.FLUTTERWAVE_PLAN_ID_NG_MONTHLY;
     if (!planId) {
-      throw new Error(`${params.tier === 'elite' ? 'FLUTTERWAVE_PLAN_ID_NG_ELITE_MONTHLY' : 'FLUTTERWAVE_PLAN_ID_NG_MONTHLY'} environment variable is not set.`);
+      throw new Error(`${params.tier === 'premium' ? 'FLUTTERWAVE_PLAN_ID_NG_PREMIUM_MONTHLY' : 'FLUTTERWAVE_PLAN_ID_NG_MONTHLY'} environment variable is not set.`);
     }
 
     const renewalDate = new Date();

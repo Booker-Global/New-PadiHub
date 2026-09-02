@@ -32,8 +32,7 @@ import { flutterwaveWebhookHandler } from './controllers/webhookFlutterwaveContr
 import {
   startStripeIdentity,
   stripeIdentityWebhook,
-  initiateBvn,
-  confirmBvn,
+  resolveNgBankAccount,
   getIdentityStatus,
   bypassIdentityVerification,
 } from './controllers/identityController.js';
@@ -273,6 +272,7 @@ app.post('/api/payments/save-flutterwave-token', authenticate, paymentController
 app.post('/api/payments/connect-onboard',    authenticate, paymentController.connectOnboard);
 app.post('/api/payments/verify-payout',      authenticate, paymentController.verifyPayout);
 app.post('/api/payments/charge-contribution', authenticate, paymentController.chargeContribution);
+app.get( '/api/payments/contribution-fee-preview', authenticate, paymentController.contributionFeePreview);
 app.get( '/api/payments/banks',              authenticate, paymentController.listBanks);
 
 // ── Support ───────────────────────────────────────────────────────────[...]
@@ -304,8 +304,9 @@ app.get(   '/api/admin/audit',                    authenticate, requireRole('adm
 // body for signature verification — see the webhook routes block near the top.
 app.post('/api/identity/verify/start', authenticate, startStripeIdentity);
 app.get( '/api/identity/status',       authenticate, getIdentityStatus);
-app.post('/api/identity/bvn/verify',   authenticate, initiateBvn);
-app.post('/api/identity/bvn/confirm',  authenticate, confirmBvn);
+// NG — Flutterwave Account Resolve: free "bank account validation" step,
+// not full KYC (see BankAccountValidationInterface.ts for the swappable design).
+app.post('/api/identity/ng/resolve-account', authenticate, resolveNgBankAccount);
 // Test-mode bypass — hard-gated inside the handler; returns 403 unless
 // NODE_ENV !== 'production' AND KYC_BYPASS === 'true'. Never reachable live.
 app.post('/api/identity/bypass',       authenticate, bypassIdentityVerification);

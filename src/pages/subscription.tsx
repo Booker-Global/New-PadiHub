@@ -55,7 +55,7 @@ export default function SubscriptionPage() {
                   </span>
                 </div>
                 <h2 className="text-xl font-extrabold text-white mb-1" style={{ fontFamily: 'Nunito, sans-serif' }}>Monthly membership</h2>
-                <p className="text-gray-400 text-sm">Manage Pro Group and Elite Group pricing, billing history and renewals.</p>
+                <p className="text-gray-400 text-sm">Manage Basic and Premium pricing, billing history and renewals.</p>
               </div>
               <div className="text-right">
                 <p className="text-3xl font-black text-white" style={{ fontFamily: 'Nunito, sans-serif' }}>£4.99–£9.99</p>

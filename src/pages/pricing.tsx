@@ -4,11 +4,11 @@ import { Link } from 'react-router-dom';
 import { ArrowRight, CheckCircle, Shield, Users } from 'lucide-react';
 import { getValidSession } from '@/lib/session';
 
-const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/pricing#webpage\",\"name\":\"Membership Pricing — PadiHub\",\"url\":\"https://padihub.com/pricing\",\"description\":\"Region-aware monthly pricing for PadiHub's Pro Group and Elite Group subscriptions.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"}}";
+const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/pricing#webpage\",\"name\":\"Membership Pricing — PadiHub\",\"url\":\"https://padihub.com/pricing\",\"description\":\"Region-aware monthly pricing for PadiHub's Basic and Premium subscriptions.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"}}";
 
 type PricingRegion = 'UK' | 'NG';
 type GeoRegion = PricingRegion | 'BOTH';
-type PlanKey = 'pro' | 'elite';
+type PlanKey = 'basic' | 'premium';
 
 type PlanCard = {
   key: PlanKey;
@@ -42,43 +42,43 @@ const commonFeatures = [
 const plansByRegion: Record<PricingRegion, PlanCard[]> = {
   UK: [
     {
-      key: 'pro',
-      name: 'Pro Group',
+      key: 'basic',
+      name: 'Basic',
       price: '£4.99',
-      summary: 'For members running one group and staying active across a handful of communities.',
-      createLimitLabel: 'Create 1 savings group',
-      joinLimitLabel: 'Be a member of up to 5 groups total',
-      highlights: ['Monthly billing only', 'Ideal for one personal or community circle'],
+      summary: 'For members who want to join savings circles without running their own.',
+      createLimitLabel: 'Cannot create a savings group',
+      joinLimitLabel: 'Join up to 3 groups',
+      highlights: ['Monthly billing only', 'Ideal for members who just want to contribute and save'],
     },
     {
-      key: 'elite',
-      name: 'Elite Group',
-      price: '£9.99',
-      summary: 'For organisers leading multiple circles and managing a larger savings network.',
-      createLimitLabel: 'Create up to 7 savings groups',
-      joinLimitLabel: 'Be a member of up to 10 groups total',
-      highlights: ['Monthly billing only', 'Best for established organisers and admins'],
+      key: 'premium',
+      name: 'Premium',
+      price: '£14.99',
+      summary: 'For organisers leading circles and managing a larger savings network.',
+      createLimitLabel: 'Create up to 3 savings groups',
+      joinLimitLabel: 'Join up to 5 more groups (8 total)',
+      highlights: ['Monthly billing only', 'Best for organisers and admins'],
       recommended: true,
     },
   ],
   NG: [
     {
-      key: 'pro',
-      name: 'Pro Group',
+      key: 'basic',
+      name: 'Basic',
       price: '₦5,000',
-      summary: 'For members running one group and staying active across a handful of communities.',
-      createLimitLabel: 'Create 1 savings group',
-      joinLimitLabel: 'Be a member of up to 5 groups total',
-      highlights: ['Monthly billing only', 'Ideal for one personal or community circle'],
+      summary: 'For members who want to join savings circles without running their own.',
+      createLimitLabel: 'Cannot create a savings group',
+      joinLimitLabel: 'Join up to 3 groups',
+      highlights: ['Monthly billing only', 'Ideal for members who just want to contribute and save'],
     },
     {
-      key: 'elite',
-      name: 'Elite Group',
+      key: 'premium',
+      name: 'Premium',
       price: '₦10,000',
-      summary: 'For organisers leading multiple circles and managing a larger savings network.',
-      createLimitLabel: 'Create up to 7 savings groups',
-      joinLimitLabel: 'Be a member of up to 10 groups total',
-      highlights: ['Monthly billing only', 'Best for established organisers and admins'],
+      summary: 'For organisers leading circles and managing a larger savings network.',
+      createLimitLabel: 'Create up to 3 savings groups',
+      joinLimitLabel: 'Join up to 5 more groups (8 total)',
+      highlights: ['Monthly billing only', 'Best for organisers and admins'],
       recommended: true,
     },
   ],
@@ -137,13 +137,13 @@ export default function PricingPage() {
         <title>Membership Pricing — PadiHub</title>
         <meta
           name="description"
-          content="Simple, region-aware monthly pricing for PadiHub's Pro Group and Elite Group subscriptions."
+          content="Simple, region-aware monthly pricing for PadiHub's Basic and Premium subscriptions."
         />
         <link rel="canonical" href="https://padihub.com/pricing" />
         <meta property="og:title" content="Membership Pricing — PadiHub" />
         <meta
           property="og:description"
-          content="Compare PadiHub's Pro Group and Elite Group monthly subscription tiers."
+          content="Compare PadiHub's Basic and Premium monthly subscription tiers."
         />
         <meta property="og:type" content="website" />
         <meta property="og:image" content="https://padihub.com/airo-assets/images/og/default" />
@@ -189,7 +189,7 @@ export default function PricingPage() {
         <div style={{ maxWidth: '80rem', margin: '0 auto', padding: '0 1.5rem' }}>
           <div style={{ textAlign: 'center', marginBottom: 48 }}>
             <p style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#2EAF6F', marginBottom: 12 }}>Membership tiers</p>
-            <h2 style={{ fontSize: 'clamp(1.5rem, 4vw, 2.5rem)', fontWeight: 800, color: '#111827', marginBottom: 12, fontFamily: 'Nunito, sans-serif' }}>Compare Pro Group and Elite Group</h2>
+            <h2 style={{ fontSize: 'clamp(1.5rem, 4vw, 2.5rem)', fontWeight: 800, color: '#111827', marginBottom: 12, fontFamily: 'Nunito, sans-serif' }}>Compare Basic and Premium</h2>
             <p style={{ color: '#6B7280', fontSize: 16, maxWidth: '42rem', margin: '0 auto' }}>
               The main difference is how many groups you can create and how many groups you can be part of at once.
             </p>

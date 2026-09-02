@@ -120,7 +120,9 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
     { column: 'stripe_identity_session_id',  sqlType: 'VARCHAR(255) NULL' },
     { column: 'bvn_verification_reference',  sqlType: 'VARCHAR(255) NULL' },
     { column: 'last_login_at',               sqlType: 'TIMESTAMP NULL' },
-    { column: 'subscription_tier',           sqlType: "ENUM('pro','elite') NULL" },
+    { column: 'subscription_tier',           sqlType: "ENUM('basic','premium') NULL" },
+    { column: 'identity_verification_status', sqlType: "ENUM('not_started','pending','verified','failed') NOT NULL DEFAULT 'not_started'" },
+    { column: 'identity_verification_fee_amount', sqlType: 'DECIMAL(12,2) NULL' },
   ],
   savings_groups: [
     { column: 'description',     sqlType: 'TEXT NULL' },
@@ -130,6 +132,10 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
   contributions: [
     { column: 'amount_paid',        sqlType: 'DECIMAL(12,2) NULL' },
     { column: 'fee_amount',         sqlType: 'DECIMAL(12,2) NULL' },
+    { column: 'card_fee_amount',              sqlType: 'DECIMAL(12,2) NULL' },
+    { column: 'card_fee_vat_amount',          sqlType: 'DECIMAL(12,2) NULL' },
+    { column: 'payout_fee_share_amount',      sqlType: 'DECIMAL(12,2) NULL' },
+    { column: 'payout_fee_share_vat_amount',  sqlType: 'DECIMAL(12,2) NULL' },
     { column: 'paid_date',          sqlType: 'TIMESTAMP NULL' },
     { column: 'provider_reference', sqlType: 'VARCHAR(255) NULL' },
   ],
@@ -143,7 +149,7 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
   subscriptions: [
     { column: 'provider_subscription_id', sqlType: 'VARCHAR(255) NULL' },
     { column: 'renewal_date',             sqlType: 'TIMESTAMP NULL' },
-    { column: 'pending_tier',             sqlType: "ENUM('pro','elite') NULL" },
+    { column: 'pending_tier',             sqlType: "ENUM('basic','premium') NULL" },
   ],
 };
 
@@ -156,6 +162,26 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
  * touch the affected columns.
  */
 export async function ensureSchemaSync(): Promise<void> {
+  // `platform_counters` is a brand-new table (not just a new column on an
+  // existing one), so the ALTER-TABLE-based loop below can't self-heal it —
+  // create it directly if a deploy skipped `npm run db:push`. Used for the
+  // atomic "first 50 free" identity-verification counter (see
+  // identityVerificationService.ts).
+  try {
+    await poolConnection.query(
+      `CREATE TABLE IF NOT EXISTS \`platform_counters\` (
+        \`name\` VARCHAR(100) NOT NULL PRIMARY KEY,
+        \`value\` INT NOT NULL DEFAULT 0,
+        \`updated_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      )`,
+    );
+  } catch (err) {
+    console.error(
+      '[PadiHub] Schema sync check failed for table platform_counters — run `npm run db:push`:',
+      err instanceof Error ? err.message : err,
+    );
+  }
+
   for (const [table, requiredColumns] of Object.entries(REQUIRED_COLUMNS)) {
     try {
       const [rows] = await poolConnection.query(

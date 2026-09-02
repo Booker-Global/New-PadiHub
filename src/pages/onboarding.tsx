@@ -28,12 +28,12 @@ const STEPS = [
   'Welcome',
   'Country',
   'Subscription',
-  'Identity Verification',
+  'Payment Setup',
   'Photo',
   'Profile',
   'Interests',
   'Notifications',
-  'Payment Setup',
+  'Identity Verification',
   'Success',
 ];
 
@@ -49,7 +49,7 @@ const countryCards = [
     key: 'NG',
     flag: '🇳🇬',
     name: 'Nigeria',
-    desc: 'Show Nigerian pricing, billing guidance and BVN verification steps.',
+    desc: 'Show Nigerian pricing, billing guidance and Account Resolve bank-account validation steps.',
     color: '#F59E0B',
   },
 ] as const;
@@ -63,41 +63,41 @@ const defaultNotifications = {
 const planCards = {
   UK: [
     {
-      key: 'pro',
-      label: 'Pro Group',
+      key: 'basic',
+      label: 'Basic',
       price: '£4.99',
       period: '/month',
-      description: 'Best for members creating or joining a small number of groups.',
-      limits: ['Create 1 savings group', 'Join up to 5 groups'],
+      description: 'Best for members who want to join savings groups without creating their own.',
+      limits: ['Cannot create a savings group', 'Join up to 3 groups'],
       accent: '#2EAF6F',
     },
     {
-      key: 'elite',
-      label: 'Elite Group',
-      price: '£9.99',
+      key: 'premium',
+      label: 'Premium',
+      price: '£14.99',
       period: '/month',
       description: 'For members leading multiple circles and joining more communities.',
-      limits: ['Create up to 7 savings groups', 'Join up to 10 groups'],
+      limits: ['Create up to 3 savings groups', 'Join up to 5 more groups (8 total)'],
       accent: '#8B5CF6',
     },
   ],
   NG: [
     {
-      key: 'pro',
-      label: 'Pro Group',
+      key: 'basic',
+      label: 'Basic',
       price: '₦5,000',
       period: '/month',
-      description: 'Best for members creating or joining a small number of groups.',
-      limits: ['Create 1 savings group', 'Join up to 5 groups'],
+      description: 'Best for members who want to join savings groups without creating their own.',
+      limits: ['Cannot create a savings group', 'Join up to 3 groups'],
       accent: '#2EAF6F',
     },
     {
-      key: 'elite',
-      label: 'Elite Group',
+      key: 'premium',
+      label: 'Premium',
       price: '₦10,000',
       period: '/month',
       description: 'For members leading multiple circles and joining more communities.',
-      limits: ['Create up to 7 savings groups', 'Join up to 10 groups'],
+      limits: ['Create up to 3 savings groups', 'Join up to 5 more groups (8 total)'],
       accent: '#8B5CF6',
     },
   ],
@@ -126,7 +126,7 @@ const communityTypes = ['Professional', 'Faith', 'Family', 'Social', 'Education'
 
 type CountryKey = 'UK' | 'NG';
 type CountryChoice = CountryKey | '';
-type SubscriptionTierKey = 'pro' | 'elite';
+type SubscriptionTierKey = 'basic' | 'premium';
 type NotificationSettings = typeof defaultNotifications;
 
 type UserProfile = {
@@ -461,7 +461,7 @@ export default function OnboardingPage() {
       case 2:
         return Boolean(savedPlan);
       case 3:
-        return identityVerified;
+        return paymentSetupComplete;
       case 4:
         return Boolean(savedAvatar);
       case 5:
@@ -469,7 +469,7 @@ export default function OnboardingPage() {
       case 7:
         return hasSavedNotifications;
       case 8:
-        return paymentSetupComplete;
+        return identityVerified;
       default:
         return false;
     }
@@ -1033,72 +1033,83 @@ export default function OnboardingPage() {
             {step === 3 && (
               <div>
                 <h2 className="text-2xl font-extrabold text-gray-900 mb-2" style={{ fontFamily: 'Nunito, sans-serif' }}>
-                  Verify your identity 🛡️
+                  Finish payment setup 💸
                 </h2>
-                <p className="text-gray-500 text-sm mb-6">
-                  {currentCountry === 'NG'
-                    ? 'Nigerian members complete BVN verification. We will send you to the dedicated verification flow and then you can return here to continue.'
-                    : 'UK members complete Stripe Identity verification. We will send you to the dedicated verification flow and then you can return here to continue.'}
-                </p>
+                <p className="text-gray-500 text-sm mb-6">Add a payment method for contributions — it&apos;s saved but not charged yet — and a payout destination for the turn when your group pays out.</p>
 
-                <div className="rounded-3xl p-5 bg-white mb-6" style={{ border: '1px solid #E5E7EB' }}>
-                  <div className="flex items-center justify-between gap-3 mb-4">
-                    <div>
-                      <p className="text-xs text-gray-500 mb-1">Verification status</p>
-                      <p className="font-bold text-gray-900">{identityVerified ? 'Verified' : 'Still needed'}</p>
+                <div className="grid gap-4 mb-8">
+                  <Link
+                    to="/payments/methods"
+                    className="rounded-2xl p-5 bg-white transition-all hover:opacity-90"
+                    style={{ border: '1px solid #E5E7EB' }}
+                  >
+                    <div className="flex items-start justify-between gap-3 mb-2">
+                      <div>
+                        <p className="font-bold text-gray-900 text-sm">Add payment method</p>
+                        <p className="text-xs text-gray-500 mt-0.5">Save a card so recurring group contributions can be charged securely. Your card is not charged now.</p>
+                      </div>
+                      <span
+                        className="text-xs font-bold px-3 py-1 rounded-full"
+                        style={{
+                          color: paymentMethodVerified ? '#2EAF6F' : '#F59E0B',
+                          background: paymentMethodVerified ? 'rgba(46,175,111,0.12)' : 'rgba(245,158,11,0.12)',
+                        }}
+                      >
+                        {paymentMethodVerified ? 'Ready' : 'Needed'}
+                      </span>
                     </div>
-                    <span
-                      className="text-xs font-bold px-3 py-1 rounded-full"
-                      style={{
-                        color: identityVerified ? '#2EAF6F' : '#F59E0B',
-                        background: identityVerified ? 'rgba(46,175,111,0.12)' : 'rgba(245,158,11,0.12)',
-                      }}
-                    >
-                      {identityVerified ? 'Complete' : currentCountry === 'NG' ? 'BVN required' : 'Stripe Identity required'}
-                    </span>
-                  </div>
-                  <div className="space-y-3 text-sm text-gray-600">
-                    <div className="flex items-start gap-2">
-                      <CheckCircle size={16} style={{ color: '#2EAF6F', flexShrink: 0 }} />
-                      <p>{currentCountry === 'NG' ? 'Use the secure BVN flow to confirm your account.' : 'Use the secure Stripe Identity flow to verify your documents.'}</p>
+                    <div className="inline-flex items-center gap-2 text-sm font-semibold" style={{ color: '#2EAF6F' }}>
+                      Open payment methods <ArrowRight size={16} />
                     </div>
-                    <div className="flex items-start gap-2">
-                      <CheckCircle size={16} style={{ color: '#2EAF6F', flexShrink: 0 }} />
-                      <p>Your selected plan stays on file while you complete verification.</p>
+                  </Link>
+
+                  <Link
+                    to="/payments/payout"
+                    className="rounded-2xl p-5 bg-white transition-all hover:opacity-90"
+                    style={{ border: '1px solid #E5E7EB' }}
+                  >
+                    <div className="flex items-start justify-between gap-3 mb-2">
+                      <div>
+                        <p className="font-bold text-gray-900 text-sm">Connect payout destination</p>
+                        <p className="text-xs text-gray-500 mt-0.5">Set where your rotation payout should be sent once your destination is verified.</p>
+                      </div>
+                      <span
+                        className="text-xs font-bold px-3 py-1 rounded-full"
+                        style={{
+                          color: payoutVerified ? '#2EAF6F' : '#F59E0B',
+                          background: payoutVerified ? 'rgba(46,175,111,0.12)' : 'rgba(245,158,11,0.12)',
+                        }}
+                      >
+                        {payoutVerified ? 'Ready' : 'Needed'}
+                      </span>
                     </div>
-                  </div>
+                    <div className="inline-flex items-center gap-2 text-sm font-semibold" style={{ color: '#2EAF6F' }}>
+                      Open payout setup <ArrowRight size={16} />
+                    </div>
+                  </Link>
                 </div>
 
-                <div className="flex flex-col gap-3">
-                  <Button
-                    onClick={() => navigate('/verify-identity')}
-                    className="w-full rounded-2xl py-4 font-bold gap-2"
-                    style={{ background: 'linear-gradient(135deg, #2eafaf, #1f8f8f)', color: '#fff' }}
-                  >
-                    Go to verification <ArrowRight size={18} />
+                <div className="flex gap-3">
+                  <Button variant="outline" onClick={prevStep} className="rounded-2xl px-5 gap-2 border-gray-200">
+                    <ArrowLeft size={16} />
                   </Button>
-                  <div className="flex gap-3">
-                    <Button variant="outline" onClick={prevStep} className="rounded-2xl px-5 gap-2 border-gray-200">
-                      <ArrowLeft size={16} />
-                    </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => void refreshPaymentStatus()}
+                    disabled={paymentRefreshLoading}
+                    className="flex-1 rounded-2xl py-4 font-semibold border-gray-200 text-gray-600"
+                  >
+                    {paymentRefreshLoading ? 'Refreshing…' : 'Refresh status'}
+                  </Button>
+                  {paymentSetupComplete && (
                     <Button
-                      variant="outline"
-                      onClick={() => void refreshIdentityStatus()}
-                      disabled={identityLoading}
-                      className="flex-1 rounded-2xl py-4 font-semibold border-gray-200 text-gray-600"
+                      onClick={nextStep}
+                      className="flex-1 rounded-2xl py-4 font-bold gap-2"
+                      style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', color: '#fff' }}
                     >
-                      {identityLoading ? 'Checking…' : 'Check status'}
+                      Continue <ArrowRight size={18} />
                     </Button>
-                    {identityVerified && (
-                      <Button
-                        onClick={nextStep}
-                        className="flex-1 rounded-2xl py-4 font-bold gap-2"
-                        style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', color: '#fff' }}
-                      >
-                        Continue <ArrowRight size={18} />
-                      </Button>
-                    )}
-                  </div>
+                  )}
                 </div>
               </div>
             )}
@@ -1352,83 +1363,72 @@ export default function OnboardingPage() {
             {step === 8 && (
               <div>
                 <h2 className="text-2xl font-extrabold text-gray-900 mb-2" style={{ fontFamily: 'Nunito, sans-serif' }}>
-                  Finish payment setup 💸
+                  Verify your identity 🛡️
                 </h2>
-                <p className="text-gray-500 text-sm mb-6">Add a payment method for contributions and a payout destination for the turn when your group pays out.</p>
+                <p className="text-gray-500 text-sm mb-6">
+                  {currentCountry === 'NG'
+                    ? 'Nigerian members validate their bank account via Flutterwave Account Resolve (a free, preliminary bank-account check, not full KYC). Your subscription is not charged until this succeeds.'
+                    : 'UK members complete Stripe Identity verification right here on PadiHub. Your card was saved but not charged — it is only charged once verification succeeds.'}
+                </p>
 
-                <div className="grid gap-4 mb-8">
-                  <Link
-                    to="/payments/methods"
-                    className="rounded-2xl p-5 bg-white transition-all hover:opacity-90"
-                    style={{ border: '1px solid #E5E7EB' }}
-                  >
-                    <div className="flex items-start justify-between gap-3 mb-2">
-                      <div>
-                        <p className="font-bold text-gray-900 text-sm">Add payment method</p>
-                        <p className="text-xs text-gray-500 mt-0.5">Save a card so recurring group contributions can be charged securely.</p>
-                      </div>
-                      <span
-                        className="text-xs font-bold px-3 py-1 rounded-full"
-                        style={{
-                          color: paymentMethodVerified ? '#2EAF6F' : '#F59E0B',
-                          background: paymentMethodVerified ? 'rgba(46,175,111,0.12)' : 'rgba(245,158,11,0.12)',
-                        }}
-                      >
-                        {paymentMethodVerified ? 'Ready' : 'Needed'}
-                      </span>
+                <div className="rounded-3xl p-5 bg-white mb-6" style={{ border: '1px solid #E5E7EB' }}>
+                  <div className="flex items-center justify-between gap-3 mb-4">
+                    <div>
+                      <p className="text-xs text-gray-500 mb-1">Verification status</p>
+                      <p className="font-bold text-gray-900">{identityVerified ? 'Verified' : 'Still needed'}</p>
                     </div>
-                    <div className="inline-flex items-center gap-2 text-sm font-semibold" style={{ color: '#2EAF6F' }}>
-                      Open payment methods <ArrowRight size={16} />
+                    <span
+                      className="text-xs font-bold px-3 py-1 rounded-full"
+                      style={{
+                        color: identityVerified ? '#2EAF6F' : '#F59E0B',
+                        background: identityVerified ? 'rgba(46,175,111,0.12)' : 'rgba(245,158,11,0.12)',
+                      }}
+                    >
+                      {identityVerified ? 'Complete' : currentCountry === 'NG' ? 'Account Resolve required' : 'Stripe Identity required'}
+                    </span>
+                  </div>
+                  <div className="space-y-3 text-sm text-gray-600">
+                    <div className="flex items-start gap-2">
+                      <CheckCircle size={16} style={{ color: '#2EAF6F', flexShrink: 0 }} />
+                      <p>{currentCountry === 'NG' ? 'Use the secure Account Resolve flow to confirm your bank account.' : 'Use the secure Stripe Identity flow to verify your documents.'}</p>
                     </div>
-                  </Link>
-
-                  <Link
-                    to="/payments/payout"
-                    className="rounded-2xl p-5 bg-white transition-all hover:opacity-90"
-                    style={{ border: '1px solid #E5E7EB' }}
-                  >
-                    <div className="flex items-start justify-between gap-3 mb-2">
-                      <div>
-                        <p className="font-bold text-gray-900 text-sm">Connect payout destination</p>
-                        <p className="text-xs text-gray-500 mt-0.5">Set where your rotation payout should be sent once your destination is verified.</p>
-                      </div>
-                      <span
-                        className="text-xs font-bold px-3 py-1 rounded-full"
-                        style={{
-                          color: payoutVerified ? '#2EAF6F' : '#F59E0B',
-                          background: payoutVerified ? 'rgba(46,175,111,0.12)' : 'rgba(245,158,11,0.12)',
-                        }}
-                      >
-                        {payoutVerified ? 'Ready' : 'Needed'}
-                      </span>
+                    <div className="flex items-start gap-2">
+                      <CheckCircle size={16} style={{ color: '#2EAF6F', flexShrink: 0 }} />
+                      <p>Your subscription only starts, and your card/account is only charged, once verification succeeds.</p>
                     </div>
-                    <div className="inline-flex items-center gap-2 text-sm font-semibold" style={{ color: '#2EAF6F' }}>
-                      Open payout setup <ArrowRight size={16} />
-                    </div>
-                  </Link>
+                  </div>
                 </div>
 
-                <div className="flex gap-3">
-                  <Button variant="outline" onClick={prevStep} className="rounded-2xl px-5 gap-2 border-gray-200">
-                    <ArrowLeft size={16} />
-                  </Button>
+                <div className="flex flex-col gap-3">
                   <Button
-                    variant="outline"
-                    onClick={() => void refreshPaymentStatus()}
-                    disabled={paymentRefreshLoading}
-                    className="flex-1 rounded-2xl py-4 font-semibold border-gray-200 text-gray-600"
+                    onClick={() => navigate('/verify-identity')}
+                    className="w-full rounded-2xl py-4 font-bold gap-2"
+                    style={{ background: 'linear-gradient(135deg, #2eafaf, #1f8f8f)', color: '#fff' }}
                   >
-                    {paymentRefreshLoading ? 'Refreshing…' : 'Refresh status'}
+                    Go to verification <ArrowRight size={18} />
                   </Button>
-                  {paymentSetupComplete && (
-                    <Button
-                      onClick={nextStep}
-                      className="flex-1 rounded-2xl py-4 font-bold gap-2"
-                      style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', color: '#fff' }}
-                    >
-                      Finish onboarding <ArrowRight size={18} />
+                  <div className="flex gap-3">
+                    <Button variant="outline" onClick={prevStep} className="rounded-2xl px-5 gap-2 border-gray-200">
+                      <ArrowLeft size={16} />
                     </Button>
-                  )}
+                    <Button
+                      variant="outline"
+                      onClick={() => void refreshIdentityStatus()}
+                      disabled={identityLoading}
+                      className="flex-1 rounded-2xl py-4 font-semibold border-gray-200 text-gray-600"
+                    >
+                      {identityLoading ? 'Checking…' : 'Check status'}
+                    </Button>
+                    {identityVerified && (
+                      <Button
+                        onClick={nextStep}
+                        className="flex-1 rounded-2xl py-4 font-bold gap-2"
+                        style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', color: '#fff' }}
+                      >
+                        Continue <ArrowRight size={18} />
+                      </Button>
+                    )}
+                  </div>
                 </div>
               </div>
             )}
@@ -1458,9 +1458,9 @@ export default function OnboardingPage() {
                     {
                       icon: Star,
                       label: 'Plan',
-                      value: selectedPlan === 'elite' ? 'Elite Group' : 'Pro Group',
+                      value: selectedPlan === 'premium' ? 'Premium' : 'Basic',
                       color: '#8B5CF6',
-                      desc: selectedPlan === 'elite' ? 'Create up to 7 groups' : 'Create 1 group',
+                      desc: selectedPlan === 'premium' ? 'Create up to 3 groups' : 'Join up to 3 groups',
                     },
                     {
                       icon: CreditCard,

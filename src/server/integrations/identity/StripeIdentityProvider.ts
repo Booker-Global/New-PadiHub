@@ -1,8 +1,16 @@
 /**
  * Stripe Identity provider — UK users only.
- * Verification fee: £1.50 added as a pending invoice item on the user's
- * Stripe customer record. It is automatically included in their first
- * subscription invoice (or next invoice if already subscribed).
+ * Triggered from our own dashboard via Stripe.js's embedded modal
+ * (`stripe.verifyIdentity(clientSecret)`) — never a redirect to a
+ * Stripe-hosted page. `createVerificationSession` returns the `clientSecret`
+ * the frontend needs for that call; `url`/`return_url` are populated too but
+ * are only ever used as a fallback if a member opens the link outside the
+ * modal (e.g. from an email), not as the primary flow.
+ *
+ * Verification fee: the first 50 successfully-verified users platform-wide
+ * are free; the 51st onward gets a £1 fee added as a pending invoice item on
+ * the user's Stripe customer record, picked up by their first subscription
+ * invoice. See identityVerificationService.ts for the atomic counter.
  */
 import Stripe from 'stripe';
 import { eq } from 'drizzle-orm';
@@ -40,9 +48,10 @@ export class StripeIdentityProvider implements IIdentityVerificationProvider {
       return_url: `${appUrl}/dashboard?identity_verified=1`,
     });
 
-    // Persist session ID on user record
+    // Persist session ID + flip status to 'pending' so the profile shows
+    // "Pending" while the embedded modal (or webhook) resolves the result.
     await db.update(schema.users)
-      .set({ stripe_identity_session_id: session.id })
+      .set({ stripe_identity_session_id: session.id, identity_verification_status: 'pending' })
       .where(eq(schema.users.id, userId));
 
     return {
@@ -54,15 +63,17 @@ export class StripeIdentityProvider implements IIdentityVerificationProvider {
 
   async getVerificationStatus(userId: string): Promise<VerificationStatusResult> {
     const rows = await db.select({
-      identity_verified:          schema.users.identity_verified,
-      identity_verified_at:       schema.users.identity_verified_at,
-      stripe_identity_session_id: schema.users.stripe_identity_session_id,
+      identity_verified:            schema.users.identity_verified,
+      identity_verified_at:         schema.users.identity_verified_at,
+      identity_verification_status: schema.users.identity_verification_status,
+      stripe_identity_session_id:   schema.users.stripe_identity_session_id,
     }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
 
-    if (!rows.length) return { verified: false };
+    if (!rows.length) return { verified: false, status: 'not_started' };
     const u = rows[0];
     return {
       verified:   u.identity_verified,
+      status:     u.identity_verification_status,
       verifiedAt: u.identity_verified_at ?? undefined,
       sessionId:  u.stripe_identity_session_id ?? undefined,
     };
@@ -87,7 +98,9 @@ export class StripeIdentityProvider implements IIdentityVerificationProvider {
     return { handled: true, event: event.type, userId };
   }
 
-  async addVerificationFeeToFirstInvoice(userId: string): Promise<void> {
+  async addVerificationFeeToFirstInvoice(userId: string, amountPence: number): Promise<void> {
+    if (amountPence <= 0) return;
+
     const stripe = getStripe();
     const rows = await db.select({ stripe_customer_id: schema.users.stripe_customer_id })
       .from(schema.users).where(eq(schema.users.id, userId)).limit(1);
@@ -95,7 +108,7 @@ export class StripeIdentityProvider implements IIdentityVerificationProvider {
 
     await stripe.invoiceItems.create({
       customer:    rows[0].stripe_customer_id,
-      amount:      150,   // £1.50 in pence
+      amount:      amountPence,
       currency:    'gbp',
       description: 'Identity Verification Fee (one-time)',
     });

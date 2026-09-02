@@ -1,7 +1,7 @@
 /**
  * Subscription service — manages platform subscriptions via Stripe (UK) or Flutterwave (NG).
  *
- * PadiHub has exactly two monthly-only tiers — Pro Group and Elite Group —
+ * PadiHub has exactly two monthly-only tiers — Basic and Premium —
  * see SUBSCRIPTION_TIERS in ../lib/constants.ts for pricing and group limits.
  * There is no free trial and no annual billing option.
  */
@@ -48,7 +48,7 @@ export const subscriptionService = {
    */
   async selectPlan(userId: string, tier: string): Promise<PlanSelectionResult | PlanSwitchResult> {
     if (!isSubscriptionTierKey(tier)) {
-      throw new AppError('Invalid subscription tier. Choose "pro" or "elite".', 400, 'INVALID_SUBSCRIPTION_TIER');
+      throw new AppError('Invalid subscription tier. Choose "basic" or "premium".', 400, 'INVALID_SUBSCRIPTION_TIER');
     }
 
     const userRows = await db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1);
@@ -196,7 +196,7 @@ export const subscriptionService = {
    */
   async switchPlan(userId: string, newTier: string): Promise<PlanSwitchResult | PlanSelectionResult> {
     if (!isSubscriptionTierKey(newTier)) {
-      throw new AppError('Invalid subscription tier. Choose "pro" or "elite".', 400, 'INVALID_SUBSCRIPTION_TIER');
+      throw new AppError('Invalid subscription tier. Choose "basic" or "premium".', 400, 'INVALID_SUBSCRIPTION_TIER');
     }
 
     const userRows = await db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1);
@@ -216,7 +216,7 @@ export const subscriptionService = {
       .where(eq(schema.subscriptions.user_id, userId)).limit(1);
     const sub = subRows[0];
 
-    const rankOf = (t: SubscriptionTierKey) => (t === 'elite' ? 1 : 0);
+    const rankOf = (t: SubscriptionTierKey) => (t === 'premium' ? 1 : 0);
     const direction: 'upgrade' | 'downgrade' = rankOf(newTier) > rankOf(currentTier) ? 'upgrade' : 'downgrade';
     const newAmount = formatTierPrice(newTier, user.country);
 

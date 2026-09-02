@@ -13,8 +13,8 @@ const fadeUp = { hidden: { opacity: 0, y: 16 }, visible: { opacity: 1, y: 0, tra
 const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.07 } } };
 
 const tierConfig = {
-  pro: { name: 'Pro Group', createLimit: 1, joinLimit: 5, price: { GB: '£4.99', NG: '₦5,000' } },
-  elite: { name: 'Elite Group', createLimit: 7, joinLimit: 10, price: { GB: '£9.99', NG: '₦10,000' } },
+  basic: { name: 'Basic', createLimit: 0, joinLimit: 3, price: { GB: '£4.99', NG: '₦5,000' } },
+  premium: { name: 'Premium', createLimit: 3, joinLimit: 8, price: { GB: '£14.99', NG: '₦10,000' } },
 } as const;
 
 type TierKey = keyof typeof tierConfig;
@@ -54,13 +54,13 @@ function getApiErrorMessage(payload: unknown, fallback: string): string {
 }
 
 function isTierKey(value: string | null | undefined): value is TierKey {
-  return value === 'pro' || value === 'elite';
+  return value === 'basic' || value === 'premium';
 }
 
 function getTierFromPlan(plan?: string | null): TierKey | null {
   if (!plan) return null;
-  if (plan.endsWith('_elite')) return 'elite';
-  if (plan.endsWith('_pro')) return 'pro';
+  if (plan.endsWith('_premium')) return 'premium';
+  if (plan.endsWith('_basic')) return 'basic';
   return null;
 }
 
@@ -144,7 +144,7 @@ export default function CancelMembershipPage() {
   const currentCountry = (stats?.country ?? getCountryFromStatus(status) ?? 'GB') as CountryCode;
   const currentPlan = currentTier ? tierConfig[currentTier] : null;
   const renewalDate = formatDate(status?.renewal_date);
-  const alternativeTier = currentTier === 'elite' ? tierConfig.pro : tierConfig.elite;
+  const alternativeTier = currentTier === 'premium' ? tierConfig.basic : tierConfig.premium;
 
   const handleCancel = async () => {
     if (!selectedReason || loading) return;

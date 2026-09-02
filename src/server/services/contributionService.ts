@@ -46,7 +46,18 @@ export const contributionService = {
     return id;
   },
 
-  async markPaid(contributionId: string, providerReference: string, ipAddress?: string, feeAmount?: string) {
+  async markPaid(
+    contributionId: string,
+    providerReference: string,
+    ipAddress?: string,
+    feeBreakdown?: {
+      feeAmount?: string;
+      cardFeeAmount?: string;
+      cardFeeVatAmount?: string;
+      payoutFeeShareAmount?: string;
+      payoutFeeShareVatAmount?: string;
+    },
+  ) {
     
     const rows = await db.select().from(schema.contributions)
       .where(eq(schema.contributions.id, contributionId)).limit(1);
@@ -61,7 +72,11 @@ export const contributionService = {
     await db.update(schema.contributions).set({
       payment_status:     'paid',
       amount_paid:        c.amount_due,
-      fee_amount:          feeAmount ?? c.fee_amount,
+      fee_amount:                  feeBreakdown?.feeAmount ?? c.fee_amount,
+      card_fee_amount:             feeBreakdown?.cardFeeAmount ?? c.card_fee_amount,
+      card_fee_vat_amount:         feeBreakdown?.cardFeeVatAmount ?? c.card_fee_vat_amount,
+      payout_fee_share_amount:     feeBreakdown?.payoutFeeShareAmount ?? c.payout_fee_share_amount,
+      payout_fee_share_vat_amount: feeBreakdown?.payoutFeeShareVatAmount ?? c.payout_fee_share_vat_amount,
       paid_date:          new Date(),
       provider_reference: providerReference,
     }).where(eq(schema.contributions.id, contributionId));

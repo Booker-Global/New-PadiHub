@@ -4,7 +4,7 @@ import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
-import { BCRYPT_ROUNDS, TRUST_SCORE_MAX, TRUST_SCORE_MIN } from '../lib/constants.js';
+import { BCRYPT_ROUNDS, TRUST_SCORE_MAX, TRUST_SCORE_MIN, SUBSCRIPTION_TIERS, isSubscriptionTierKey } from '../lib/constants.js';
 import { getPaymentProvider } from '../integrations/payments/PaymentProviderFactory.js';
 import { sendAccountDeletedEmail } from '../integrations/email/emailService.js';
 
@@ -126,6 +126,18 @@ export const userService = {
       }
     }
 
+    // Group-membership usage against the member's tier limit (counts both
+    // active memberships and outstanding pending join requests, matching
+    // groupService.countGroupsJoined() — the same figure enforced server-side
+    // when creating/joining a group) so the dashboard can show "2 of 3 groups
+    // joined" without drifting from what the backend actually allows.
+    const pendingMemberships = memberships.filter(m => m.status === 'pending');
+    const groupsJoinedCount = activeMemberships.length + pendingMemberships.length;
+    const groupsLedCount = activeMemberships.filter(m => m.role === 'leader').length;
+    const tierLimits = isSubscriptionTierKey(user.subscription_tier)
+      ? SUBSCRIPTION_TIERS[user.subscription_tier]
+      : null;
+
     return {
       trust_score:               user.trust_score,
       trust_score_max:           TRUST_SCORE_MAX,
@@ -135,6 +147,10 @@ export const userService = {
       country:                   user.country,
       communities_count:         activeGroupIds.length,
       is_group_leader:           isGroupLeader,
+      groups_joined_count:       groupsJoinedCount,
+      groups_joined_limit:       tierLimits?.maxGroupsJoin ?? null,
+      groups_created_count:      groupsLedCount,
+      groups_created_limit:      tierLimits?.maxGroupsCreate ?? null,
       contribution_reliability: contributionReliability,
       contributions_paid_count: paidContributions.length,
       governance_participation: governanceParticipation,

@@ -6,8 +6,8 @@ export interface FAQEntry {
 }
 
 const costAnswerByRegion: Record<PricingRegion, string> = {
-  UK: 'PadiHub has two monthly-only plans. Pro Group: £4.99/month. Create ONE savings group; be a member of up to 5 groups total. Elite Group: £9.99/month. Create up to SEVEN savings groups; be a member of up to 10 groups total.',
-  NG: 'PadiHub has two monthly-only plans. Pro Group: ₦5,000/month. Create ONE savings group; be a member of up to 5 groups total. Elite Group: ₦10,000/month. Create up to SEVEN savings groups; be a member of up to 10 groups total.',
+  UK: 'PadiHub has two monthly-only plans. Basic: £4.99/month. Join up to 3 savings groups; cannot create a group. Premium: £14.99/month. Create up to 3 savings groups and join up to 5 more (8 group memberships total).',
+  NG: 'PadiHub has two monthly-only plans. Basic: ₦5,000/month. Join up to 3 savings groups; cannot create a group. Premium: ₦10,000/month. Create up to 3 savings groups and join up to 5 more (8 group memberships total).',
 };
 
 // Builds the FAQ list for a resolved region — the "How much does PadiHub

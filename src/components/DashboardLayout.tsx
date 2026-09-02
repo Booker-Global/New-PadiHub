@@ -19,13 +19,18 @@ import { getValidSession, logout } from '@/lib/session';
 // that value goes stale the moment the user contributes, votes, or gets
 // verified without logging out and back in.
 function useDashboardUser() {
-  const [user, setUser] = useState<{ name: string; trust: number; initial: string; tier: 'pro' | 'elite' | null; country: string | null; isGroupLeader: boolean }>({
+  const [user, setUser] = useState<{
+    name: string; trust: number; initial: string; tier: 'basic' | 'premium' | null;
+    country: string | null; isGroupLeader: boolean;
+    groupsJoinedCount: number | null; groupsJoinedLimit: number | null;
+  }>({
     name: '', trust: 0, initial: '', tier: null, country: null, isGroupLeader: false,
+    groupsJoinedCount: null, groupsJoinedLimit: null,
   });
   useEffect(() => {
     const session = getValidSession();
     if (!session) {
-      setUser({ name: '', trust: 0, initial: '', tier: null, country: null, isGroupLeader: false });
+      setUser({ name: '', trust: 0, initial: '', tier: null, country: null, isGroupLeader: false, groupsJoinedCount: null, groupsJoinedLimit: null });
       return;
     }
     const name = session.name || '';
@@ -36,12 +41,17 @@ function useDashboardUser() {
       tier: null,
       country: null,
       isGroupLeader: false,
+      groupsJoinedCount: null,
+      groupsJoinedLimit: null,
     });
 
     let cancelled = false;
     void window.fetch('/api/users/stats', { headers: { Authorization: 'Bearer ' + session.token } })
       .then(response => response.ok ? response.json() : null)
-      .then((json: { data?: { trust_score?: number; subscription_tier?: 'pro' | 'elite' | null; country?: string; is_group_leader?: boolean } } | null) => {
+      .then((json: { data?: {
+        trust_score?: number; subscription_tier?: 'basic' | 'premium' | null; country?: string;
+        is_group_leader?: boolean; groups_joined_count?: number; groups_joined_limit?: number | null;
+      } } | null) => {
         if (!cancelled && json?.data) {
           setUser(current => ({
             ...current,
@@ -49,6 +59,8 @@ function useDashboardUser() {
             tier: json.data!.subscription_tier ?? null,
             country: json.data!.country ?? null,
             isGroupLeader: json.data!.is_group_leader ?? false,
+            groupsJoinedCount: typeof json.data!.groups_joined_count === 'number' ? json.data!.groups_joined_count! : current.groupsJoinedCount,
+            groupsJoinedLimit: json.data!.groups_joined_limit ?? current.groupsJoinedLimit,
           }));
         }
       })
@@ -310,8 +322,11 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
                 style={{ background: 'rgba(46,175,111,0.1)', color: '#2EAF6F', border: '1px solid rgba(46,175,111,0.2)' }}>
                 <Zap size={11} fill="#2EAF6F" />
                 <span>
-                  {dashUser.tier === 'elite' ? 'Elite' : 'Pro'}
+                  {dashUser.tier === 'premium' ? 'Premium' : 'Basic'}
                   {dashUser.country ? ` · ${dashUser.country === 'NG' ? 'NG' : 'UK'}` : ''}
+                  {typeof dashUser.groupsJoinedCount === 'number' && typeof dashUser.groupsJoinedLimit === 'number'
+                    ? ` · ${dashUser.groupsJoinedCount} of ${dashUser.groupsJoinedLimit} groups joined`
+                    : ''}
                 </span>
               </div>
             )}

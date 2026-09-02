@@ -17,7 +17,7 @@ type EligibilityUser = {
   country: string;
   email_verified: boolean;
   identity_verified: boolean;
-  subscription_tier: 'pro' | 'elite' | null;
+  subscription_tier: 'basic' | 'premium' | null;
   stripe_payment_method_id: string | null;
   stripe_connected_account_id: string | null;
   flutterwave_card_token: string | null;
@@ -82,7 +82,7 @@ export async function getPaymentEligibility(userId: string) {
 
   const emailVerified = Boolean(user.email_verified);
   const identityVerified = Boolean(user.identity_verified);
-  const subscriptionTierSelected = user.subscription_tier === 'pro' || user.subscription_tier === 'elite';
+  const subscriptionTierSelected = user.subscription_tier === 'basic' || user.subscription_tier === 'premium';
 
   return {
     emailVerified,
