@@ -32,7 +32,7 @@ type CountryCode = 'GB' | 'NG';
 type ApiResponse<T> = { success?: boolean; data?: T; message?: string };
 
 type SubscriptionStatus = {
-  billing_status?: 'active' | 'past_due' | 'cancelled' | 'trialing' | null;
+  billing_status?: 'active' | 'past_due' | 'cancelled' | 'trialing' | 'paused' | null;
   renewal_date?: string | null;
   plan?: string | null;
   provider?: 'stripe' | 'flutterwave' | null;
@@ -157,7 +157,13 @@ export default function SubscriptionPage() {
       ? { label: 'Cancelled', color: '#EF4444', background: 'rgba(239,68,68,0.15)' }
       : status.billing_status === 'past_due'
         ? { label: 'Payment overdue', color: '#F59E0B', background: 'rgba(245,158,11,0.16)' }
-        : { label: 'Active', color: '#2EAF6F', background: 'rgba(46,175,111,0.2)' };
+        : status.billing_status === 'paused'
+          // Section D.2 — billing is intentionally on hold until the member
+          // is verified in an active (3+ member) group; this is a normal,
+          // expected state, not a problem, so it gets its own neutral badge
+          // rather than being folded into either "Active" or a failure state.
+          ? { label: 'Billing on hold', color: '#2563EB', background: 'rgba(37,99,235,0.14)' }
+          : { label: 'Active', color: '#2EAF6F', background: 'rgba(46,175,111,0.2)' };
 
   const features = plan
     ? [
@@ -223,7 +229,11 @@ export default function SubscriptionPage() {
                 </h2>
                 <p className="text-gray-400 text-sm">
                   {plan
-                    ? `${renewalDate ? `Next billing ${renewalDate}` : 'Billing starts once your payment method is verified'}`
+                    ? status?.billing_status === 'paused'
+                      ? 'Billing on hold — starts once you\'re a verified member of an active group with at least 3 members.'
+                      : renewalDate
+                        ? `Next billing ${renewalDate}`
+                        : 'Billing starts once you\'re a verified member of an active group with at least 3 members.'
                     : 'Choose Basic or Premium to set your monthly membership.'}
                 </p>
               </div>

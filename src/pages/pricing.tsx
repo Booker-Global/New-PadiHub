@@ -44,7 +44,7 @@ const verificationNotesByRegion: Record<PricingRegion, { title: string; body: st
     title: 'Verification before the first UK charge',
     body: 'Save your card first, then complete Stripe Identity inside an embedded PadiHub dashboard modal. Your profile stays Pending until verification succeeds.',
     bullets: [
-      'Subscription billing starts only after identity verification succeeds',
+      'Your subscription is set up only after identity verification succeeds, and billing starts once you\'re a verified member of an active group with at least 3 members',
       'A verification fee may apply to your first subscription charge — see our Terms & Conditions for details',
       'If verification fails, no charge is taken and you receive a try-again email',
     ],
@@ -53,7 +53,7 @@ const verificationNotesByRegion: Record<PricingRegion, { title: string; body: st
     title: 'Verification before the first Nigeria charge',
     body: 'Save your bank details first, then complete Flutterwave Account Resolve — a free preliminary bank-account name match, not full KYC. Your profile stays Pending until resolve succeeds.',
     bullets: [
-      'Subscription billing starts only after Account Resolve succeeds',
+      'Your subscription is set up only after Account Resolve succeeds, and billing starts once you\'re a verified member of an active group with at least 3 members',
       'There is no fee for the Account Resolve check',
       'If the check fails, no charge is taken and you receive a try-again email',
     ],

@@ -837,12 +837,16 @@ export async function sendSupportTicketClosedEmail(
 
 // ─── Identity Verification emails ─────────────────────────────────────────────
 
-export async function sendIdentityVerifiedEmail(to: string, firstName: string, subscriptionActivated: boolean): Promise<void> {
+export async function sendIdentityVerifiedEmail(
+  to: string, firstName: string, subscriptionActivated: boolean, billingDeferred = false,
+): Promise<void> {
   await send(to, 'Your identity has been verified — PadiHub', wrap(`
     ${h2(`Identity verified, ${firstName}!`)}
-    ${subscriptionActivated
-      ? p('Your identity has been successfully verified on PadiHub, and your subscription is now active.')
-      : p('Your identity has been successfully verified on PadiHub.')}
+    ${billingDeferred
+      ? p('Your identity has been successfully verified on PadiHub, and your subscription is confirmed. You have not been charged yet — billing starts once you\'re a verified member of an active savings group with at least 3 members.')
+      : subscriptionActivated
+        ? p('Your identity has been successfully verified on PadiHub, and your subscription is now active.')
+        : p('Your identity has been successfully verified on PadiHub.')}
     ${p('As a result, your Trust Score has increased slightly. Everyone starts from the bottom of the scale and builds their Trust Score up over time through real group activity — on-time contributions, completed cycles, and positive participation.')}
     ${subscriptionActivated
       ? p('No further action is needed. You can now create and join savings groups per your plan\'s limits.')

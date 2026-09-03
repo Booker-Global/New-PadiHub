@@ -604,8 +604,8 @@ export default function OnboardingPage() {
 
       const activePlan = currentPlans.find((plan) => plan.key === savedTier);
       setActionNotice(activePlan
-        ? `${activePlan.label} selected. Billing starts once you add a verified payment method.`
-        : 'Plan selected. Billing starts once you add a verified payment method.');
+        ? `${activePlan.label} selected. Billing starts once you're a verified member of an active group with at least 3 members.`
+        : 'Plan selected. Billing starts once you\'re a verified member of an active group with at least 3 members.');
       nextStep();
     } catch (saveError) {
       setActionError(saveError instanceof Error ? saveError.message : 'Could not save your subscription plan.');

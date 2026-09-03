@@ -13,7 +13,7 @@ import { contributionService } from '../services/contributionService.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { notificationService } from '../services/notificationService.js';
 import { isSubscriptionTierKey, type SubscriptionTierKey } from '../lib/constants.js';
-import { planCode } from '../services/subscriptionService.js';
+import { planCode, subscriptionService } from '../services/subscriptionService.js';
 
 /** Recover the tier key ('basic'/'premium') from a stored plan code like 'gb_premium'. */
 function tierFromPlanCode(plan?: string | null): SubscriptionTierKey | null {
@@ -248,6 +248,20 @@ async function handleStripeEvent(event: Stripe.Event) {
         action: 'STRIPE_ACCOUNT_UPDATED', entity: 'users',
         metadata: { accountId: account.id, chargesEnabled: account.charges_enabled, payoutsEnabled: account.payouts_enabled, verified },
       });
+
+      // This webhook is the ONLY place a UK payout destination ever becomes
+      // verified (Stripe Express onboarding has no synchronous confirmation
+      // step), and it can easily arrive after identity verification already
+      // succeeded — without this, a member whose payout confirmation lands
+      // last would be stuck ineligible forever. No-op unless every other
+      // onboarding prerequisite is already in place.
+      if (verified) {
+        const accountUserRows = await db.select({ id: schema.users.id })
+          .from(schema.users).where(eq(schema.users.stripe_connected_account_id, account.id)).limit(1);
+        if (accountUserRows.length) {
+          await subscriptionService.activateSubscriptionIfEligible(accountUserRows[0].id);
+        }
+      }
       break;
     }
 

@@ -50,6 +50,21 @@ async function refreshStripePayoutVerification(user: EligibilityUser): Promise<b
       await db.update(schema.users)
         .set({ payout_verified_at: new Date() })
         .where(eq(schema.users.id, user.id));
+
+      // This self-heal can be the moment a payout destination becomes
+      // verified for the first time (if the account.updated webhook hasn't
+      // fired yet) — attempt subscription activation immediately in case
+      // it's now the last remaining onboarding prerequisite. Dynamically
+      // imported to avoid a static circular dependency (subscriptionService
+      // imports membershipService, which imports this module) — same
+      // pattern used by groupService.reconcileMemberBilling.
+      try {
+        const { subscriptionService } = await import('./subscriptionService.js');
+        await subscriptionService.activateSubscriptionIfEligible(user.id);
+      } catch (activationErr) {
+        console.error('[paymentEligibilityService] Could not activate subscription after payout self-heal:', activationErr);
+      }
+
       return true;
     }
   } catch (err) {

@@ -745,6 +745,13 @@ export const groupService = {
    * that must stay visible on the invitee's dashboard/profile throughout
    * signup and onboarding (Section 0.1), so they never lose sight of it
    * once payment, subscription, and identity verification are complete.
+   *
+   * A group can accumulate more than one unaccepted invitation row for the
+   * same email (e.g. the leader re-sends the invite, generating a fresh
+   * token/expiry without accepting or deleting the earlier one) — only ONE
+   * reminder card per group must ever reach the dashboard, so this collapses
+   * to the single best invite per group_id: the newest non-expired one if
+   * any exists, otherwise the newest overall.
    */
   async getPendingInvitationsForEmail(email?: string | null) {
     if (!email) return [];
@@ -762,15 +769,35 @@ export const groupService = {
       .innerJoin(schema.savingsGroups, eq(schema.groupInvitations.group_id, schema.savingsGroups.id))
       .where(eq(schema.groupInvitations.accepted, false));
 
-    return rows
-      .filter(row => (row.email ?? '').trim().toLowerCase() === normalized)
-      .filter(row => row.group_status !== 'closed' && row.group_status !== 'expired')
+    const now = new Date();
+    const bestPerGroup = new Map<string, typeof rows[number] & { expired: boolean }>();
+    for (const row of rows) {
+      if ((row.email ?? '').trim().toLowerCase() !== normalized) continue;
+      if (row.group_status === 'closed' || row.group_status === 'expired') continue;
+
+      const candidate = { ...row, expired: now > row.expires_at };
+      const existing = bestPerGroup.get(row.group_id);
+      if (!existing) {
+        bestPerGroup.set(row.group_id, candidate);
+        continue;
+      }
+      // Prefer a non-expired invite over an expired one; among invites with
+      // the same expired-ness, prefer the most recently created.
+      const candidateIsBetter = existing.expired && !candidate.expired
+        ? true
+        : candidate.expired !== existing.expired
+          ? false
+          : new Date(candidate.created_at).getTime() > new Date(existing.created_at).getTime();
+      if (candidateIsBetter) bestPerGroup.set(row.group_id, candidate);
+    }
+
+    return Array.from(bestPerGroup.values())
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
       .map(row => ({
         token: row.token,
         group_id: row.group_id,
         group_name: row.group_name,
-        expired: new Date() > row.expires_at,
+        expired: row.expired,
         join_link: `/savings-groups/${row.group_id}/join?invite_token=${row.token}`,
       }));
   },
