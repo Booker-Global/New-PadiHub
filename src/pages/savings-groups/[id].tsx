@@ -427,6 +427,21 @@ export default function SavingsGroupDetailPage() {
     [activeMembers, currentUserId],
   );
 
+  // Mirrors voteService.proposeMemberRemoval's PAYOUT_RECIPIENT_PROTECTED
+  // rule server-side — exclude the member currently designated to receive
+  // this cycle's payout (until it's actually completed) from the removal
+  // dropdown, so the option list itself never offers a choice the server
+  // will reject, rather than letting the member pick it and only finding
+  // out via an error after submitting.
+  const removalCandidates = useMemo(
+    () => swapCandidates.filter(candidate => !(
+      currentRotation
+      && currentRotation.recipient_id === candidate.user_id
+      && currentRotation.payout_status !== 'completed'
+    )),
+    [swapCandidates, currentRotation],
+  );
+
   const openPayoutSwapVotes = useMemo(
     () => votes.filter(vote => vote.proposal_type === 'payout_swap' && vote.status === 'open'),
     [votes],
@@ -1292,7 +1307,7 @@ export default function SavingsGroupDetailPage() {
                               className="flex-1 px-3 py-2 rounded-xl text-sm border border-gray-200 focus:outline-none focus:border-purple-400"
                             >
                               <option value="">Choose a member…</option>
-                              {swapCandidates.map(candidate => (
+                              {removalCandidates.map(candidate => (
                                 <option key={candidate.id} value={candidate.user_id}>
                                   {getMemberDisplayName(candidate.user_id)}
                                 </option>
@@ -1307,6 +1322,11 @@ export default function SavingsGroupDetailPage() {
                               {removalSubmitting ? 'Submitting…' : 'Start removal vote'}
                             </button>
                           </div>
+                          {swapCandidates.length > 0 && removalCandidates.length === 0 && (
+                            <p className="text-[11px] mt-2" style={{ color: '#B45309' }}>
+                              No one is eligible right now — the only other active member is this cycle&apos;s designated payout recipient.
+                            </p>
+                          )}
                           <input
                             value={removalReason}
                             onChange={event => setRemovalReason(event.target.value)}
