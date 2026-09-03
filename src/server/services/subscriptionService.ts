@@ -103,9 +103,28 @@ export const subscriptionService = {
       return this.switchPlan(userId, tier);
     }
 
-    await db.update(schema.users)
-      .set({ subscription_tier: tier })
-      .where(eq(schema.users.id, userId));
+    try {
+      await db.update(schema.users)
+        .set({ subscription_tier: tier })
+        .where(eq(schema.users.id, userId));
+    } catch (err) {
+      // A raw drizzle/mysql2 failure here (e.g. a transient DB connection
+      // or lock-wait issue) must never surface as an opaque "An unexpected
+      // error occurred" with no trace of why. Log the real error —
+      // including drizzle's `.cause`, which holds the actual underlying
+      // driver error (its own errno/sqlMessage) that a bare `err.message`
+      // hides — and give the member an honest, actionable message instead
+      // of a generic 500.
+      console.error(
+        '[subscriptionService] Failed to save selected plan:',
+        err instanceof Error ? err.message : err,
+        err instanceof Error && err.cause ? { cause: err.cause } : undefined,
+      );
+      throw new AppError(
+        'Could not save your selected plan due to a temporary issue. Please try again in a moment.',
+        500, 'SUBSCRIPTION_TIER_UPDATE_FAILED',
+      );
+    }
 
     await createAuditLog({
       userId, action: 'SUBSCRIPTION_PLAN_SELECTED', entity: 'users', entityId: userId,
