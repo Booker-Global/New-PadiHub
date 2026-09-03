@@ -8,7 +8,7 @@ import { notificationService } from './notificationService.js';
 import { trustScoreService } from './trustScoreService.js';
 import { groupService } from './groupService.js';
 import { assertPaymentSetupComplete } from './paymentEligibilityService.js';
-import { TRUST_SCORE_DELTA_MEMBER_SUSPENDED, SUBSCRIPTION_TIERS, isSubscriptionTierKey, countryDisplayName } from '../lib/constants.js';
+import { TRUST_SCORE_DELTA_MEMBER_SUSPENDED, SUBSCRIPTION_TIERS, isSubscriptionTierKey, countryDisplayName, resolveUserDisplayName } from '../lib/constants.js';
 import { describeGroupDuration } from './groupService.js';
 import {
   sendMemberRemovedEmail,
@@ -26,7 +26,32 @@ import {
 
 export const membershipService = {
   async getForGroup(groupId: string) {
-    return db.select().from(schema.memberships).where(eq(schema.memberships.group_id, groupId));
+    // Every member-list / rotation / voting screen needs a human-readable
+    // name for each member (never a raw user ID) — see resolveUserDisplayName.
+    const rows = await db.select({
+      id:             schema.memberships.id,
+      user_id:        schema.memberships.user_id,
+      group_id:       schema.memberships.group_id,
+      role:           schema.memberships.role,
+      rotation_order: schema.memberships.rotation_order,
+      join_date:      schema.memberships.join_date,
+      status:         schema.memberships.status,
+      strike_count:   schema.memberships.strike_count,
+      default_count:  schema.memberships.default_count,
+      created_at:     schema.memberships.created_at,
+      updated_at:     schema.memberships.updated_at,
+      display_name:   schema.users.display_name,
+      first_name:     schema.users.first_name,
+      last_name:      schema.users.last_name,
+      email:          schema.users.email,
+    }).from(schema.memberships)
+      .leftJoin(schema.users, eq(schema.memberships.user_id, schema.users.id))
+      .where(eq(schema.memberships.group_id, groupId));
+
+    return rows.map(({ display_name, first_name, last_name, email, ...membership }) => ({
+      ...membership,
+      user_name: resolveUserDisplayName({ display_name, first_name, last_name, email }),
+    }));
   },
 
   async getForUser(userId: string) {

@@ -11,7 +11,7 @@ import {
   GROUP_DEFAULT_VOTING_THRESHOLD, GROUP_DEFAULT_MIN_TRUST_SCORE,
   SUBSCRIPTION_TIERS, isSubscriptionTierKey,
   GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH, GROUP_MAX_MEMBERS, clampGroupMaximumMembers, isDailyFrequencyAllowed,
-  countryDisplayName,
+  countryDisplayName, resolveUserDisplayName,
 } from '../lib/constants.js';
 import {
   sendGroupInvitationEmail,
@@ -59,10 +59,21 @@ export const groupService = {
     const rows = await db.select().from(schema.savingsGroups)
       .where(eq(schema.savingsGroups.id, groupId)).limit(1);
     if (!rows.length) throw new AppError('Group not found.', 404);
+
+    const leaderRows = await db.select({
+      display_name: schema.users.display_name,
+      first_name:   schema.users.first_name,
+      last_name:    schema.users.last_name,
+      email:        schema.users.email,
+    }).from(schema.users).where(eq(schema.users.id, rows[0].leader_id)).limit(1);
+
     return {
       ...rows[0],
       maximum_members: clampGroupMaximumMembers(rows[0].maximum_members),
       rotation_method: normalizeRotationMethod(rows[0].rotation_method),
+      // Every screen must show the leader's name, never their raw user ID —
+      // see resolveUserDisplayName doc comment.
+      leader_name: resolveUserDisplayName(leaderRows[0]),
     };
   },
 
