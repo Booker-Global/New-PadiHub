@@ -15,6 +15,7 @@ import { createAuditLog } from '../middleware/auditLogger.js';
 import { getPaymentProvider } from '../integrations/payments/PaymentProviderFactory.js';
 import { groupService } from './groupService.js';
 import { membershipService } from './membershipService.js';
+import { notificationService } from './notificationService.js';
 import {
   SUBSCRIPTION_TIERS,
   isSubscriptionTierKey,
@@ -26,6 +27,7 @@ import {
   sendSubscriptionCreatedEmail,
   sendSubscriptionCancelledEmail,
   sendSubscriptionTierChangedEmail,
+  sendSubscriptionPaymentFailedEmail,
 } from '../integrations/email/emailService.js';
 
 export function planCode(country: string, tier: SubscriptionTierKey): string {
@@ -121,10 +123,19 @@ export const subscriptionService = {
       try {
         await this.activateSubscription(userId);
       } catch (err) {
-        console.warn(
-          '[subscriptionService] Plan selected but subscription could not be activated yet:',
-          err instanceof Error ? err.message : err,
-        );
+        // Every prerequisite is already met here, so a failure is a genuine
+        // provider/charge problem, not "not ready yet" — surface the real
+        // reason instead of silently dropping it, so the member isn't left
+        // thinking they're subscribed when they aren't.
+        const message = err instanceof AppError ? err.message : 'Could not activate your subscription with the payment provider.';
+        console.warn('[subscriptionService] Plan selected but subscription could not be activated:', message);
+        await notificationService.create({
+          userId,
+          type: 'subscription_payment_failed',
+          title: 'Payment could not be completed',
+          message,
+        });
+        await sendSubscriptionPaymentFailedEmail(user.email, formatTierPrice(tier, user.country));
       }
     }
 
@@ -214,6 +225,17 @@ export const subscriptionService = {
       );
     }
 
+    // Stripe's createSubscription uses payment_behavior: 'default_incomplete',
+    // which does NOT synchronously confirm/charge the card — if the card is
+    // declined or needs 3D-Secure, Stripe returns successfully but with
+    // status 'incomplete' (no exception thrown). Only treat the subscription
+    // as genuinely billed if the provider reports it active/trialing, so we
+    // never show "Active" or send the welcome email for a card that hasn't
+    // actually been charged yet. invoice.payment_succeeded/failed webhooks
+    // reconcile this to the real outcome once Stripe finishes processing.
+    const billingIsActive = result.status === 'active' || result.status === 'trialing';
+    const billingStatus = billingIsActive ? 'active' : 'past_due';
+
     // Upsert subscription record
     const existing = await db.select().from(schema.subscriptions)
       .where(eq(schema.subscriptions.user_id, userId)).limit(1);
@@ -223,7 +245,7 @@ export const subscriptionService = {
     if (existing.length) {
       await db.update(schema.subscriptions).set({
         provider_subscription_id: result.subscriptionId,
-        billing_status:           'active',
+        billing_status:           billingStatus,
         renewal_date:             result.renewalDate,
         plan,
       }).where(eq(schema.subscriptions.user_id, userId));
@@ -234,26 +256,36 @@ export const subscriptionService = {
         provider:                 country === 'NG' ? 'flutterwave' : 'stripe',
         provider_subscription_id: result.subscriptionId,
         plan,
-        billing_status:           'active',
+        billing_status:           billingStatus,
         renewal_date:             result.renewalDate,
       });
     }
 
     await db.update(schema.users)
-      .set({ subscription_tier: tier, subscription_status: 'active' })
+      .set({ subscription_tier: tier, ...(billingIsActive ? { subscription_status: 'active' as const } : {}) })
       .where(eq(schema.users.id, userId));
 
     await createAuditLog({
-      userId, action: 'SUBSCRIPTION_CREATED', entity: 'subscriptions',
-      metadata: { subscriptionId: result.subscriptionId, country, tier, amount_display: formatTierPrice(tier, country) },
+      userId, action: billingIsActive ? 'SUBSCRIPTION_CREATED' : 'SUBSCRIPTION_PAYMENT_PENDING', entity: 'subscriptions',
+      metadata: { subscriptionId: result.subscriptionId, country, tier, amount_display: formatTierPrice(tier, country), providerStatus: result.status },
     });
 
-    await sendSubscriptionCreatedEmail(
-      user.email,
-      SUBSCRIPTION_TIERS[tier].name,
-      formatTierPrice(tier, country),
-      result.renewalDate ? result.renewalDate.toLocaleDateString('en-GB') : 'your next billing date',
-    );
+    if (billingIsActive) {
+      await sendSubscriptionCreatedEmail(
+        user.email,
+        SUBSCRIPTION_TIERS[tier].name,
+        formatTierPrice(tier, country),
+        result.renewalDate ? result.renewalDate.toLocaleDateString('en-GB') : 'your next billing date',
+      );
+    } else {
+      await notificationService.create({
+        userId,
+        type: 'subscription_payment_failed',
+        title: 'Payment could not be completed',
+        message: 'We could not confirm payment for your subscription. Please check your card details or complete any additional verification your bank requires.',
+      });
+      await sendSubscriptionPaymentFailedEmail(user.email, formatTierPrice(tier, country));
+    }
 
     return result;
   },
@@ -302,6 +334,7 @@ export const subscriptionService = {
     }
 
     const effectiveDate = sub.renewal_date ? new Date(sub.renewal_date) : new Date();
+    let upgradeBillingFailed = false;
 
     if (direction === 'downgrade') {
       // Keep the current tier's limits and price until the next renewal
@@ -345,10 +378,16 @@ export const subscriptionService = {
           );
         }
       })();
+
+      // Same reasoning as createSubscription() above — Stripe's
+      // default_incomplete subscription can come back non-active if the
+      // card is declined or needs 3D-Secure, without throwing.
+      const upgradeBillingIsActive = result.status === 'active' || result.status === 'trialing';
+
       await db.update(schema.subscriptions).set({
         provider_subscription_id: result.subscriptionId,
         plan:                     planCode(user.country, newTier),
-        billing_status:           'active',
+        billing_status:           upgradeBillingIsActive ? 'active' : 'past_due',
         renewal_date:             result.renewalDate,
         pending_tier:             null,
       }).where(eq(schema.subscriptions.user_id, userId));
@@ -358,9 +397,20 @@ export const subscriptionService = {
       // real billing-history event alongside SUBSCRIPTION_CREATED/renewal
       // charges, since getBillingHistory() below reads from these logs.
       await createAuditLog({
-        userId, action: 'SUBSCRIPTION_CREATED', entity: 'subscriptions',
-        metadata: { subscriptionId: result.subscriptionId, country: user.country, tier: newTier, amount_display: newAmount },
+        userId, action: upgradeBillingIsActive ? 'SUBSCRIPTION_CREATED' : 'SUBSCRIPTION_PAYMENT_PENDING', entity: 'subscriptions',
+        metadata: { subscriptionId: result.subscriptionId, country: user.country, tier: newTier, amount_display: newAmount, providerStatus: result.status },
       });
+
+      if (!upgradeBillingIsActive) {
+        upgradeBillingFailed = true;
+        await notificationService.create({
+          userId,
+          type: 'subscription_payment_failed',
+          title: 'Payment could not be completed',
+          message: 'We could not confirm payment for your upgraded plan. Please check your card details or complete any additional verification your bank requires.',
+        });
+        await sendSubscriptionPaymentFailedEmail(user.email, newAmount);
+      }
     }
 
     await createAuditLog({
@@ -368,15 +418,17 @@ export const subscriptionService = {
       metadata: { from: currentTier, to: newTier, direction },
     });
 
-    await sendSubscriptionTierChangedEmail(user.email, {
-      direction,
-      fromPlanName: SUBSCRIPTION_TIERS[currentTier].name,
-      toPlanName:   SUBSCRIPTION_TIERS[newTier].name,
-      newAmount,
-      effectiveDate: direction === 'downgrade'
-        ? effectiveDate.toLocaleDateString('en-GB')
-        : new Date().toLocaleDateString('en-GB'),
-    });
+    if (!upgradeBillingFailed) {
+      await sendSubscriptionTierChangedEmail(user.email, {
+        direction,
+        fromPlanName: SUBSCRIPTION_TIERS[currentTier].name,
+        toPlanName:   SUBSCRIPTION_TIERS[newTier].name,
+        newAmount,
+        effectiveDate: direction === 'downgrade'
+          ? effectiveDate.toLocaleDateString('en-GB')
+          : new Date().toLocaleDateString('en-GB'),
+      });
+    }
 
     return { tier: newTier, direction, effective_date: effectiveDate };
   },

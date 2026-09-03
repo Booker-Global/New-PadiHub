@@ -24,6 +24,7 @@ import {
   sendIdentityVerifiedEmail,
   sendVerificationFeeChargedEmail,
   sendIdentityVerificationFailedEmail,
+  sendSubscriptionPaymentFailedEmail,
 } from '../integrations/email/emailService.js';
 
 /**
@@ -119,13 +120,26 @@ export const identityVerificationService = {
     // away — the remaining onboarding steps are enforced separately by
     // paymentEligibilityService before they can create or join a group.
     let subscriptionResult: Awaited<ReturnType<typeof subscriptionService.activateSubscription>> | null = null;
+    let subscriptionActivationFailureReason: string | null = null;
     try {
       subscriptionResult = await subscriptionService.activateSubscription(userId);
     } catch (err) {
+      // 'SUBSCRIPTION_TIER_NOT_SELECTED' just means the member hasn't picked
+      // a plan/saved a card yet — expected, not an error worth surfacing.
+      // Anything else (provider/customer/charge failure) is genuine and must
+      // not be silently dropped, or the member is left thinking they need to
+      // "finish onboarding" when really their card was declined or the
+      // provider request failed.
+      const isNotReadyYet = err instanceof AppError && err.code === 'SUBSCRIPTION_TIER_NOT_SELECTED';
       console.warn(
-        '[identityVerificationService] Identity verified but subscription could not be activated yet:',
+        '[identityVerificationService] Identity verified but subscription could not be activated:',
         err instanceof Error ? err.message : err,
       );
+      if (!isNotReadyYet) {
+        subscriptionActivationFailureReason = err instanceof AppError
+          ? err.message
+          : 'Could not activate your subscription with the payment provider.';
+      }
     }
 
     // Only claim the subscription is now active if activateSubscription
@@ -138,8 +152,15 @@ export const identityVerificationService = {
       title: 'Identity Verified',
       message: subscriptionActivated
         ? 'Your identity has been verified. Your Trust Score has increased and your subscription is now active.'
-        : 'Your identity has been verified and your Trust Score has increased. Choose a subscription plan and add your payment card to activate your subscription.',
+        : subscriptionActivationFailureReason
+          ? `Your identity has been verified and your Trust Score has increased, but your subscription could not be activated: ${subscriptionActivationFailureReason}`
+          : 'Your identity has been verified and your Trust Score has increased. Choose a subscription plan and add your payment card to activate your subscription.',
     });
+
+    if (subscriptionActivationFailureReason) {
+      const failedTier = isSubscriptionTierKey(user.subscription_tier) ? user.subscription_tier : 'basic';
+      await sendSubscriptionPaymentFailedEmail(user.email, formatTierPrice(failedTier, user.country));
+    }
 
     const tier = isSubscriptionTierKey(user.subscription_tier) ? user.subscription_tier : 'basic';
     await sendIdentityVerifiedEmail(user.email, user.first_name, subscriptionActivated);

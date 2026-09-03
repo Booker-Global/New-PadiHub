@@ -355,6 +355,14 @@ export default function AddPaymentMethodPage() {
       return;
     }
 
+    const billingLine1 = billingAddress.line1.trim();
+    const billingCity = billingAddress.city.trim();
+    const billingPostalCode = billingAddress.postalCode.trim();
+    if (!billingLine1 || !billingCity || !billingPostalCode) {
+      setActionError('Please enter your billing address before continuing — it confirms and finalises your payment card.');
+      return;
+    }
+
     const session = getValidSession();
     if (!session?.token) {
       setActionError('Please log in again before saving your payment method.');
@@ -376,6 +384,7 @@ export default function AddPaymentMethodPage() {
         body: JSON.stringify({
           terms_accepted: true,
           setup_mode: isUpdatingExistingPaymentMethod ? 'change' : 'add',
+          billing_address: { line1: billingLine1, city: billingCity, postal_code: billingPostalCode },
         }),
       });
       const json = await response.json().catch(() => null) as ApiResponse<FlutterwavePaymentLinkResponse> | null;
@@ -566,12 +575,47 @@ export default function AddPaymentMethodPage() {
 
                     {profile?.country === 'NG' ? (
                       <div className="space-y-4">
+                        <div>
+                          <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Billing address</p>
+                          <div className="space-y-3">
+                            <input
+                              type="text"
+                              value={billingAddress.line1}
+                              onChange={(event) => setBillingAddress((current) => ({ ...current, line1: event.target.value }))}
+                              placeholder="Address line"
+                              autoComplete="address-line1"
+                              className="w-full px-4 py-3 rounded-2xl border border-gray-200 text-sm focus:outline-none focus:border-green-400 transition-colors"
+                            />
+                            <div className="grid grid-cols-2 gap-3">
+                              <input
+                                type="text"
+                                value={billingAddress.city}
+                                onChange={(event) => setBillingAddress((current) => ({ ...current, city: event.target.value }))}
+                                placeholder="City"
+                                autoComplete="address-level2"
+                                className="w-full px-4 py-3 rounded-2xl border border-gray-200 text-sm focus:outline-none focus:border-green-400 transition-colors"
+                              />
+                              <input
+                                type="text"
+                                value={billingAddress.postalCode}
+                                onChange={(event) => setBillingAddress((current) => ({ ...current, postalCode: event.target.value }))}
+                                placeholder="Postcode"
+                                autoComplete="postal-code"
+                                className="w-full px-4 py-3 rounded-2xl border border-gray-200 text-sm focus:outline-none focus:border-green-400 transition-colors"
+                              />
+                            </div>
+                          </div>
+                          <p className="text-xs text-gray-400 mt-2">Your billing address confirms and finalises your payment card.</p>
+                        </div>
                         <div className="rounded-2xl p-3 bg-white text-sm text-gray-600" style={{ border: '1px solid #E5E7EB' }}>
                           A secure hosted checkout will open to verify and tokenise your card for future contribution charges.
                         </div>
                         <button
                           onClick={() => void handleFlutterwaveSetup()}
-                          disabled={setupLoading || !termsAccepted}
+                          disabled={
+                            setupLoading || !termsAccepted
+                            || !billingAddress.line1.trim() || !billingAddress.city.trim() || !billingAddress.postalCode.trim()
+                          }
                           className="w-full py-3 rounded-2xl font-bold text-white inline-flex items-center justify-center gap-2 transition-all disabled:cursor-not-allowed disabled:opacity-60"
                           style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}
                         >
