@@ -63,6 +63,7 @@ export const users = mysqlTable('users', {
   // Flutterwave Account Resolve bank-account-validation check — see
   // BankAccountValidationInterface.ts). Not implemented yet; always null.
   bvn_verification_reference:  varchar('bvn_verification_reference', { length: 255 }),
+  password_changed_at:         timestamp('password_changed_at'),
   last_login_at:               timestamp('last_login_at'),
   // Set the first time the member finishes every onboarding step (email +
   // identity + subscription plan + payment method + payout destination), so

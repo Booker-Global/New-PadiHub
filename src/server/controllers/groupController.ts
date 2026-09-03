@@ -4,7 +4,7 @@ import { groupService } from '../services/groupService.js';
 import { validate } from '../middleware/validate.js';
 import { qsOpt, pp, ip } from '../lib/reqHelpers.js';
 import { payoutDayBounds } from '../lib/payoutSchedule.js';
-import { GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH } from '../lib/constants.js';
+import { GROUP_MAX_MEMBERS, GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH } from '../lib/constants.js';
 
 const baseGroupSchema = z.object({
   name:                   z.string().min(2).max(200),
@@ -16,9 +16,9 @@ const baseGroupSchema = z.object({
   payout_day:             z.number().int().min(0).max(31).optional(),
   // A rotating savings group needs at least GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH
   // members to ever launch, so a smaller group size can never be valid.
-  maximum_members:        z.number().int().min(GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH).max(50),
+  maximum_members:        z.number().int().min(GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH).max(GROUP_MAX_MEMBERS),
   min_trust_score:        z.number().int().min(0).max(100).optional(),
-  rotation_method:        z.enum(['manual', 'random']),
+  rotation_method:        z.enum(['trust_score', 'random']).transform(value => value === 'trust_score' ? 'manual' : value),
   strike_threshold:       z.number().int().min(1).optional(),
   suspension_threshold:   z.number().int().min(1).optional(),
   voting_threshold:       z.number().int().min(51).max(100).optional(),

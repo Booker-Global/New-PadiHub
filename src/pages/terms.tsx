@@ -133,7 +133,7 @@ export default function TermsPage() {
               <div
                 className="mt-8 rounded-3xl p-6 text-center" style={{ background: 'linear-gradient(135deg, #0F172A, #1A1A2E)' }}>
                 <p className="text-white font-bold mb-2" style={{ fontFamily: 'Nunito, sans-serif' }}>Questions about these terms?</p>
-                <p className="text-gray-400 text-sm mb-4">Our team is happy to clarify anything. Reach us at hello@padihub.com</p>
+                <p className="text-gray-400 text-sm mb-4">Our team is happy to clarify anything. Reach us Mondays to Saturdays, 9am to 6pm at hello@padihub.com.</p>
                 <div className="r-flex-center">
                   <Link to="/contact" className="px-6 py-3 rounded-2xl text-sm font-bold text-white transition-all hover:opacity-90"
                     style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}>

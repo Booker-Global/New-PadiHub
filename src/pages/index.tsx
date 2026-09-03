@@ -507,7 +507,7 @@ export default function HomePage() {
           <div className="hiw-grid" style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1.5rem' }}>
             {[
               { step: '01', icon: Users,       title: 'Create or Join a Group', desc: 'Premium members can create groups, while all members can join within plan limits. New groups only start once at least 3 verified members are ready.', color: '#2EAF6F' },
-              { step: '02', icon: TrendingUp,  title: 'Contribute on Schedule', desc: 'Pay each cycle with the clearly itemised processing-fee surcharge shown before you confirm. If a charge fails, there is a fixed 72-hour grace period and one automatic retry.', color: '#F59E0B' },
+              { step: '02', icon: TrendingUp,  title: 'Contribute on Schedule', desc: 'Make each scheduled contribution on time. If a charge fails, there is a fixed 72-hour grace period and one automatic retry.', color: '#F59E0B' },
               { step: '03', icon: CheckCircle, title: 'Receive Your Payout',    desc: 'When it is your turn, the cycle pot is transferred to your payout account. First payouts to a new recipient may take around 7–14 days; later payouts typically complete within about 3 business days.', color: '#2eafaf' },
             ].map((s, i) => (
               <div key={i} style={{ borderRadius: 24, padding: '2rem', textAlign: 'center', background: '#F9FAFB', border: '1px solid #E5E7EB', boxSizing: 'border-box' }}>
@@ -715,7 +715,7 @@ export default function HomePage() {
             Basic lets you join up to 3 groups; Premium lets you create up to 3 groups and join up to 5 more (8 total). No annual plan or free trial.
           </p>
           <p style={{ textAlign: 'center', color: '#6B7280', fontSize: 13, maxWidth: '48rem', margin: '8px auto 0' }}>
-            Subscriptions only charge after verification succeeds, and contribution-processing fees are itemised on top of each contribution — never deducted from the pot.
+            Subscriptions are only charged after successful identity verification. Monthly contributions are subject to processing fees with final group payouts made in full.
           </p>
           <p style={{ textAlign: 'center', color: '#9CA3AF', fontSize: 13, marginTop: 24 }}>
             <Link to="/pricing" style={{ color: '#2EAF6F', fontWeight: 700, textDecoration: 'none' }}>See full pricing details →</Link>

@@ -2,9 +2,14 @@
  * The ordered onboarding path every member must finish before they can
  * create or join a savings group:
  *   a) sign up and confirm their email address,
- *   b) verify their identity,
- *   c) choose a subscription plan and accept the terms,
- *   d) add a payment card and payout details.
+ *   b) choose a subscription plan and accept the terms,
+ *   c) add a payment card,
+ *   d) add payout details,
+ *   e) verify their identity — done LAST, on purpose: only once verification
+ *      succeeds does the platform subscription actually get charged/created
+ *      (see identityVerificationService.completeIdentityVerification), so a
+ *      plan + card must already be on file before identity verification can
+ *      make the subscription genuinely active.
  *
  * `href` is always a member-facing dashboard page — never an API route — so
  * the same list can drive the blocked-action message, the dashboard's
@@ -38,17 +43,10 @@ export function buildOnboardingSteps(eligibility: OnboardingEligibility): Onboar
       complete: eligibility.emailVerified,
     },
     {
-      key: 'identity',
-      label: 'Verify your identity',
-      description: 'A quick ID and selfie check that keeps every PadiHub savings group trustworthy.',
-      href: '/verify-identity',
-      complete: eligibility.identityVerified,
-    },
-    {
       key: 'subscription',
       label: 'Choose your subscription plan',
       description: 'Pick Basic or Premium and accept the terms. Your subscription fee is only charged once you are part of a valid, active group with at least three members.',
-      href: '/onboarding',
+      href: '/subscription/manage',
       complete: eligibility.subscriptionTierSelected,
     },
     {
@@ -64,6 +62,13 @@ export function buildOnboardingSteps(eligibility: OnboardingEligibility): Onboar
       description: 'Where we send your money when it is your turn to be paid out.',
       href: '/payments/payout',
       complete: eligibility.payoutVerified,
+    },
+    {
+      key: 'identity',
+      label: 'Verify your identity',
+      description: 'A quick ID and selfie check that keeps every PadiHub savings group trustworthy. Completing this last is what makes your subscription go active.',
+      href: '/verify-identity',
+      complete: eligibility.identityVerified,
     },
   ];
 }

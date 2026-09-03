@@ -21,6 +21,9 @@ interface UserProfile {
   last_name: string;
   country: 'GB' | 'NG';
   currency: 'GBP' | 'NGN';
+  stripe_payment_method_id?: string | null;
+  flutterwave_card_token?: string | null;
+  payment_method_verified_at?: string | null;
   stripe_connected_account_id?: string | null;
   flutterwave_subaccount_id?: string | null;
   payout_verified_at?: string | null;
@@ -62,6 +65,7 @@ export default function ConnectPayoutPage() {
   const [connectLoading, setConnectLoading] = useState(false);
   const [verifyLoading, setVerifyLoading] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
+  const [changingPayoutDestination, setChangingPayoutDestination] = useState(false);
   const [businessName, setBusinessName] = useState('');
   const [bankCode, setBankCode] = useState('');
   const [accountNumber, setAccountNumber] = useState('');
@@ -106,6 +110,11 @@ export default function ConnectPayoutPage() {
     profile && (profile.country === 'NG' ? profile.flutterwave_subaccount_id : profile.stripe_connected_account_id),
   );
   const isPayoutVerified = Boolean(profile?.payout_verified_at);
+  const hasSavedPaymentMethod = Boolean(
+    profile && (profile.country === 'NG' ? profile.flutterwave_card_token : profile.stripe_payment_method_id)
+      && profile.payment_method_verified_at,
+  );
+  const showPayoutForm = !hasConnectedDestination || changingPayoutDestination;
 
   const handleVerify = useCallback(async () => {
     const session = getValidSession();
@@ -142,11 +151,19 @@ export default function ConnectPayoutPage() {
 
   useEffect(() => {
     if (searchParams.get('stripe_connected') === '1') {
-      setActionNotice('Your payout account is connected. Verifying now…');
+      setActionNotice(
+        searchParams.get('payout_mode') === 'change'
+          ? 'Your updated payout destination was received. Verifying now…'
+          : 'Your payout account is connected. Verifying now…',
+      );
       setActionError('');
       void handleVerify();
     } else if (searchParams.get('stripe_refresh') === '1') {
-      setActionError('Payout onboarding was not completed. Please try connecting again.');
+      setActionError(
+        searchParams.get('payout_mode') === 'change'
+          ? 'Your payout account change was not completed. Please try again.'
+          : 'Payout onboarding was not completed. Please try connecting again.',
+      );
     }
     // Only re-run when the URL search params change, not on every
     // handleVerify identity change (which updates once profile loads) — an
@@ -155,7 +172,7 @@ export default function ConnectPayoutPage() {
   }, [searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (profile?.country !== 'NG' || hasConnectedDestination) return;
+    if (profile?.country !== 'NG' || (!changingPayoutDestination && hasConnectedDestination)) return;
 
     const session = getValidSession();
     if (!session?.token) return;
@@ -184,7 +201,7 @@ export default function ConnectPayoutPage() {
     })();
 
     return () => { cancelled = true; };
-  }, [profile?.country, hasConnectedDestination]);
+  }, [profile?.country, hasConnectedDestination, changingPayoutDestination]);
 
   const handleConnect = async () => {
     if (!termsAccepted) {
@@ -210,6 +227,7 @@ export default function ConnectPayoutPage() {
     setConnectLoading(true);
     setActionError('');
     setActionNotice('');
+    const isUpdatingPayoutDestination = hasConnectedDestination && changingPayoutDestination;
 
     try {
       const response = await window.fetch('/api/payments/connect-onboard', {
@@ -235,7 +253,13 @@ export default function ConnectPayoutPage() {
         return;
       }
 
-      setActionNotice('Your payout account is connected. You can now receive payouts.');
+      setChangingPayoutDestination(false);
+      setTermsAccepted(false);
+      setActionNotice(
+        isUpdatingPayoutDestination
+          ? 'Payout destination updated. It is now in effect immediately for future payouts.'
+          : 'Your payout account is connected. You can now receive payouts.',
+      );
       await loadProfile();
     } catch (connectError) {
       setActionError(connectError instanceof Error ? connectError.message : 'Could not connect your payout destination.');
@@ -251,8 +275,8 @@ export default function ConnectPayoutPage() {
   return (
     <DashboardLayout>
       <Helmet>
-        <title>Connect Payout Destination — PadiHub</title>
-        <meta name="description" content="Connect a payout destination so you can receive money when it's your turn in the rotation." />
+        <title>Manage Payout Destination — PadiHub</title>
+        <meta name="description" content="Add or change the payout destination used when it's your turn in the rotation." />
         <link rel="canonical" href="https://padihub.com/payments/payout" />
       </Helmet>
 
@@ -282,10 +306,46 @@ export default function ConnectPayoutPage() {
           ) : (
             <>
               <div className="mb-5">
-                <h1 className="text-2xl font-extrabold text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>Connect payout destination</h1>
+                <h1 className="text-2xl font-extrabold text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>Manage payout destination</h1>
                 <p className="text-sm text-gray-500 mt-1">
                   Every member of a rotating savings group eventually receives a payout. Connect where that money should go.
                 </p>
+              </div>
+
+              <div className="rounded-3xl p-5 mb-5 bg-white" style={{ border: '1px solid #E5E7EB' }}>
+                <h2 className="font-bold text-gray-900 mb-3">Payment setup overview</h2>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Link to="/payments/methods" className="rounded-2xl p-4 transition-all hover:opacity-90" style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
+                    <p className="text-xs text-gray-500 mb-1">Contribution charges</p>
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm font-bold text-gray-900">Payment method</p>
+                      <span
+                        className="text-xs font-bold px-3 py-1 rounded-full"
+                        style={{
+                          color: hasSavedPaymentMethod ? '#2EAF6F' : '#F59E0B',
+                          background: hasSavedPaymentMethod ? 'rgba(46,175,111,0.12)' : 'rgba(245,158,11,0.12)',
+                        }}
+                      >
+                        {hasSavedPaymentMethod ? 'Verified' : 'Needed'}
+                      </span>
+                    </div>
+                  </Link>
+                  <div className="rounded-2xl p-4" style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
+                    <p className="text-xs text-gray-500 mb-1">Where you receive money</p>
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm font-bold text-gray-900">Payout destination</p>
+                      <span
+                        className="text-xs font-bold px-3 py-1 rounded-full text-center"
+                        style={{
+                          color: isPayoutVerified ? '#2EAF6F' : '#F59E0B',
+                          background: isPayoutVerified ? 'rgba(46,175,111,0.12)' : 'rgba(245,158,11,0.12)',
+                        }}
+                      >
+                        {isPayoutVerified ? 'Verified' : hasConnectedDestination ? 'Connected' : 'Needed'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               {(actionError || actionNotice) && (
@@ -318,14 +378,32 @@ export default function ConnectPayoutPage() {
                   </span>
                 </div>
 
-                {isPayoutVerified ? (
-                  <div className="rounded-2xl p-4 flex items-start gap-3" style={{ background: 'rgba(46,175,111,0.08)', border: '1px solid rgba(46,175,111,0.18)' }}>
-                    <Shield size={18} style={{ color: '#2EAF6F', flexShrink: 0 }} />
-                    <p className="text-sm text-gray-700">
-                      Your payout destination is verified. When it&apos;s your turn in the rotation, your payout will be sent here. Your very first payout may take up to 7–14 days while our payment processor completes a standard review for new payout destinations; payouts after that typically arrive within about 3 business days.
-                    </p>
+                {isPayoutVerified && !changingPayoutDestination && (
+                  <div className="rounded-2xl p-4 mb-4" style={{ background: 'rgba(46,175,111,0.08)', border: '1px solid rgba(46,175,111,0.18)' }}>
+                    <div className="flex items-start gap-3">
+                      <Shield size={18} style={{ color: '#2EAF6F', flexShrink: 0 }} />
+                      <p className="text-sm text-gray-700">
+                        Your payout destination is verified. When it&apos;s your turn in the rotation, your payout will be sent here. Your very first payout may take up to 7–14 days while our payment processor completes a standard review for new payout destinations; payouts after that typically arrive within about 3 business days.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setChangingPayoutDestination(true);
+                        setTermsAccepted(false);
+                        setActionError('');
+                        setActionNotice('');
+                      }}
+                      className="mt-4 inline-flex items-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-bold text-white"
+                      style={{ background: 'linear-gradient(135deg, #2eafaf, #1f8f8f)' }}
+                      type="button"
+                    >
+                      <Banknote size={16} />
+                      Change payout account
+                    </button>
                   </div>
-                ) : hasConnectedDestination ? (
+                )}
+
+                {!isPayoutVerified && hasConnectedDestination && !changingPayoutDestination ? (
                   <div className="space-y-3">
                     <div className="rounded-2xl p-4 flex items-start gap-3" style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)' }}>
                       <AlertTriangle size={18} style={{ color: '#F59E0B', flexShrink: 0 }} />
@@ -335,17 +413,51 @@ export default function ConnectPayoutPage() {
                         {' '}You need a verified payout destination before you can join a group.
                       </p>
                     </div>
-                    <button
-                      onClick={() => void handleVerify()}
-                      disabled={verifyLoading}
-                      className="w-full py-3 rounded-2xl font-bold text-white inline-flex items-center justify-center gap-2 transition-all disabled:cursor-not-allowed disabled:opacity-60"
-                      style={{ background: 'linear-gradient(135deg, #2eafaf, #1f8f8f)' }}
-                    >
-                      {verifyLoading ? 'Verifying…' : 'Verify now'}
-                    </button>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <button
+                        onClick={() => void handleVerify()}
+                        disabled={verifyLoading}
+                        className="w-full py-3 rounded-2xl font-bold text-white inline-flex items-center justify-center gap-2 transition-all disabled:cursor-not-allowed disabled:opacity-60"
+                        style={{ background: 'linear-gradient(135deg, #2eafaf, #1f8f8f)' }}
+                        type="button"
+                      >
+                        {verifyLoading ? 'Verifying…' : 'Verify now'}
+                      </button>
+                      <button
+                        onClick={() => {
+                          setChangingPayoutDestination(true);
+                          setTermsAccepted(false);
+                          setActionError('');
+                          setActionNotice('');
+                        }}
+                        className="w-full py-3 rounded-2xl font-bold text-gray-700 transition-all"
+                        style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}
+                        type="button"
+                      >
+                        Change payout account
+                      </button>
+                    </div>
                   </div>
-                ) : (
+                ) : null}
+
+                {showPayoutForm && (
                   <div className="space-y-4">
+                    {changingPayoutDestination && (
+                      <div className="flex items-center justify-between gap-3 rounded-2xl p-3" style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
+                        <p className="text-sm text-gray-600">Enter your new payout details to replace the destination currently on file.</p>
+                        <button
+                          onClick={() => {
+                            setChangingPayoutDestination(false);
+                            setTermsAccepted(false);
+                            setActionError('');
+                          }}
+                          className="text-sm font-semibold text-gray-500 hover:text-gray-800"
+                          type="button"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    )}
                     <label className="flex items-start gap-3 rounded-2xl p-4 cursor-pointer" style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
                       <Checkbox checked={termsAccepted} onCheckedChange={value => setTermsAccepted(value === true)} className="mt-0.5" />
                       <span className="text-sm text-gray-700">
@@ -471,9 +583,24 @@ export default function ConnectPayoutPage() {
               >
                 <div>
                   <p className="font-bold text-gray-900 text-sm">Add payment method</p>
-                  <p className="text-xs text-gray-500 mt-0.5">Save a card to authorize your recurring group contributions.</p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    {hasSavedPaymentMethod
+                      ? 'Verified and ready for recurring contribution charges.'
+                      : 'Save a card to authorize your recurring group contributions.'}
+                  </p>
                 </div>
-                <ChevronLeft size={16} className="rotate-180 text-gray-400" />
+                <div className="flex items-center gap-3">
+                  <span
+                    className="text-xs font-bold px-3 py-1 rounded-full"
+                    style={{
+                      color: hasSavedPaymentMethod ? '#2EAF6F' : '#F59E0B',
+                      background: hasSavedPaymentMethod ? 'rgba(46,175,111,0.12)' : 'rgba(245,158,11,0.12)',
+                    }}
+                  >
+                    {hasSavedPaymentMethod ? 'Verified' : 'Needed'}
+                  </span>
+                  <ChevronLeft size={16} className="rotate-180 text-gray-400" />
+                </div>
               </Link>
             </>
           )}

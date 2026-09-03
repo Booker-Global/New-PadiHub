@@ -397,7 +397,7 @@ export const TERMS_SECTIONS: TermsSection[] = [
       },
       {
         subtitle: 'General Support',
-        text: 'For general support and account questions, visit our Help Centre at padihub.com/help or contact hello@padihub.com.',
+        text: 'For general support and account questions, visit our Help Centre at padihub.com/help or contact hello@padihub.com. Support is available Mondays to Saturdays, 9am to 6pm.',
       },
     ],
   },

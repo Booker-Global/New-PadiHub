@@ -25,6 +25,9 @@ interface UserProfile {
   stripe_payment_method_id?: string | null;
   flutterwave_card_token?: string | null;
   payment_method_verified_at?: string | null;
+  stripe_connected_account_id?: string | null;
+  flutterwave_subaccount_id?: string | null;
+  payout_verified_at?: string | null;
 }
 
 interface ApiResponse<T> {
@@ -64,6 +67,7 @@ export default function AddPaymentMethodPage() {
   const [actionNotice, setActionNotice] = useState('');
   const [setupLoading, setSetupLoading] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
+  const [changingPaymentMethod, setChangingPaymentMethod] = useState(false);
   const cardMountRef = useRef<HTMLDivElement | null>(null);
   const stripeRef = useRef<Stripe | null>(null);
   const cardElementRef = useRef<StripeCardElement | null>(null);
@@ -102,7 +106,11 @@ export default function AddPaymentMethodPage() {
 
   useEffect(() => {
     if (searchParams.get('setup_saved') === '1') {
-      setActionNotice('Payment method saved. Your recurring contributions can now be charged automatically.');
+      setActionNotice(
+        searchParams.get('updated') === '1'
+          ? 'Payment method updated. It is now in effect immediately for future contribution charges.'
+          : 'Payment method saved. Your recurring contributions can now be charged automatically.',
+      );
       setActionError('');
     }
   }, [searchParams]);
@@ -111,8 +119,13 @@ export default function AddPaymentMethodPage() {
     profile && (profile.country === 'NG' ? profile.flutterwave_card_token : profile.stripe_payment_method_id)
       && profile.payment_method_verified_at,
   );
+  const hasConnectedPayout = Boolean(
+    profile && (profile.country === 'NG' ? profile.flutterwave_subaccount_id : profile.stripe_connected_account_id),
+  );
+  const isPayoutVerified = Boolean(profile?.payout_verified_at);
+  const showPaymentMethodForm = !hasSavedPaymentMethod || changingPaymentMethod;
 
-  const needsStripeCard = Boolean(profile && profile.country !== 'NG' && !hasSavedPaymentMethod);
+  const needsStripeCard = Boolean(profile && profile.country !== 'NG' && showPaymentMethodForm);
 
   useEffect(() => {
     if (!needsStripeCard || !cardMountRef.current) return;
@@ -213,7 +226,10 @@ export default function AddPaymentMethodPage() {
 
         if (cancelled) return;
         await loadProfile();
-        navigate('/payments/methods?setup_saved=1', { replace: true });
+        navigate(
+          `/payments/methods?setup_saved=1${searchParams.get('setup_mode') === 'change' ? '&updated=1' : ''}`,
+          { replace: true },
+        );
       } catch (saveError) {
         if (cancelled) return;
         setActionNotice('');
@@ -250,6 +266,7 @@ export default function AddPaymentMethodPage() {
     setSetupLoading(true);
     setActionError('');
     setActionNotice('');
+    const isUpdatingExistingPaymentMethod = hasSavedPaymentMethod && changingPaymentMethod;
 
     try {
       const setupResponse = await window.fetch('/api/payments/setup-intent', {
@@ -301,7 +318,13 @@ export default function AddPaymentMethodPage() {
         throw new Error(getErrorMessage(saveJson, 'Could not save your payment method.'));
       }
 
-      setActionNotice('Payment method saved. Your recurring contributions can now be charged automatically.');
+      setChangingPaymentMethod(false);
+      setTermsAccepted(false);
+      setActionNotice(
+        isUpdatingExistingPaymentMethod
+          ? 'Payment method updated. It is now in effect immediately for future contribution charges.'
+          : 'Payment method saved. Your recurring contributions can now be charged automatically.',
+      );
       await loadProfile();
     } catch (setupError) {
       setActionError(setupError instanceof Error ? setupError.message : 'Could not save your payment method.');
@@ -325,6 +348,7 @@ export default function AddPaymentMethodPage() {
     setSetupLoading(true);
     setActionError('');
     setActionNotice('');
+    const isUpdatingExistingPaymentMethod = hasSavedPaymentMethod && changingPaymentMethod;
 
     try {
       const response = await window.fetch('/api/payments/create-flutterwave-payment-link', {
@@ -333,7 +357,10 @@ export default function AddPaymentMethodPage() {
           'Content-Type': 'application/json',
           Authorization: 'Bearer ' + session.token,
         },
-        body: JSON.stringify({ terms_accepted: true }),
+        body: JSON.stringify({
+          terms_accepted: true,
+          setup_mode: isUpdatingExistingPaymentMethod ? 'change' : 'add',
+        }),
       });
       const json = await response.json().catch(() => null) as ApiResponse<FlutterwavePaymentLinkResponse> | null;
       if (!response.ok) {
@@ -359,8 +386,8 @@ export default function AddPaymentMethodPage() {
   return (
     <DashboardLayout>
       <Helmet>
-        <title>Add Payment Method — PadiHub</title>
-        <meta name="description" content="Add a payment method to authorize your recurring group contributions on PadiHub." />
+        <title>Manage Payment Method — PadiHub</title>
+        <meta name="description" content="Add or change the payment method used for your recurring group contributions on PadiHub." />
         <link rel="canonical" href="https://padihub.com/payments/methods" />
       </Helmet>
 
@@ -390,10 +417,46 @@ export default function AddPaymentMethodPage() {
           ) : (
             <>
               <div className="mb-5">
-                <h1 className="text-2xl font-extrabold text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>Add payment method</h1>
+                <h1 className="text-2xl font-extrabold text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>Manage payment method</h1>
                 <p className="text-sm text-gray-500 mt-1">
                   Save a card so PadiHub can automatically charge your recurring group contributions when they&apos;re due.
                 </p>
+              </div>
+
+              <div className="rounded-3xl p-5 mb-5 bg-white" style={{ border: '1px solid #E5E7EB' }}>
+                <h2 className="font-bold text-gray-900 mb-3">Payment setup overview</h2>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-2xl p-4" style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
+                    <p className="text-xs text-gray-500 mb-1">Contribution card</p>
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm font-bold text-gray-900">Payment method</p>
+                      <span
+                        className="text-xs font-bold px-3 py-1 rounded-full"
+                        style={{
+                          color: hasSavedPaymentMethod ? '#2EAF6F' : '#F59E0B',
+                          background: hasSavedPaymentMethod ? 'rgba(46,175,111,0.12)' : 'rgba(245,158,11,0.12)',
+                        }}
+                      >
+                        {hasSavedPaymentMethod ? 'Verified' : 'Needed'}
+                      </span>
+                    </div>
+                  </div>
+                  <Link to="/payments/payout" className="rounded-2xl p-4 transition-all hover:opacity-90" style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
+                    <p className="text-xs text-gray-500 mb-1">Where you receive money</p>
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm font-bold text-gray-900">Payout destination</p>
+                      <span
+                        className="text-xs font-bold px-3 py-1 rounded-full text-center"
+                        style={{
+                          color: isPayoutVerified ? '#2EAF6F' : '#F59E0B',
+                          background: isPayoutVerified ? 'rgba(46,175,111,0.12)' : 'rgba(245,158,11,0.12)',
+                        }}
+                      >
+                        {isPayoutVerified ? 'Verified' : hasConnectedPayout ? 'Connected' : 'Needed'}
+                      </span>
+                    </div>
+                  </Link>
+                </div>
               </div>
 
               {(actionError || actionNotice) && (
@@ -426,15 +489,49 @@ export default function AddPaymentMethodPage() {
                   </span>
                 </div>
 
-                {hasSavedPaymentMethod ? (
-                  <div className="rounded-2xl p-4 flex items-start gap-3" style={{ background: 'rgba(46,175,111,0.08)', border: '1px solid rgba(46,175,111,0.18)' }}>
-                    <Shield size={18} style={{ color: '#2EAF6F', flexShrink: 0 }} />
-                    <p className="text-sm text-gray-700">
-                      You have a verified payment method on file. It will be used automatically for your group contributions.
-                    </p>
+                {hasSavedPaymentMethod && !changingPaymentMethod && (
+                  <div className="rounded-2xl p-4 mb-4" style={{ background: 'rgba(46,175,111,0.08)', border: '1px solid rgba(46,175,111,0.18)' }}>
+                    <div className="flex items-start gap-3">
+                      <Shield size={18} style={{ color: '#2EAF6F', flexShrink: 0 }} />
+                      <p className="text-sm text-gray-700">
+                        You have a verified payment method on file. It will be used automatically for your group contributions.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setChangingPaymentMethod(true);
+                        setTermsAccepted(false);
+                        setActionError('');
+                        setActionNotice('');
+                      }}
+                      className="mt-4 inline-flex items-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-bold text-white"
+                      style={{ background: 'linear-gradient(135deg, #2eafaf, #1f8f8f)' }}
+                      type="button"
+                    >
+                      <CreditCard size={16} />
+                      Change card
+                    </button>
                   </div>
-                ) : (
+                )}
+
+                {showPaymentMethodForm && (
                   <div className="space-y-4">
+                    {changingPaymentMethod && (
+                      <div className="flex items-center justify-between gap-3 rounded-2xl p-3" style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
+                        <p className="text-sm text-gray-600">Enter your new card details to replace the verified card currently on file.</p>
+                        <button
+                          onClick={() => {
+                            setChangingPaymentMethod(false);
+                            setTermsAccepted(false);
+                            setActionError('');
+                          }}
+                          className="text-sm font-semibold text-gray-500 hover:text-gray-800"
+                          type="button"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    )}
                     <label className="flex items-start gap-3 rounded-2xl p-4 cursor-pointer" style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
                       <Checkbox checked={termsAccepted} onCheckedChange={value => setTermsAccepted(value === true)} className="mt-0.5" />
                       <span className="text-sm text-gray-700">
@@ -493,9 +590,26 @@ export default function AddPaymentMethodPage() {
               >
                 <div>
                   <p className="font-bold text-gray-900 text-sm">Connect payout destination</p>
-                  <p className="text-xs text-gray-500 mt-0.5">Set up where you&apos;ll receive money when it&apos;s your turn in the rotation.</p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    {isPayoutVerified
+                      ? 'Verified and ready for your future payouts.'
+                      : hasConnectedPayout
+                        ? 'Connected already — open to finish or review verification.'
+                        : 'Set up where you&apos;ll receive money when it&apos;s your turn in the rotation.'}
+                  </p>
                 </div>
-                <ChevronLeft size={16} className="rotate-180 text-gray-400" />
+                <div className="flex items-center gap-3">
+                  <span
+                    className="text-xs font-bold px-3 py-1 rounded-full"
+                    style={{
+                      color: isPayoutVerified ? '#2EAF6F' : '#F59E0B',
+                      background: isPayoutVerified ? 'rgba(46,175,111,0.12)' : 'rgba(245,158,11,0.12)',
+                    }}
+                  >
+                    {isPayoutVerified ? 'Verified' : hasConnectedPayout ? 'Connected' : 'Needed'}
+                  </span>
+                  <ChevronLeft size={16} className="rotate-180 text-gray-400" />
+                </div>
               </Link>
             </>
           )}

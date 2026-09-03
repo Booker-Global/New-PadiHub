@@ -155,7 +155,7 @@ export default function MembershipPage() {
           </div>
 
           <p style={{ textAlign: 'center', color: '#6B7280', fontSize: 14 }}>
-            Subscriptions only charge after verification succeeds. <Link to="/pricing" style={{ color: '#2EAF6F', fontWeight: 700, textDecoration: 'underline' }}>See region-aware pricing</Link>.
+            Subscriptions are only charged after successful identity verification. Monthly contributions are subject to processing fees with final group payouts made in full. <Link to="/pricing" style={{ color: '#2EAF6F', fontWeight: 700, textDecoration: 'underline' }}>See region-aware pricing</Link>.
           </p>
         </div>
       </section>

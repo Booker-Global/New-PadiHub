@@ -43,8 +43,8 @@ const articles: Record<string, {
       { heading: 'Before you start', body: 'To create a savings group, you need an active PadiHub membership and a Trust Score™ of at least 400 (Trusted tier). This ensures that group leaders have demonstrated reliability to their communities.' },
       { heading: 'Step 1: Choose your group type', body: 'PadiHub supports fixed-schedule groups (contributions on set dates), rotating groups (members take turns receiving the pool), and milestone groups (contributions towards a shared goal). Choose the type that best fits your community\'s needs.' },
       { heading: 'Step 2: Set your schedule and target', body: 'Define your contribution frequency (weekly, fortnightly, monthly), contribution amount, group target and duration. Be realistic — groups with achievable targets have higher completion rates and better Trust Score™ outcomes for all members.' },
-      { heading: 'Step 3: Invite members', body: 'Invite members from your existing communities or share a join link. We recommend starting with 5–20 members. Larger groups can be created but require additional governance setup.', type: 'tip' },
-      { heading: 'Step 4: Set group rules', body: 'Define your group\'s contribution rules, late payment policy and what happens if a member misses contributions. Clear rules protect all members and maintain community trust.' },
+      { heading: 'Step 3: Invite members', body: 'Invite members from your existing communities or share a join link. We recommend starting with 5–10 members, because each savings group can have a maximum of 10 members.', type: 'tip' },
+      { heading: 'Step 4: Set group rules', body: 'Define your group\'s contribution rules and what happens if a member misses contributions. PadiHub uses a fixed 72-hour late-payment grace period across every group to keep expectations consistent.' },
     ],
     related: [
       { title: 'What happens if I miss a contribution?', slug: 'missed-contribution' },
@@ -72,7 +72,7 @@ const articles: Record<string, {
     sections: [
       { heading: 'Immediate impact', body: 'Missing a contribution affects your Trust Score™ and your standing within the savings group. The impact depends on your history — a first missed contribution has a smaller impact than a pattern of missed contributions.' },
       { heading: 'Trust Score™ impact', body: 'A missed contribution typically reduces your Trust Score™ by 15–40 points depending on your current tier and history. Paying late (within 7 days) reduces the impact to 5–15 points.', type: 'warning' },
-      { heading: 'What to do if you\'ll miss a payment', body: 'Contact your group leader as soon as possible. Many groups have grace periods and hardship provisions. Communicating proactively is always better than going silent — it protects your Trust Score™ and community relationships.', type: 'tip' },
+      { heading: 'What to do if you\'ll miss a payment', body: 'Contact your group leader as soon as possible. Every group uses the same fixed 72-hour grace period before one automatic retry. Communicating proactively is always better than going silent — it protects your Trust Score™ and community relationships.', type: 'tip' },
       { heading: 'Recovering your Trust Score™', body: 'Trust Score™ recovers over time through consistent on-time contributions, governance participation and community engagement. A single missed contribution is not permanent — consistent positive behaviour rebuilds your score.' },
     ],
     related: [

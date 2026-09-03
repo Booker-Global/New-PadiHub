@@ -202,9 +202,9 @@ export async function assertPaymentSetupComplete(userId: string): Promise<void> 
   const remainder = outstanding.slice(1);
 
   throw new AppError(
-    `Before joining or creating a group you still need to ${lowerFirst(nextStep.label)} — do it at ${nextStep.href}.`
+    `Before joining or creating a group you still need to ${lowerFirst(nextStep.label)}.`
       + (remainder.length
-        ? ` After that: ${remainder.map(step => `${lowerFirst(step.label)} (${step.href})`).join('; ')}.`
+        ? ` After that: ${remainder.map(step => lowerFirst(step.label)).join('; ')}.`
         : ''),
     403,
     'PAYMENT_SETUP_REQUIRED',

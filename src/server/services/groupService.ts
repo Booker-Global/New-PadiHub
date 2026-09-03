@@ -10,7 +10,7 @@ import {
   INVITE_TTL, GROUP_DEFAULT_STRIKE_THRESHOLD, GROUP_DEFAULT_SUSPENSION_THRESHOLD,
   GROUP_DEFAULT_VOTING_THRESHOLD, GROUP_DEFAULT_MIN_TRUST_SCORE,
   SUBSCRIPTION_TIERS, isSubscriptionTierKey,
-  GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH, isDailyFrequencyAllowed,
+  GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH, GROUP_MAX_MEMBERS, clampGroupMaximumMembers, isDailyFrequencyAllowed,
 } from '../lib/constants.js';
 import {
   sendGroupInvitationEmail,
@@ -24,11 +24,20 @@ function assignProvider(country: string) {
   return country === 'NG' ? 'flutterwave' : 'stripe';
 }
 
+function normalizeRotationMethod(rotationMethod: 'manual' | 'random') {
+  return rotationMethod === 'manual' ? 'trust_score' : rotationMethod;
+}
+
 export const groupService = {
   async list(filters?: { status?: string; country?: string }) {
     
-    return db.select().from(schema.savingsGroups)
+    const rows = await db.select().from(schema.savingsGroups)
       .where(filters?.status ? eq(schema.savingsGroups.status, filters.status as 'draft' | 'active' | 'closed' | 'suspended' | 'expired') : undefined);
+    return rows.map(row => ({
+      ...row,
+      maximum_members: clampGroupMaximumMembers(row.maximum_members),
+      rotation_method: normalizeRotationMethod(row.rotation_method),
+    }));
   },
 
   async getById(groupId: string) {
@@ -36,7 +45,11 @@ export const groupService = {
     const rows = await db.select().from(schema.savingsGroups)
       .where(eq(schema.savingsGroups.id, groupId)).limit(1);
     if (!rows.length) throw new AppError('Group not found.', 404);
-    return rows[0];
+    return {
+      ...rows[0],
+      maximum_members: clampGroupMaximumMembers(rows[0].maximum_members),
+      rotation_method: normalizeRotationMethod(rows[0].rotation_method),
+    };
   },
 
   /** How many active groups a user currently leads. */
@@ -175,8 +188,9 @@ export const groupService = {
       .filter(g => !normalizedQuery || g.name.toLowerCase().includes(normalizedQuery))
       .map(g => ({
         ...g,
+        maximum_members: clampGroupMaximumMembers(g.maximum_members),
         member_count:    memberCountByGroup[g.id] ?? 0,
-        spots_remaining: Math.max(0, g.maximum_members - (memberCountByGroup[g.id] ?? 0)),
+        spots_remaining: Math.max(0, clampGroupMaximumMembers(g.maximum_members) - (memberCountByGroup[g.id] ?? 0)),
       }))
       .filter(g => g.spots_remaining > 0);
   },
@@ -198,6 +212,13 @@ export const groupService = {
         'Daily contribution frequency is only available in development/testing. Choose Weekly or Monthly.',
         400,
         'FREQUENCY_NOT_ALLOWED_IN_PRODUCTION',
+      );
+    }
+    if (data.maximum_members > GROUP_MAX_MEMBERS) {
+      throw new AppError(
+        `Savings groups can have a maximum of ${GROUP_MAX_MEMBERS} members.`,
+        400,
+        'GROUP_MEMBER_LIMIT_EXCEEDED',
       );
     }
 
@@ -261,7 +282,7 @@ export const groupService = {
       contribution_amount:      data.contribution_amount,
       contribution_frequency:   data.contribution_frequency,
       payout_day:               data.payout_day ?? null,
-      maximum_members:          data.maximum_members,
+      maximum_members:          clampGroupMaximumMembers(data.maximum_members),
       min_trust_score:          data.min_trust_score ?? GROUP_DEFAULT_MIN_TRUST_SCORE,
       rotation_method:          data.rotation_method,
       current_rotation_position: 1,
@@ -412,6 +433,14 @@ export const groupService = {
     // email addresses on behalf of someone else's group.
     if (group.leader_id !== invitedBy) {
       throw new AppError('Only the group leader can invite members to this group.', 403, 'NOT_GROUP_LEADER');
+    }
+    const activeCount = await this.countActiveMembers(groupId);
+    if (activeCount >= group.maximum_members) {
+      throw new AppError(
+        `This group is already at its maximum of ${group.maximum_members} members.`,
+        400,
+        'GROUP_FULL',
+      );
     }
 
     const token = uuidv4();

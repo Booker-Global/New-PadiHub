@@ -23,8 +23,8 @@ const planDetailsByRegion: Record<'UK' | 'NG', string[]> = {
 const verificationDetailsByRegion: Record<'UK' | 'NG', string[]> = {
   UK: [
     'Monthly only — no annual plan or free trial',
-    'Save your card first, then complete Stripe Identity in an embedded PadiHub modal — never a separate Stripe-hosted redirect',
-    'Your status stays Pending until verification succeeds; failed checks are not charged and trigger a try-again email',
+    'Complete identity verification via our secure 3rd party channel',
+    'Once your identity is verified, you will be notified by email and can start accessing the full benefits of your subscription tier straightaway',
     'See our Terms & Conditions for full identity verification details',
   ],
   NG: [
@@ -37,14 +37,10 @@ const verificationDetailsByRegion: Record<'UK' | 'NG', string[]> = {
 
 const contributionDetailsByRegion: Record<'UK' | 'NG', string[]> = {
   UK: [
-    'A visible surcharge is shown before you confirm and added on top of the contribution — never deducted from the group pot',
-    'The surcharge covers your card fee plus your split share of that cycle’s payout fee',
     'See our FAQ for the exact fee percentages',
     'If a charge fails, you get a fixed 72-hour grace period and one automatic retry before default',
   ],
   NG: [
-    'A visible surcharge is shown before you confirm and added on top of the contribution — never deducted from the group pot',
-    'The surcharge covers your transaction fee plus your split share of that cycle’s payout fee, with VAT shown separately',
     'See our FAQ for the exact fee percentages',
     'If a charge fails, you get a fixed 72-hour grace period and one automatic retry before default',
   ],
@@ -104,7 +100,7 @@ export default function HowItWorksPage() {
       return {
         ...step,
         title: 'Contribute on Schedule',
-        desc: 'When each cycle comes due, pay your contribution amount with the clearly itemised processing-fee surcharge shown before confirmation.',
+        desc: 'When each cycle comes due, make your contribution on schedule so your group stays on track.',
         details: contributionDetailsByRegion[region],
       };
     }
@@ -114,7 +110,6 @@ export default function HowItWorksPage() {
         ...step,
         desc: 'When it is your turn, PadiHub transfers that cycle’s pot to your registered payout account after contributions have been collected.',
         details: [
-          'Contribution charges hit the platform balance first, then the cycle’s pot is transferred separately to the recipient',
           'Your first payout may take around 7–14 days while the payment processor reviews a new payout destination',
           'Later payouts typically complete within about 3 business days',
         ],

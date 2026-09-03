@@ -102,11 +102,6 @@ export const identityVerificationService = {
       .where(eq(schema.users.id, userId));
 
     await trustScoreService.increase(userId, TRUST_SCORE_DELTA_IDENTITY_VERIFIED, 'IDENTITY_VERIFIED');
-    await notificationService.create({
-      userId, type: 'identity_verified',
-      title: 'Identity Verified',
-      message: 'Your identity has been verified. Your Trust Score has increased and your subscription is now active.',
-    });
     await createAuditLog({ userId, action: 'IDENTITY_VERIFIED', entity: 'users', entityId: userId });
 
     // Charge the £1 surcharge (if any) on the *first* invoice before creating
@@ -133,8 +128,21 @@ export const identityVerificationService = {
       );
     }
 
+    // Only claim the subscription is now active if activateSubscription
+    // actually succeeded — a member who verifies identity before choosing a
+    // plan/card must be told the truth: verification succeeded, but their
+    // subscription is still outstanding until they finish those steps.
+    const subscriptionActivated = Boolean(subscriptionResult);
+    await notificationService.create({
+      userId, type: 'identity_verified',
+      title: 'Identity Verified',
+      message: subscriptionActivated
+        ? 'Your identity has been verified. Your Trust Score has increased and your subscription is now active.'
+        : 'Your identity has been verified and your Trust Score has increased. Choose a subscription plan and add your payment card to activate your subscription.',
+    });
+
     const tier = isSubscriptionTierKey(user.subscription_tier) ? user.subscription_tier : 'basic';
-    await sendIdentityVerifiedEmail(user.email, user.first_name);
+    await sendIdentityVerifiedEmail(user.email, user.first_name, subscriptionActivated);
     if (country === 'GB' && feePence > 0) {
       await sendVerificationFeeChargedEmail(
         user.email, user.first_name,

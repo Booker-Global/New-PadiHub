@@ -4,6 +4,7 @@ import { Helmet } from '@dr.pogodin/react-helmet';
 import { CheckCircle, XCircle, Loader2, Mail } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import AuthLayout from '@/components/AuthLayout';
+import { storeSession } from '@/lib/session';
 
 export default function VerifyEmailPage() {
   const location = useLocation();
@@ -49,10 +50,7 @@ export default function VerifyEmailPage() {
             role: user.role,
             emailVerified: true,
           };
-          try {
-            localStorage.setItem('padihub_user', JSON.stringify(sessionData));
-            sessionStorage.setItem('padihub_session', JSON.stringify(sessionData));
-          } catch { /* storage unavailable — continue anyway */ }
+          storeSession(sessionData);
           setStatus('success');
           // Small tick to let React flush the state update before navigating,
           // ensuring any auth-reading components re-render with the new session.

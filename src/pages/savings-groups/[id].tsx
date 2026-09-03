@@ -51,7 +51,7 @@ interface SavingsGroup {
   contribution_amount: string | number;
   contribution_frequency: 'daily' | 'weekly' | 'monthly';
   maximum_members: number;
-  rotation_method: 'manual' | 'random';
+  rotation_method: 'manual' | 'random' | 'trust_score';
   current_rotation_position: number;
   current_cycle: number;
   strike_threshold: number;
@@ -151,6 +151,12 @@ function formatDate(date: string) {
 
 function titleCase(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function describeRotationMethod(rotationMethod: SavingsGroup['rotation_method']) {
+  return rotationMethod === 'manual' || rotationMethod === 'trust_score'
+    ? 'Trust Score'
+    : titleCase(rotationMethod);
 }
 
 function shortId(value: string) {
@@ -819,7 +825,7 @@ export default function SavingsGroupDetailPage() {
                   <div className="h-2 rounded-full transition-all duration-500" style={{ width: `${occupancyPercentage}%`, background: `linear-gradient(90deg, ${groupColor}, #F59E0B)` }} />
                 </div>
                 <div className="flex items-center justify-between mt-3 text-xs" style={{ color: 'rgba(255,255,255,0.45)' }}>
-                  <span>Rotation method: {titleCase(group.rotation_method)}</span>
+                  <span>Rotation method: {describeRotationMethod(group.rotation_method)}</span>
                   <span>Position {group.current_rotation_position}</span>
                 </div>
               </div>
@@ -1257,7 +1263,7 @@ export default function SavingsGroupDetailPage() {
                       { icon: Clock, color: '#F59E0B', label: 'Suspension threshold', value: `${group.suspension_threshold} missed payment${group.suspension_threshold === 1 ? '' : 's'} before suspension` },
                       { icon: Users, color: '#8B5CF6', label: 'Voting threshold', value: `${group.voting_threshold}% approval required` },
                       { icon: TrendingUp, color: '#2EAF6F', label: 'Payout swaps', value: group.allow_payout_swaps ? 'Allowed' : 'Not allowed' },
-                      { icon: Shield, color: '#2eafaf', label: 'Rotation method', value: titleCase(group.rotation_method) },
+                      { icon: Shield, color: '#2eafaf', label: 'Rotation method', value: describeRotationMethod(group.rotation_method) },
                     ].map(rule => (
                       <div key={rule.label} className="flex items-start gap-4 p-4 rounded-2xl" style={{ background: '#F9FAFB' }}>
                         <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: `${rule.color}15` }}>

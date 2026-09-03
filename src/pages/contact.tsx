@@ -71,7 +71,7 @@ export default function ContactPage() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               {[
                 { icon: Mail, title: 'Email us', desc: 'hello@padihub.com', sub: 'We respond within 24 hours', color: '#2EAF6F' },
-                { icon: MessageSquare, title: 'Live chat', desc: 'Available in the app', sub: 'Mon–Fri, 9am–6pm GMT', color: '#2eafaf' },
+                { icon: MessageSquare, title: 'Live chat', desc: 'Available in the app', sub: 'Mondays to Saturdays, 9am to 6pm', color: '#2eafaf' },
               ].map(c => (
                 <div key={c.title} style={{ borderRadius: 16, padding: 20, background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
                   <div style={{ width: 40, height: 40, borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', background: `${c.color}15`, marginBottom: 12, flexShrink: 0 }}>

@@ -8,7 +8,7 @@ import { notificationService } from './notificationService.js';
 import { trustScoreService } from './trustScoreService.js';
 import { monitoringService } from './monitoringService.js';
 import { getStripeProvider } from '../integrations/payments/PaymentProviderFactory.js';
-import { TRUST_SCORE_DELTA_CYCLE_COMPLETED } from '../lib/constants.js';
+import { TRUST_SCORE_DELTA_CYCLE_COMPLETED, clampGroupMaximumMembers } from '../lib/constants.js';
 import { computeNextPayoutDate } from '../lib/payoutSchedule.js';
 import {
   sendUpcomingPayoutEmail,
@@ -171,7 +171,7 @@ export const rotationService = {
       .from(schema.savingsGroups).where(eq(schema.savingsGroups.id, groupId)).limit(1);
     if (userRow.length && groupRow.length) {
       const g = groupRow[0];
-      const potAmount = `${g.currency} ${(parseFloat(g.contribution_amount) * g.maximum_members).toFixed(2)}`;
+      const potAmount = `${g.currency} ${(parseFloat(g.contribution_amount) * clampGroupMaximumMembers(g.maximum_members)).toFixed(2)}`;
       await sendUpcomingPayoutEmail(userRow[0].email, g.name, potAmount, payoutDate.toLocaleDateString('en-GB'));
     }
     return id;
@@ -222,7 +222,7 @@ export const rotationService = {
         .from(schema.savingsGroups).where(eq(schema.savingsGroups.id, groupId)).limit(1);
       if (recipientRow.length && groupRow2.length) {
         const g2 = groupRow2[0];
-        const potAmount = `${g2.currency} ${(parseFloat(g2.contribution_amount) * g2.maximum_members).toFixed(2)}`;
+        const potAmount = `${g2.currency} ${(parseFloat(g2.contribution_amount) * clampGroupMaximumMembers(g2.maximum_members)).toFixed(2)}`;
         await sendPayoutCompleteEmail(recipientRow[0].email, g2.name, potAmount, transferReference ?? current.provider_transfer_reference ?? current.id);
       }
     }

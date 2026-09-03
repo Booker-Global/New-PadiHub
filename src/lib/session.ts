@@ -17,6 +17,7 @@ export interface SessionData {
   email?: string;
   userId?: string;
   role?: string;
+  emailVerified?: boolean;
 }
 
 const STORAGE_KEYS = ['padihub_user', 'padihub_session'] as const;
@@ -30,6 +31,28 @@ export function readStoredSession(): SessionData | null {
   } catch {
     return null;
   }
+}
+
+/** Writes the same session payload to both storages. */
+export function storeSession(session: SessionData): void {
+  const raw = JSON.stringify(session);
+  for (const key of STORAGE_KEYS) {
+    try {
+      if (key === 'padihub_user') localStorage.setItem(key, raw);
+      else sessionStorage.setItem(key, raw);
+    } catch {
+      /* storage unavailable */
+    }
+  }
+}
+
+/** Merges a partial update into the stored session, if one exists. */
+export function updateStoredSession(patch: Partial<SessionData>): SessionData | null {
+  const session = readStoredSession();
+  if (!session) return null;
+  const nextSession = { ...session, ...patch };
+  storeSession(nextSession);
+  return nextSession;
 }
 
 /**
