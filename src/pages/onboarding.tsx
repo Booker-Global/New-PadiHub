@@ -8,7 +8,6 @@ import {
   ArrowRight,
   ArrowLeft,
   CheckCircle,
-  Globe,
   Shield,
   Camera,
   Bell,
@@ -261,7 +260,6 @@ function OnboardingShell({ children, step, totalSteps }: { children: ReactNode; 
           <div className="flex flex-col gap-6 mb-12">
             {[
               { icon: Shield, label: 'Trust Score™', desc: 'Build your community reputation', color: '#2EAF6F' },
-              { icon: Globe, label: 'UK & Nigeria', desc: 'Tailored onboarding for both markets', color: '#2eafaf' },
               { icon: Users, label: 'Savings Groups', desc: 'Save together, grow together', color: '#8B5CF6' },
             ].map((feature) => (
               <div key={feature.label} className="flex items-center gap-4">
@@ -456,6 +454,12 @@ export default function OnboardingPage() {
 
   const isStepComplete = useCallback((stepIndex: number) => {
     switch (stepIndex) {
+      case 1:
+        // Country is always resolved automatically from the visitor's IP
+        // address at sign-up (see get-started.tsx) and stored on the
+        // account — members must never be asked to choose it manually, so
+        // this step is skipped whenever the account already has a country.
+        return Boolean(accountCountry);
       case 2:
         return Boolean(savedPlan);
       case 3:
@@ -471,7 +475,7 @@ export default function OnboardingPage() {
       default:
         return false;
     }
-  }, [hasSavedNotifications, identityVerified, paymentSetupComplete, savedAvatar, savedDisplayName, savedPlan]);
+  }, [accountCountry, hasSavedNotifications, identityVerified, paymentSetupComplete, savedAvatar, savedDisplayName, savedPlan]);
 
   const nextStep = useCallback(() => {
     setStep((current) => {

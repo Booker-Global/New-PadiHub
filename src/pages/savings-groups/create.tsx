@@ -38,6 +38,9 @@ const MIN_GROUP_MEMBERS = 3;
 const MAX_GROUP_MEMBERS = 10;
 const FIXED_GRACE_PERIOD_HOURS = 72;
 
+/** Mirrors SUBSCRIPTION_TIERS.premium.maxGroupsCreate in src/server/lib/constants.ts. */
+const PREMIUM_MAX_GROUPS_CREATE = 3;
+
 interface GroupData {
   name: string;
   description: string;
@@ -219,6 +222,13 @@ export default function CreateGroupWizard() {
   const [createdGroup, setCreatedGroup] = useState<SavingsGroup | null>(null);
   const [inviteSummary, setInviteSummary] = useState<{ sent: string[]; failed: { email: string; reason: string }[] } | null>(null);
   const [missingSteps, setMissingSteps] = useState<OnboardingStep[]>([]);
+  // Basic-tier members can't create groups at all (see SUBSCRIPTION_TIERS in
+  // src/server/lib/constants.ts — maxGroupsCreate: 0). The server already
+  // rejects this with GROUP_CREATE_LIMIT_REACHED at final submit, but a
+  // Basic-tier member shouldn't have to fill out the entire 7-step wizard
+  // just to be told "no" at the very end — block immediately, as soon as
+  // they land on this page (i.e. the moment they click "Create Group").
+  const [tierBlocked, setTierBlocked] = useState(false);
   const verificationReturnPath = `${location.pathname}${location.search}`;
 
   // Groups are strictly single-country (Stripe/GBP for GB, Flutterwave/NGN
@@ -234,9 +244,13 @@ export default function CreateGroupWizard() {
         const response = await window.fetch('/api/users/profile', {
           headers: { Authorization: 'Bearer ' + session.token },
         });
-        const json = await response.json().catch(() => null) as ApiResponse<{ country?: 'GB' | 'NG' }> | null;
-        if (!cancelled && response.ok && json?.data?.country) {
+        const json = await response.json().catch(() => null) as ApiResponse<{ country?: 'GB' | 'NG'; subscription_tier?: string | null }> | null;
+        if (cancelled || !response.ok || !json?.data) return;
+        if (json.data.country) {
           setData(current => ({ ...current, currency: json.data?.country === 'NG' ? 'NGN' : 'GBP' }));
+        }
+        if (json.data.subscription_tier === 'basic') {
+          setTierBlocked(true);
         }
       } catch { /* keep the default currency if this fails */ }
     })();
@@ -371,7 +385,7 @@ export default function CreateGroupWizard() {
           payout_day: data.frequency === 'daily' ? undefined : (data.payoutDay ?? undefined),
           maximum_members: data.memberCount,
           rotation_method: data.rotationOrder,
-          strike_threshold: data.maxMissed,
+          suspension_threshold: data.maxMissed,
           allow_payout_swaps: data.allowSwaps,
           min_trust_score: data.minTrustScore || undefined,
           group_duration_type: data.durationType,
@@ -449,6 +463,47 @@ export default function CreateGroupWizard() {
     'Invite Members',
     'Review',
   ];
+
+  if (tierBlocked) {
+    return (
+      <DashboardLayout>
+        <div className="min-h-screen flex items-center justify-center p-6">
+          <MotionDiv
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.5 }}
+            className="max-w-md w-full text-center"
+          >
+            <div
+              className="w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-6"
+              style={{ background: '#FEF2F2', border: '1px solid #FECACA' }}
+            >
+              <Shield size={40} style={{ color: '#DC2626' }} />
+            </div>
+            <h1 className="text-3xl font-extrabold text-gray-900 mb-3" style={{ fontFamily: 'Nunito, sans-serif' }}>
+              Upgrade Required
+            </h1>
+            <p className="text-gray-500 mb-6">
+              Your Basic plan doesn&apos;t allow creating groups — upgrade to Premium to create up to{' '}
+              {PREMIUM_MAX_GROUPS_CREATE} groups.
+            </p>
+            <div className="flex flex-col gap-3">
+              <Button
+                asChild
+                className="w-full rounded-2xl font-bold py-3"
+                style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', color: '#fff' }}
+              >
+                <Link to="/subscription/manage">Upgrade to Premium</Link>
+              </Button>
+              <Button asChild variant="outline" className="w-full rounded-2xl font-bold py-3">
+                <Link to="/dashboard">Return to Dashboard</Link>
+              </Button>
+            </div>
+          </MotionDiv>
+        </div>
+      </DashboardLayout>
+    );
+  }
 
   if (done) {
     return (

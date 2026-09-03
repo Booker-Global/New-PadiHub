@@ -46,6 +46,7 @@ interface SavingsGroup {
   name: string;
   description?: string | null;
   leader_id: string;
+  leader_name?: string;
   country: 'GB' | 'NG';
   currency: 'GBP' | 'NGN';
   contribution_amount: string | number;
@@ -80,6 +81,7 @@ interface Membership {
   status: 'pending' | 'active' | 'suspended' | 'removed';
   strike_count: number;
   join_date: string;
+  user_name?: string;
 }
 
 interface Contribution {
@@ -361,6 +363,24 @@ export default function SavingsGroupDetailPage() {
     void loadData();
   }, [loadData]);
 
+  // A leader who keeps this dashboard open in a background tab while a new
+  // member completes onboarding and joins would otherwise keep looking at a
+  // stale member count/rotation/rules snapshot indefinitely — refetch
+  // automatically whenever the tab regains visibility/focus so every stat
+  // here (member count, rotation order, activity feed) reflects the latest
+  // server state without requiring a manual page reload.
+  useEffect(() => {
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') void loadData();
+    };
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+    };
+  }, [loadData]);
+
   // getValidSession() may clear an expired session from storage as a side
   // effect; reading it via useMemo (rather than directly during render) keeps
   // that mutation out of React's render phase, e.g. under Strict Mode's
@@ -392,9 +412,10 @@ export default function SavingsGroupDetailPage() {
 
   const getMemberDisplayName = useCallback((userId: string) => {
     if (userId === currentUserId) return 'You';
-    const index = orderedMembers.findIndex(member => member.user_id === userId);
-    return index >= 0 ? `Member ${index + 1}` : shortId(userId);
-  }, [orderedMembers, currentUserId]);
+    if (group && userId === group.leader_id && group.leader_name) return group.leader_name;
+    const match = orderedMembers.find(member => member.user_id === userId);
+    return match?.user_name || shortId(userId);
+  }, [orderedMembers, currentUserId, group]);
 
   const currentMembership = useMemo(
     () => memberships.find(member => member.user_id === currentUserId),
@@ -985,9 +1006,8 @@ export default function SavingsGroupDetailPage() {
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       {[
                         { label: 'Description', value: group.description || 'No description added yet.' },
-                        { label: 'Leader', value: group.leader_id === currentUserId ? 'You' : shortId(group.leader_id) },
+                        { label: 'Leader', value: getMemberDisplayName(group.leader_id) },
                         { label: 'Country', value: group.country === 'NG' ? 'Nigeria' : 'United Kingdom' },
-                        { label: 'Payment provider', value: titleCase(group.payment_provider) },
                         { label: 'Created', value: formatDate(group.created_at) },
                         { label: 'Last updated', value: formatDate(group.updated_at) },
                       ].map(row => (
@@ -1007,7 +1027,7 @@ export default function SavingsGroupDetailPage() {
                         {currentRotation ? (
                           <>
                             <p className="text-lg font-black text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>
-                              {currentRotation.recipient_id === currentUserId ? 'You' : shortId(currentRotation.recipient_id)}
+                              {getMemberDisplayName(currentRotation.recipient_id)}
                             </p>
                             <p className="text-xs text-gray-500 mt-1">
                               {titleCase(currentRotation.payout_status)} · Scheduled {formatDate(currentRotation.scheduled_payout_date)}
@@ -1021,7 +1041,7 @@ export default function SavingsGroupDetailPage() {
                         <p className="text-xs text-gray-400 mb-1">Up next (cycle {nextRotation?.cycle_number ?? group.current_cycle + 1})</p>
                         {nextRotation ? (
                           <p className="text-lg font-black text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>
-                            {nextRotation.recipient_id === currentUserId ? 'You' : shortId(nextRotation.recipient_id)}
+                            {getMemberDisplayName(nextRotation.recipient_id)}
                           </p>
                         ) : (
                           <p className="text-sm text-gray-500">Not enough active members yet.</p>
@@ -1074,9 +1094,9 @@ export default function SavingsGroupDetailPage() {
                           <AlertTriangle size={15} /> {membershipActionError}
                         </div>
                       )}
-                      {orderedMembers.map((member, index) => {
+                      {orderedMembers.map((member) => {
                         const badge = getMembershipBadge(member.status);
-                        const displayName = member.user_id === currentUserId ? 'You' : `Member ${index + 1}`;
+                        const displayName = member.user_id === currentUserId ? 'You' : (member.user_name || shortId(member.user_id));
                         const isLeaderViewing = group.leader_id === currentUserId;
                         const actionBusy = membershipActionId === member.id;
 
@@ -1091,7 +1111,7 @@ export default function SavingsGroupDetailPage() {
                                 {member.role === 'leader' && <CheckCircle size={13} style={{ color: '#2EAF6F' }} />}
                               </div>
                               <p className="text-xs text-gray-400 break-all">
-                                {titleCase(member.role)} · Position {member.rotation_order ?? '—'} · {shortId(member.user_id)}
+                                {titleCase(member.role)} · Position {member.rotation_order ?? '—'}
                               </p>
                             </div>
                             <div className="text-right">
@@ -1398,7 +1418,7 @@ export default function SavingsGroupDetailPage() {
                               <div className="flex items-center justify-between gap-4">
                                 <div>
                                   <p className="text-sm font-semibold text-gray-800">Cycle {entry.cycle_number} · {meta.label}</p>
-                                  <p className="text-xs text-gray-400 break-all">Member {shortId(entry.member_id)}</p>
+                                  <p className="text-xs text-gray-400 break-all">{getMemberDisplayName(entry.member_id)}</p>
                                   {entry.payment_status === 'pending_default' && entry.grace_period_ends_at && (
                                     <p className="text-xs font-semibold mt-0.5" style={{ color: '#F59E0B' }}>
                                       One automatic retry on {formatDate(entry.grace_period_ends_at)} before this is marked in default
@@ -1424,9 +1444,8 @@ export default function SavingsGroupDetailPage() {
                   <h2 className="font-extrabold text-gray-900 mb-5" style={{ fontFamily: 'Nunito, sans-serif' }}>Group Rules</h2>
                   <div className="flex flex-col gap-4">
                     {[
-                      { icon: AlertTriangle, color: '#EF4444', label: 'Strike threshold', value: `${group.strike_threshold} missed payment${group.strike_threshold === 1 ? '' : 's'} before warning` },
                       { icon: Clock, color: '#F59E0B', label: 'Suspension threshold', value: `${group.suspension_threshold} missed payment${group.suspension_threshold === 1 ? '' : 's'} before suspension` },
-                      { icon: Users, color: '#8B5CF6', label: 'Voting threshold', value: `${group.voting_threshold}% approval required` },
+                      { icon: Users, color: '#8B5CF6', label: 'Voting threshold', value: 'Unanimous — every active member must agree' },
                       { icon: TrendingUp, color: '#2EAF6F', label: 'Payout swaps', value: group.allow_payout_swaps ? 'Allowed' : 'Not allowed' },
                       { icon: Shield, color: '#2eafaf', label: 'Rotation method', value: describeRotationMethod(group.rotation_method) },
                     ].map(rule => (

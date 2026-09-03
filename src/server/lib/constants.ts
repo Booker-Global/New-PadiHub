@@ -150,3 +150,24 @@ export function formatTierPrice(tier: SubscriptionTierKey, country: string): str
 export function countryDisplayName(country: string): string {
   return country === 'NG' ? 'Nigeria' : 'the United Kingdom';
 }
+
+/**
+ * Human-readable name for a user, preferring their chosen display name, then
+ * falling back to "first last", then the local part of their email. Every
+ * screen that shows another member (group leader, rotation recipient, vote
+ * proposer/target, member list, etc.) must use this instead of exposing a
+ * raw user ID — see the group dashboard "Group Details" / "Rotation" /
+ * "Members" panels.
+ */
+export function resolveUserDisplayName(user: {
+  display_name?: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+  email?: string | null;
+} | undefined | null): string {
+  if (!user) return 'A PadiHub member';
+  return user.display_name?.trim()
+    || `${user.first_name ?? ''} ${user.last_name ?? ''}`.trim()
+    || user.email?.split('@')[0]
+    || 'A PadiHub member';
+}
