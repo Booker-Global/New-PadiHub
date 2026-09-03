@@ -407,6 +407,12 @@ export const groupService = {
     if (group.status === 'closed' || group.status === 'expired') {
       throw new AppError('This group is no longer accepting members.', 400);
     }
+    // Only the group's own leader may invite people into it — otherwise any
+    // authenticated user could send PadiHub-branded invitations to arbitrary
+    // email addresses on behalf of someone else's group.
+    if (group.leader_id !== invitedBy) {
+      throw new AppError('Only the group leader can invite members to this group.', 403, 'NOT_GROUP_LEADER');
+    }
 
     const token = uuidv4();
     const id = uuidv4();
@@ -419,13 +425,46 @@ export const groupService = {
 
     await createAuditLog({ userId: invitedBy, action: 'INVITATION_SENT', entity: 'savings_groups', entityId: groupId });
 
-    // Send invitation email if an email address was provided
+    // Send invitation email if an email address was provided. The link points
+    // at the group's own join page (with the invite token attached) so an
+    // existing member can log in and join straight away, and a brand-new
+    // invitee is offered sign-up and walked through the onboarding steps
+    // before the join completes.
+    const invitePath = `/savings-groups/${groupId}/join?invite_token=${token}`;
     if (email) {
       const expiresAt = new Date(Date.now() + INVITE_TTL).toLocaleDateString('en-GB');
-      const inviteLink = `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups/join?token=${token}`;
-      await sendGroupInvitationEmail(email, group.name, inviteLink, expiresAt);
+      const inviteLink = `${process.env.APP_URL ?? 'https://padihub.com'}${invitePath}`;
+      const inviterRows = await db.select({ first_name: schema.users.first_name, last_name: schema.users.last_name })
+        .from(schema.users).where(eq(schema.users.id, invitedBy)).limit(1);
+      const inviterName = inviterRows.length ? `${inviterRows[0].first_name} ${inviterRows[0].last_name}` : 'A PadiHub member';
+      await sendGroupInvitationEmail(email, group.name, inviteLink, expiresAt, inviterName);
     }
-    return { token, inviteLink: `/savings-groups/join?token=${token}` };
+    return { token, inviteLink: invitePath };
+  },
+
+  /**
+   * Invite several people at once — used by the create-group wizard, which
+   * collects a comma-separated list of email addresses. One failing address
+   * must never abort the rest, so each result is reported individually.
+   */
+  async createInvitations(groupId: string, invitedBy: string, emails: string[]) {
+    const unique = [...new Set(
+      emails.map(email => email.trim().toLowerCase()).filter(Boolean),
+    )];
+
+    const sent: string[] = [];
+    const failed: { email: string; reason: string }[] = [];
+
+    for (const email of unique) {
+      try {
+        await this.createInvitation(groupId, invitedBy, email);
+        sent.push(email);
+      } catch (err) {
+        failed.push({ email, reason: err instanceof AppError ? err.message : 'Could not send this invitation.' });
+      }
+    }
+
+    return { sent, failed, invited_count: sent.length };
   },
 
   async getInvitation(token: string) {

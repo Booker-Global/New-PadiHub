@@ -128,7 +128,25 @@ export async function getIdentityStatus(req: Request, res: Response, next: NextF
     if (!userRows.length) throw new AppError('User not found.', 404);
 
     const provider = userRows[0].country === 'NG' ? flutterwaveIdentity : stripeIdentity;
-    const status = await provider.getVerificationStatus(userId);
+    let status = await provider.getVerificationStatus(userId);
+
+    // Self-heal a stuck "pending": the terminal result normally arrives via
+    // the Stripe Identity webhook, but if that endpoint isn't configured
+    // (common in sandbox/test environments) or the delivery was lost, the
+    // member would sit on "Pending" forever and could never finish
+    // onboarding. Ask Stripe directly and apply the same completion/failure
+    // handling the webhook would have done.
+    if (userRows[0].country !== 'NG' && !status.verified && status.status === 'pending') {
+      const remoteStatus = await stripeIdentity.getRemoteSessionStatus(userId);
+      if (remoteStatus === 'verified') {
+        await identityVerificationService.completeIdentityVerification(userId, 'GB');
+        status = await provider.getVerificationStatus(userId);
+      } else if (remoteStatus === 'requires_input' || remoteStatus === 'canceled') {
+        await identityVerificationService.failIdentityVerification(userId);
+        status = await provider.getVerificationStatus(userId);
+      }
+    }
+
     res.json({ success: true, data: { ...status, bypass_available: isKycBypassEnabled() } });
   } catch (e) { next(e); }
 }

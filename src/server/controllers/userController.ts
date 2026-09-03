@@ -2,6 +2,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { userService } from '../services/userService.js';
 import { notificationService } from '../services/notificationService.js';
+import { getOnboardingProgress } from '../services/paymentEligibilityService.js';
 import { validate } from '../middleware/validate.js';
 import { qs, ip } from '../lib/reqHelpers.js';
 
@@ -22,6 +23,19 @@ export const userController = {
   getStats: async (req: Request, res: Response, next: NextFunction) => {
     try {
       const data = await userService.getStats(req.user!.userId);
+      res.json({ success: true, data });
+    } catch (e) { next(e); }
+  },
+
+  /**
+   * GET /api/users/onboarding-status — the member's progress through the
+   * required onboarding path (confirm email → verify identity → choose plan
+   * → payment card → payout details), with a dashboard link for each
+   * outstanding step. Drives the dashboard's profile-completion card.
+   */
+  getOnboardingStatus: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await getOnboardingProgress(req.user!.userId);
       res.json({ success: true, data });
     } catch (e) { next(e); }
   },

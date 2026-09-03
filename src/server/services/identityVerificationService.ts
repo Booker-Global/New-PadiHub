@@ -118,7 +118,20 @@ export const identityVerificationService = {
     // Now that verification succeeded, actually create/charge the platform
     // subscription — this is the only point in either flow where the member
     // is charged for their subscription (see subscriptionService.activateSubscription).
-    const subscriptionResult = await subscriptionService.activateSubscription(userId);
+    // Verification itself has already been recorded above, so a member who
+    // hasn't picked a plan or saved a card yet (they can verify first and
+    // subscribe afterwards) must not have their verification result thrown
+    // away — the remaining onboarding steps are enforced separately by
+    // paymentEligibilityService before they can create or join a group.
+    let subscriptionResult: Awaited<ReturnType<typeof subscriptionService.activateSubscription>> | null = null;
+    try {
+      subscriptionResult = await subscriptionService.activateSubscription(userId);
+    } catch (err) {
+      console.warn(
+        '[identityVerificationService] Identity verified but subscription could not be activated yet:',
+        err instanceof Error ? err.message : err,
+      );
+    }
 
     const tier = isSubscriptionTierKey(user.subscription_tier) ? user.subscription_tier : 'basic';
     await sendIdentityVerifiedEmail(user.email, user.first_name);

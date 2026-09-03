@@ -64,6 +64,11 @@ export const users = mysqlTable('users', {
   // BankAccountValidationInterface.ts). Not implemented yet; always null.
   bvn_verification_reference:  varchar('bvn_verification_reference', { length: 255 }),
   last_login_at:               timestamp('last_login_at'),
+  // Set the first time the member finishes every onboarding step (email +
+  // identity + subscription plan + payment method + payout destination), so
+  // the "your profile setup is complete" email is only ever sent once —
+  // see paymentEligibilityService.notifyOnboardingComplete().
+  onboarding_completed_email_sent_at: timestamp('onboarding_completed_email_sent_at'),
   active:                      boolean('active').notNull().default(true),
   role:                        mysqlEnum('role', ['member', 'group_leader', 'admin']).notNull().default('member'),
   created_at:                  timestamp('created_at').notNull().defaultNow(),

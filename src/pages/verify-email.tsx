@@ -11,6 +11,13 @@ export default function VerifyEmailPage() {
   const [searchParams] = useSearchParams();
   const emailFromState = (location.state as { email?: string } | null)?.email ?? '';
   const token = searchParams.get('token');
+  // Set when the member arrived from a group invitation — after verifying we
+  // send them back there instead of the generic onboarding start. Same-origin
+  // paths only, so the param can never bounce them off-site.
+  const redirectParam = searchParams.get('redirect');
+  const afterVerifyPath = redirectParam && redirectParam.startsWith('/') && !redirectParam.startsWith('//')
+    ? redirectParam
+    : '/onboarding';
 
   const [status, setStatus] = useState<'idle' | 'verifying' | 'success' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
@@ -49,7 +56,7 @@ export default function VerifyEmailPage() {
           setStatus('success');
           // Small tick to let React flush the state update before navigating,
           // ensuring any auth-reading components re-render with the new session.
-          setTimeout(() => navigate('/onboarding', { replace: true }), 50);
+          setTimeout(() => navigate(afterVerifyPath, { replace: true }), 50);
         } else if (r.ok) {
           // Verification succeeded but no JWT returned (shouldn't happen with
           // current backend, but handle gracefully).
@@ -63,7 +70,7 @@ export default function VerifyEmailPage() {
         setErrorMsg('Something went wrong. Please try again.');
         setStatus('error');
       });
-  }, [token, navigate]);
+  }, [token, navigate, afterVerifyPath]);
 
   const handleResend = async () => {
     if (!emailFromState) return;
