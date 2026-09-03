@@ -238,6 +238,12 @@ export default function SavingsGroupDetailPage() {
   const [tab, setTab] = useState<Tab>('overview');
   const [group, setGroup] = useState<SavingsGroup | null>(null);
   const [memberships, setMemberships] = useState<Membership[]>([]);
+  // Distinguishes "we successfully confirmed this viewer has no membership
+  // row" from "the /api/memberships call itself failed" — without this, a
+  // transient network error would wipe `memberships` to [] and the
+  // non-member gate below would wrongly boot an actual active member out to
+  // the join page instead of just showing a load error.
+  const [membershipsLoadFailed, setMembershipsLoadFailed] = useState(false);
   const [contributions, setContributions] = useState<Contribution[]>([]);
   const [currentRotation, setCurrentRotation] = useState<RotationInfo | null>(null);
   const [nextRotation, setNextRotation] = useState<NextRotationInfo | null>(null);
@@ -333,8 +339,10 @@ export default function SavingsGroupDetailPage() {
       if (membershipsResult.status === 'fulfilled' && membershipsResult.value.ok) {
         const membershipsJson = await membershipsResult.value.json() as ApiResponse<Membership[]>;
         setMemberships(Array.isArray(membershipsJson.data) ? membershipsJson.data : []);
+        setMembershipsLoadFailed(false);
       } else {
         setMemberships([]);
+        setMembershipsLoadFailed(true);
       }
 
       if (contributionsResult.status === 'fulfilled' && contributionsResult.value.ok) {
@@ -381,6 +389,7 @@ export default function SavingsGroupDetailPage() {
     } catch (loadError) {
       setGroup(null);
       setMemberships([]);
+      setMembershipsLoadFailed(true);
       setContributions([]);
       setCurrentRotation(null);
       setNextRotation(null);
@@ -453,6 +462,21 @@ export default function SavingsGroupDetailPage() {
   const currentMembership = useMemo(
     () => memberships.find(member => member.user_id === currentUserId),
     [memberships, currentUserId],
+  );
+
+  // Anyone who knows/guesses a group ID (or finds it via search) can call
+  // GET /api/groups/:id — that endpoint has to stay open so the join page
+  // can preview a group before someone has actually joined it. But this
+  // dashboard itself must only render for the leader and existing members
+  // (any membership row, including pending/suspended); everyone else gets
+  // sent to the actual join flow instead of a full "Invite/Share/Leave"
+  // dashboard for a group they were never inserted into — this exact mix-up
+  // (an invitee browsing straight to the group page, seeing what looks like
+  // full membership, having never clicked "Join") is what previously caused
+  // "still shows 1 active member" confusion.
+  const isNonMember = Boolean(
+    !membershipsLoadFailed && group && currentUserId && group.leader_id !== currentUserId
+    && (!currentMembership || currentMembership.status === 'removed'),
   );
 
   const pendingMemberships = useMemo(
@@ -941,6 +965,30 @@ export default function SavingsGroupDetailPage() {
           <button onClick={() => void loadData()} className="inline-flex items-center gap-2 px-5 py-3 rounded-2xl font-bold text-white" style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}>
             <RefreshCw size={16} /> Try again
           </button>
+        </div>
+      </DashboardLayout>
+    );
+  }
+
+  if (isNonMember) {
+    return (
+      <DashboardLayout>
+        <div className="p-4 sm:p-6 max-w-lg mx-auto text-center py-16">
+          <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4" style={{ background: 'rgba(139,92,246,0.1)' }}>
+            <Users size={24} style={{ color: '#8B5CF6' }} />
+          </div>
+          <h1 className="text-2xl font-extrabold text-gray-900 mb-3" style={{ fontFamily: 'Nunito, sans-serif' }}>You&apos;re not a member of {group.name} yet</h1>
+          <p className="text-gray-500 mb-6">
+            You&apos;re not counted as an active member of this group, so it won&apos;t show you in its member totals until you actually join. If you have an invitation, open it below to finish joining.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-3 justify-center">
+            <Link to={`/savings-groups/${group.id}/join`} className="px-6 py-3 rounded-2xl font-bold text-white" style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}>
+              Join this group
+            </Link>
+            <Link to="/savings-groups" className="px-6 py-3 rounded-2xl font-bold text-gray-600" style={{ border: '1px solid #E5E7EB' }}>
+              Back to savings groups
+            </Link>
+          </div>
         </div>
       </DashboardLayout>
     );
