@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { userService } from '../services/userService.js';
 import { notificationService } from '../services/notificationService.js';
 import { getOnboardingProgress } from '../services/paymentEligibilityService.js';
+import { groupService } from '../services/groupService.js';
 import { validate } from '../middleware/validate.js';
 import { qs, ip } from '../lib/reqHelpers.js';
 
@@ -32,11 +33,20 @@ export const userController = {
    * required onboarding path (confirm email → verify identity → choose plan
    * → payment card → payout details), with a dashboard link for each
    * outstanding step. Drives the dashboard's profile-completion card.
+   *
+   * Also surfaces any still-open group invitation(s) addressed to this
+   * member's email (Section 0.1): an invitee who starts signing up before
+   * finishing onboarding must not lose sight of the group they were invited
+   * to — the invite stays highlighted here throughout payment, subscription
+   * and identity verification, right up until they click to join.
    */
   getOnboardingStatus: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const data = await getOnboardingProgress(req.user!.userId);
-      res.json({ success: true, data });
+      const [data, pendingInvitations] = await Promise.all([
+        getOnboardingProgress(req.user!.userId),
+        groupService.getPendingInvitationsForEmail(req.user!.email),
+      ]);
+      res.json({ success: true, data: { ...data, pending_invitations: pendingInvitations } });
     } catch (e) { next(e); }
   },
 
