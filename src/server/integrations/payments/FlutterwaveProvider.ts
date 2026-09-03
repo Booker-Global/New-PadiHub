@@ -60,6 +60,7 @@ export class FlutterwaveProvider implements IPaymentProvider {
     title: string;
     description: string;
     meta?: Record<string, unknown>;
+    billingAddress?: { line1: string; city: string; postalCode: string; country: string };
   }): Promise<{ link: string }> {
     const response = await axios.post(`${FLW_BASE}/payments`, {
       tx_ref: params.txRef,
@@ -70,6 +71,19 @@ export class FlutterwaveProvider implements IPaymentProvider {
       customer: {
         email: params.email,
         name: params.name,
+        // Flutterwave's v3 /payments API accepts a nested `address` object on
+        // the customer record (line1/city/postal_code/country) — like
+        // Stripe's billing_details.address, this is the card's actual
+        // billing address, confirmed as part of finalising the card here
+        // rather than on a separate "cosmetic" settings page.
+        ...(params.billingAddress ? {
+          address: {
+            line1: params.billingAddress.line1,
+            city: params.billingAddress.city,
+            postal_code: params.billingAddress.postalCode,
+            country: params.billingAddress.country,
+          },
+        } : {}),
       },
       customizations: {
         title: params.title,

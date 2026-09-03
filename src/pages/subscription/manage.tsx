@@ -166,6 +166,16 @@ export default function ManageMembershipPage() {
         ? { label: 'Payment overdue', color: '#F59E0B', background: 'rgba(245,158,11,0.16)' }
         : { label: 'Active', color: '#2EAF6F', background: 'rgba(46,175,111,0.2)' };
 
+  // Only a real, billable provider subscription counts as "subscribed" — a
+  // member who has merely picked a tier during onboarding (no card/billing
+  // set up yet) should not see switch/cancel controls for a subscription
+  // that doesn't actually exist yet.
+  const isSubscribed = Boolean(status?.provider_subscription_id) && status?.billing_status !== 'cancelled';
+  // Whether a real provider subscription has ever been created (even if
+  // since cancelled) — used to decide whether to show the Cancel/Reactivate
+  // card at all, per PR25's switch-and-cancel support.
+  const hasEverSubscribed = Boolean(status?.provider_subscription_id);
+
   const switchDescription = useMemo(() => {
     if (!switchTarget) return '';
     const targetPlan = tierConfig[switchTarget];
@@ -300,7 +310,7 @@ export default function ManageMembershipPage() {
       }
 
       await refreshSubscription();
-      setActionNotice(`Your membership has been cancelled. You'll keep access until ${renewalDate ?? 'the end of your current billing period'}. A confirmation email has been sent.`);
+      setActionNotice(`Your subscription has been cancelled. You'll keep access until ${renewalDate ?? 'the end of your current billing period'}. A confirmation email has been sent.`);
       setShowCancelDialog(false);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : 'Unable to cancel your subscription right now.');
@@ -407,11 +417,11 @@ export default function ManageMembershipPage() {
           <MotionDiv variants={fadeUp} className="rounded-3xl p-6 bg-white mb-5" style={{ border: '1px solid #E5E7EB', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
             <div className="flex items-start justify-between gap-4 mb-4">
               <div>
-                <h2 className="font-extrabold text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>
-                  {currentTier ? 'Switch plan' : 'Choose your subscription plan'}
+                <h2 className="text-lg font-extrabold text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>
+                  {isSubscribed ? 'Switch plan' : 'Choose your subscription plan'}
                 </h2>
                 <p className="text-sm text-gray-500 mt-1">
-                  {currentTier
+                  {isSubscribed
                     ? 'Monthly plans only. Changes send a confirmation email automatically.'
                     : 'Pick Basic or Premium to get started. Your subscription is only charged once your payment method, payout details and identity verification are all in place.'}
                 </p>
@@ -421,7 +431,7 @@ export default function ManageMembershipPage() {
               </div>
             </div>
 
-            {currentTier && switchPlan ? (
+            {isSubscribed && switchPlan ? (
               <div className="rounded-2xl p-4" style={{ background: '#F9FAFB' }}>
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                   <div>
@@ -479,7 +489,7 @@ export default function ManageMembershipPage() {
           <MotionDiv variants={fadeUp} className="rounded-3xl p-6 bg-white mb-5" style={{ border: '1px solid #E5E7EB', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
             <div className="flex items-start justify-between gap-4 mb-4">
               <div>
-                <h2 className="font-extrabold text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>Payment method</h2>
+                <h2 className="text-lg font-extrabold text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>Payment method</h2>
                 <p className="text-sm text-gray-500 mt-1">Manage your saved card or mobile-money setup on the secure payment methods page.</p>
               </div>
               <div className="w-11 h-11 rounded-2xl flex items-center justify-center" style={{ background: '#F9FAFB' }}>
@@ -490,7 +500,7 @@ export default function ManageMembershipPage() {
             <div className="rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3" style={{ background: '#F9FAFB' }}>
               <div>
                 <p className="font-bold text-gray-900 text-sm">Update payment method</p>
-                <p className="text-xs text-gray-500 mt-1">Use the existing payments flow to add or replace the card used for your monthly membership.</p>
+                <p className="text-xs text-gray-500 mt-1">Use the existing payments flow to add or replace the card used for your monthly membership. Your billing address is confirmed there alongside your card.</p>
               </div>
               <Link
                 to="/payments/methods"
@@ -502,42 +512,35 @@ export default function ManageMembershipPage() {
             </div>
           </MotionDiv>
 
-          <MotionDiv variants={fadeUp} className="rounded-3xl p-6 bg-white mb-5" style={{ border: '1px solid #E5E7EB', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
-            <h2 className="font-extrabold text-gray-900 mb-2" style={{ fontFamily: 'Nunito, sans-serif' }}>Billing address</h2>
-            <p className="text-sm text-gray-500 mb-4">This card is cosmetic for now — billing-address editing is not connected to a backend API yet.</p>
-            <div className="rounded-2xl p-4" style={{ background: '#F9FAFB' }}>
-              <p className="font-bold text-sm text-gray-900">Billing details coming soon</p>
-              <p className="text-xs text-gray-500 mt-1">For now, contact support if you need billing-address changes reflected on future invoices.</p>
-            </div>
-          </MotionDiv>
-
-          <MotionDiv variants={fadeUp} className="rounded-3xl p-5 flex items-center justify-between gap-4" style={{ background: 'rgba(239,68,68,0.04)', border: '1px solid rgba(239,68,68,0.15)' }}>
-            <div className="flex items-center gap-3">
-              <XCircle size={20} style={{ color: '#EF4444' }} />
-              <div>
-                <p className="font-bold text-gray-900 text-sm">Cancel membership</p>
-                <p className="text-xs text-gray-500">{status?.billing_status === 'cancelled' ? 'Your membership is already cancelled.' : `You'll keep access until ${renewalDate ?? 'the end of your current billing period'}.`}</p>
+          {hasEverSubscribed && (
+            <MotionDiv variants={fadeUp} className="rounded-3xl p-5 flex items-center justify-between gap-4" style={{ background: 'rgba(239,68,68,0.04)', border: '1px solid rgba(239,68,68,0.15)' }}>
+              <div className="flex items-center gap-3">
+                <XCircle size={20} style={{ color: '#EF4444' }} />
+                <div>
+                  <p className="font-bold text-gray-900 text-sm">Cancel Subscription</p>
+                  <p className="text-xs text-gray-500">{status?.billing_status === 'cancelled' ? 'Your subscription is already cancelled.' : `You'll keep access until ${renewalDate ?? 'the end of your current billing period'}.`}</p>
+                </div>
               </div>
-            </div>
-            {status?.billing_status === 'cancelled' ? (
-              <Link
-                to="/subscription/renew"
-                className="text-sm font-bold px-4 py-2 rounded-xl transition-colors hover:bg-green-50"
-                style={{ color: '#2EAF6F', border: '1px solid rgba(46,175,111,0.2)' }}
-              >
-                Reactivate
-              </Link>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setShowCancelDialog(true)}
-                className="text-sm font-bold px-4 py-2 rounded-xl transition-colors hover:bg-red-50"
-                style={{ color: '#EF4444', border: '1px solid rgba(239,68,68,0.2)' }}
-              >
-                Cancel
-              </button>
-            )}
-          </MotionDiv>
+              {status?.billing_status === 'cancelled' ? (
+                <Link
+                  to="/subscription/renew"
+                  className="text-sm font-bold px-4 py-2 rounded-xl transition-colors hover:bg-green-50"
+                  style={{ color: '#2EAF6F', border: '1px solid rgba(46,175,111,0.2)' }}
+                >
+                  Reactivate
+                </Link>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowCancelDialog(true)}
+                  className="text-sm font-bold px-4 py-2 rounded-xl transition-colors hover:bg-red-50"
+                  style={{ color: '#EF4444', border: '1px solid rgba(239,68,68,0.2)' }}
+                >
+                  Cancel
+                </button>
+              )}
+            </MotionDiv>
+          )}
 
           <MotionDiv variants={fadeUp} className="mt-5 flex items-center justify-center gap-2 text-xs text-gray-400">
             <Shield size={12} style={{ color: '#2EAF6F' }} />
@@ -562,10 +565,10 @@ export default function ManageMembershipPage() {
 
       <ConfirmDialog
         open={showCancelDialog}
-        title="Cancel your membership?"
+        title="Cancel your subscription?"
         description={`You'll keep access until ${renewalDate ?? 'the end of your current billing period'}. We'll send a confirmation email straight away.`}
         confirmLabel={submitting ? 'Cancelling…' : 'Yes, cancel'}
-        cancelLabel="Keep my membership"
+        cancelLabel="Keep my subscription"
         variant="danger"
         onConfirm={() => { void handleCancelMembership(); }}
         onCancel={() => {

@@ -19,7 +19,24 @@ export default function TawkToWidget() {
     // bottom-left) — hide Tawk.to's own default bubble once it loads so
     // there are never two competing chat widgets on screen at once, while
     // still leaving the actual chat window available via toggleTawkChat().
-    window.Tawk_API = { onLoad: () => window.Tawk_API?.hideWidget?.() };
+    //
+    // Tawk.to's bubble briefly renders (and is visible) as soon as its
+    // script boots, before onLoad fires and hideWidget() takes effect —
+    // causing a visible flash on the right edge of the page. Hide it via a
+    // CSS override the instant this effect runs (before the script is even
+    // requested), then drop the override once hideWidget() has actually
+    // run, so Tawk.to's own hidden state takes over for good.
+    const hideBeforeLoadStyle = document.createElement('style');
+    hideBeforeLoadStyle.setAttribute('data-tawkto-hide-flash', 'true');
+    hideBeforeLoadStyle.textContent = '#tawkchat-container, iframe[title="chat widget"], .tawk-min-container { display: none !important; }';
+    document.head.appendChild(hideBeforeLoadStyle);
+
+    window.Tawk_API = {
+      onLoad: () => {
+        window.Tawk_API?.hideWidget?.();
+        hideBeforeLoadStyle.remove();
+      },
+    };
     window.Tawk_LoadStart = new Date();
 
     // Mirrors Tawk.to's official embed snippet exactly (async script inserted

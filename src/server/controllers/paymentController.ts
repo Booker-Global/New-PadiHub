@@ -325,10 +325,11 @@ export const paymentController = {
   createFlutterwavePaymentLink: async (req: Request, res: Response, next: NextFunction) => {
     try {
       const userId = req.user!.userId;
-      const { contribution_id, terms_accepted, setup_mode } = req.body as {
+      const { contribution_id, terms_accepted, setup_mode, billing_address } = req.body as {
         contribution_id?: string;
         terms_accepted?: boolean;
         setup_mode?: 'add' | 'change';
+        billing_address?: { line1?: string; city?: string; postal_code?: string };
       };
       if (terms_accepted !== true) {
         throw new AppError('You must accept the payment terms & conditions to save a payment method.', 400, 'TERMS_NOT_ACCEPTED');
@@ -369,6 +370,19 @@ export const paymentController = {
       redirectUrl.searchParams.set('setup_provider', 'flutterwave');
       redirectUrl.searchParams.set('setup_mode', setup_mode === 'change' ? 'change' : 'add');
 
+      // Same requirement as Stripe's card setup (see confirmSetupIntent) — the
+      // billing address belongs to card verification, not a separate
+      // "cosmetic" settings page, so it's only ever attached here, once, when
+      // provided by the standalone card-setup form.
+      const billingAddress = billing_address?.line1?.trim() && billing_address.city?.trim() && billing_address.postal_code?.trim()
+        ? {
+          line1: billing_address.line1.trim(),
+          city: billing_address.city.trim(),
+          postalCode: billing_address.postal_code.trim(),
+          country,
+        }
+        : undefined;
+
       const result = await getFlutterwaveProvider().createHostedPaymentLink({
         amount: verificationAmount,
         currency,
@@ -383,6 +397,7 @@ export const paymentController = {
           contribution_id: contribution_id ?? null,
           purpose: 'payment_method_setup',
         },
+        billingAddress,
       });
 
       await createAuditLog({

@@ -6,7 +6,8 @@
  * There is no free trial and no annual billing option.
  */
 import { v4 as uuidv4 } from 'uuid';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, inArray, desc } from 'drizzle-orm';
+import axios from 'axios';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -14,6 +15,7 @@ import { createAuditLog } from '../middleware/auditLogger.js';
 import { getPaymentProvider } from '../integrations/payments/PaymentProviderFactory.js';
 import { groupService } from './groupService.js';
 import { membershipService } from './membershipService.js';
+import { notificationService } from './notificationService.js';
 import {
   SUBSCRIPTION_TIERS,
   isSubscriptionTierKey,
@@ -25,10 +27,27 @@ import {
   sendSubscriptionCreatedEmail,
   sendSubscriptionCancelledEmail,
   sendSubscriptionTierChangedEmail,
+  sendSubscriptionPaymentFailedEmail,
 } from '../integrations/email/emailService.js';
 
 export function planCode(country: string, tier: SubscriptionTierKey): string {
   return `${country === 'NG' ? 'ng' : 'gb'}_${tier}`;
+}
+
+/**
+ * Payment-provider SDK/HTTP errors (Stripe SDK errors, axios errors from
+ * Flutterwave) are plain Error/AxiosError instances, not AppError, so the
+ * generic error handler would otherwise mask them as "An unexpected error
+ * occurred." — surface the real provider message instead so failures here
+ * (e.g. select-plan/switch-plan activating billing) are actually debuggable.
+ */
+function describeProviderError(err: unknown, fallback: string): string {
+  if (axios.isAxiosError(err)) {
+    const data = err.response?.data as { message?: string } | undefined;
+    return data?.message || err.message || fallback;
+  }
+  if (err instanceof Error) return err.message || fallback;
+  return fallback;
 }
 
 type PlanSelectionResult = { tier: SubscriptionTierKey; plan: string; monthly_amount: number };
@@ -37,6 +56,23 @@ type PlanSwitchResult = {
   direction: 'upgrade' | 'downgrade';
   effective_immediately?: boolean;
   effective_date?: Date;
+};
+
+/** Audit-log actions that represent a real billing/payment event for a member. */
+const BILLING_HISTORY_ACTIONS = [
+  'SUBSCRIPTION_CREATED',
+  'STRIPE_INVOICE_PAID',
+  'STRIPE_INVOICE_FAILED',
+  'FLW_SUBSCRIPTION_RENEWAL_CHARGED',
+] as const;
+
+export type BillingHistoryEntry = {
+  id: string;
+  date: Date;
+  status: 'paid' | 'failed';
+  provider: 'stripe' | 'flutterwave' | null;
+  tier: SubscriptionTierKey | null;
+  amount_display: string | null;
 };
 
 export const subscriptionService = {
@@ -67,9 +103,28 @@ export const subscriptionService = {
       return this.switchPlan(userId, tier);
     }
 
-    await db.update(schema.users)
-      .set({ subscription_tier: tier })
-      .where(eq(schema.users.id, userId));
+    try {
+      await db.update(schema.users)
+        .set({ subscription_tier: tier })
+        .where(eq(schema.users.id, userId));
+    } catch (err) {
+      // A raw drizzle/mysql2 failure here (e.g. a transient DB connection
+      // or lock-wait issue) must never surface as an opaque "An unexpected
+      // error occurred" with no trace of why. Log the real error —
+      // including drizzle's `.cause`, which holds the actual underlying
+      // driver error (its own errno/sqlMessage) that a bare `err.message`
+      // hides — and give the member an honest, actionable message instead
+      // of a generic 500.
+      console.error(
+        '[subscriptionService] Failed to save selected plan:',
+        err instanceof Error ? err.message : err,
+        err instanceof Error && err.cause ? { cause: err.cause } : undefined,
+      );
+      throw new AppError(
+        'Could not save your selected plan due to a temporary issue. Please try again in a moment.',
+        500, 'SUBSCRIPTION_TIER_UPDATE_FAILED',
+      );
+    }
 
     await createAuditLog({
       userId, action: 'SUBSCRIPTION_PLAN_SELECTED', entity: 'users', entityId: userId,
@@ -87,10 +142,19 @@ export const subscriptionService = {
       try {
         await this.activateSubscription(userId);
       } catch (err) {
-        console.warn(
-          '[subscriptionService] Plan selected but subscription could not be activated yet:',
-          err instanceof Error ? err.message : err,
-        );
+        // Every prerequisite is already met here, so a failure is a genuine
+        // provider/charge problem, not "not ready yet" — surface the real
+        // reason instead of silently dropping it, so the member isn't left
+        // thinking they're subscribed when they aren't.
+        const message = err instanceof AppError ? err.message : 'Could not activate your subscription with the payment provider.';
+        console.warn('[subscriptionService] Plan selected but subscription could not be activated:', message);
+        await notificationService.create({
+          userId,
+          type: 'subscription_payment_failed',
+          title: 'Payment could not be completed',
+          message,
+        });
+        await sendSubscriptionPaymentFailedEmail(user.email, formatTierPrice(tier, user.country));
       }
     }
 
@@ -137,12 +201,20 @@ export const subscriptionService = {
     // Ensure customer record exists
     let customerId = country === 'NG' ? user.flutterwave_customer_id : user.stripe_customer_id;
     if (!customerId) {
-      const customerResult = await provider.createCustomer({
-        userId,
-        email:    user.email,
-        name:     `${user.first_name} ${user.last_name}`,
-        currency: user.currency,
-      });
+      let customerResult;
+      try {
+        customerResult = await provider.createCustomer({
+          userId,
+          email:    user.email,
+          name:     `${user.first_name} ${user.last_name}`,
+          currency: user.currency,
+        });
+      } catch (err) {
+        throw new AppError(
+          describeProviderError(err, 'Could not create your billing account with the payment provider.'),
+          502, 'SUBSCRIPTION_PROVIDER_CUSTOMER_ERROR',
+        );
+      }
       customerId = customerResult.customerId;
 
       if (country === 'NG') {
@@ -156,13 +228,32 @@ export const subscriptionService = {
       }
     }
 
-    const result = await provider.createSubscription({
-      customerId,
-      userId,
-      email:    user.email,
-      currency: user.currency,
-      tier,
-    });
+    let result;
+    try {
+      result = await provider.createSubscription({
+        customerId,
+        userId,
+        email:    user.email,
+        currency: user.currency,
+        tier,
+      });
+    } catch (err) {
+      throw new AppError(
+        describeProviderError(err, 'Could not activate your subscription with the payment provider.'),
+        502, 'SUBSCRIPTION_PROVIDER_CREATE_ERROR',
+      );
+    }
+
+    // Stripe's createSubscription uses payment_behavior: 'default_incomplete',
+    // which does NOT synchronously confirm/charge the card — if the card is
+    // declined or needs 3D-Secure, Stripe returns successfully but with
+    // status 'incomplete' (no exception thrown). Only treat the subscription
+    // as genuinely billed if the provider reports it active/trialing, so we
+    // never show "Active" or send the welcome email for a card that hasn't
+    // actually been charged yet. invoice.payment_succeeded/failed webhooks
+    // reconcile this to the real outcome once Stripe finishes processing.
+    const billingIsActive = result.status === 'active' || result.status === 'trialing';
+    const billingStatus = billingIsActive ? 'active' : 'past_due';
 
     // Upsert subscription record
     const existing = await db.select().from(schema.subscriptions)
@@ -173,7 +264,7 @@ export const subscriptionService = {
     if (existing.length) {
       await db.update(schema.subscriptions).set({
         provider_subscription_id: result.subscriptionId,
-        billing_status:           'active',
+        billing_status:           billingStatus,
         renewal_date:             result.renewalDate,
         plan,
       }).where(eq(schema.subscriptions.user_id, userId));
@@ -184,26 +275,36 @@ export const subscriptionService = {
         provider:                 country === 'NG' ? 'flutterwave' : 'stripe',
         provider_subscription_id: result.subscriptionId,
         plan,
-        billing_status:           'active',
+        billing_status:           billingStatus,
         renewal_date:             result.renewalDate,
       });
     }
 
     await db.update(schema.users)
-      .set({ subscription_tier: tier, subscription_status: 'active' })
+      .set({ subscription_tier: tier, ...(billingIsActive ? { subscription_status: 'active' as const } : {}) })
       .where(eq(schema.users.id, userId));
 
     await createAuditLog({
-      userId, action: 'SUBSCRIPTION_CREATED', entity: 'subscriptions',
-      metadata: { subscriptionId: result.subscriptionId, country, tier },
+      userId, action: billingIsActive ? 'SUBSCRIPTION_CREATED' : 'SUBSCRIPTION_PAYMENT_PENDING', entity: 'subscriptions',
+      metadata: { subscriptionId: result.subscriptionId, country, tier, amount_display: formatTierPrice(tier, country), providerStatus: result.status },
     });
 
-    await sendSubscriptionCreatedEmail(
-      user.email,
-      SUBSCRIPTION_TIERS[tier].name,
-      formatTierPrice(tier, country),
-      result.renewalDate ? result.renewalDate.toLocaleDateString('en-GB') : 'your next billing date',
-    );
+    if (billingIsActive) {
+      await sendSubscriptionCreatedEmail(
+        user.email,
+        SUBSCRIPTION_TIERS[tier].name,
+        formatTierPrice(tier, country),
+        result.renewalDate ? result.renewalDate.toLocaleDateString('en-GB') : 'your next billing date',
+      );
+    } else {
+      await notificationService.create({
+        userId,
+        type: 'subscription_payment_failed',
+        title: 'Payment could not be completed',
+        message: 'We could not confirm payment for your subscription. Please check your card details or complete any additional verification your bank requires.',
+      });
+      await sendSubscriptionPaymentFailedEmail(user.email, formatTierPrice(tier, country));
+    }
 
     return result;
   },
@@ -252,6 +353,7 @@ export const subscriptionService = {
     }
 
     const effectiveDate = sub.renewal_date ? new Date(sub.renewal_date) : new Date();
+    let upgradeBillingFailed = false;
 
     if (direction === 'downgrade') {
       // Keep the current tier's limits and price until the next renewal
@@ -279,21 +381,55 @@ export const subscriptionService = {
         console.error('[SubscriptionService] Failed to cancel previous provider subscription during upgrade:', error);
       }
 
-      const result = await provider.createSubscription({
-        customerId: user.country === 'NG' ? (user.flutterwave_customer_id ?? '') : (user.stripe_customer_id ?? ''),
-        userId,
-        email:    user.email,
-        currency: user.currency,
-        tier:     newTier,
-      });
+      const result = await (async () => {
+        try {
+          return await provider.createSubscription({
+            customerId: user.country === 'NG' ? (user.flutterwave_customer_id ?? '') : (user.stripe_customer_id ?? ''),
+            userId,
+            email:    user.email,
+            currency: user.currency,
+            tier:     newTier,
+          });
+        } catch (err) {
+          throw new AppError(
+            describeProviderError(err, 'Could not activate your upgraded plan with the payment provider.'),
+            502, 'SUBSCRIPTION_PROVIDER_CREATE_ERROR',
+          );
+        }
+      })();
+
+      // Same reasoning as createSubscription() above — Stripe's
+      // default_incomplete subscription can come back non-active if the
+      // card is declined or needs 3D-Secure, without throwing.
+      const upgradeBillingIsActive = result.status === 'active' || result.status === 'trialing';
+
       await db.update(schema.subscriptions).set({
         provider_subscription_id: result.subscriptionId,
         plan:                     planCode(user.country, newTier),
-        billing_status:           'active',
+        billing_status:           upgradeBillingIsActive ? 'active' : 'past_due',
         renewal_date:             result.renewalDate,
         pending_tier:             null,
       }).where(eq(schema.subscriptions.user_id, userId));
       await db.update(schema.users).set({ subscription_tier: newTier }).where(eq(schema.users.id, userId));
+
+      // The upgrade bills immediately (unlike a downgrade) — record it as a
+      // real billing-history event alongside SUBSCRIPTION_CREATED/renewal
+      // charges, since getBillingHistory() below reads from these logs.
+      await createAuditLog({
+        userId, action: upgradeBillingIsActive ? 'SUBSCRIPTION_CREATED' : 'SUBSCRIPTION_PAYMENT_PENDING', entity: 'subscriptions',
+        metadata: { subscriptionId: result.subscriptionId, country: user.country, tier: newTier, amount_display: newAmount, providerStatus: result.status },
+      });
+
+      if (!upgradeBillingIsActive) {
+        upgradeBillingFailed = true;
+        await notificationService.create({
+          userId,
+          type: 'subscription_payment_failed',
+          title: 'Payment could not be completed',
+          message: 'We could not confirm payment for your upgraded plan. Please check your card details or complete any additional verification your bank requires.',
+        });
+        await sendSubscriptionPaymentFailedEmail(user.email, newAmount);
+      }
     }
 
     await createAuditLog({
@@ -301,15 +437,17 @@ export const subscriptionService = {
       metadata: { from: currentTier, to: newTier, direction },
     });
 
-    await sendSubscriptionTierChangedEmail(user.email, {
-      direction,
-      fromPlanName: SUBSCRIPTION_TIERS[currentTier].name,
-      toPlanName:   SUBSCRIPTION_TIERS[newTier].name,
-      newAmount,
-      effectiveDate: direction === 'downgrade'
-        ? effectiveDate.toLocaleDateString('en-GB')
-        : new Date().toLocaleDateString('en-GB'),
-    });
+    if (!upgradeBillingFailed) {
+      await sendSubscriptionTierChangedEmail(user.email, {
+        direction,
+        fromPlanName: SUBSCRIPTION_TIERS[currentTier].name,
+        toPlanName:   SUBSCRIPTION_TIERS[newTier].name,
+        newAmount,
+        effectiveDate: direction === 'downgrade'
+          ? effectiveDate.toLocaleDateString('en-GB')
+          : new Date().toLocaleDateString('en-GB'),
+      });
+    }
 
     return { tier: newTier, direction, effective_date: effectiveDate };
   },
@@ -324,7 +462,14 @@ export const subscriptionService = {
     if (!sub.provider_subscription_id) throw new AppError('No provider subscription ID on record.', 400);
 
     const provider = getPaymentProvider(sub.provider === 'flutterwave' ? 'NG' : 'GB');
-    await provider.cancelSubscription({ subscriptionId: sub.provider_subscription_id });
+    try {
+      await provider.cancelSubscription({ subscriptionId: sub.provider_subscription_id });
+    } catch (err) {
+      throw new AppError(
+        describeProviderError(err, 'Could not cancel your subscription with the payment provider.'),
+        502, 'SUBSCRIPTION_PROVIDER_CANCEL_ERROR',
+      );
+    }
 
     await db.update(schema.subscriptions)
       .set({ billing_status: 'cancelled' })
@@ -373,6 +518,44 @@ export const subscriptionService = {
       .where(eq(schema.subscriptions.user_id, userId)).limit(1);
     if (!subRows.length) return null;
     return subRows[0];
+  },
+
+  /**
+   * Real billing history for a member — derived entirely from audit-log
+   * events written at the moment money actually moved (a provider
+   * subscription being created/upgraded, a Stripe renewal invoice, or a
+   * Flutterwave renewal charge). There is no separate invoices table, so a
+   * member who has never been billed simply gets an empty array back — no
+   * mock/placeholder rows are ever fabricated here.
+   */
+  async getBillingHistory(userId: string, limit = 50): Promise<BillingHistoryEntry[]> {
+    const rows = await db.select().from(schema.auditLogs)
+      .where(and(eq(schema.auditLogs.user_id, userId), inArray(schema.auditLogs.action, BILLING_HISTORY_ACTIONS)))
+      .orderBy(desc(schema.auditLogs.created_at))
+      .limit(limit);
+
+    return rows.map((row) => {
+      const metadata = (row.metadata ?? {}) as Record<string, unknown>;
+      const provider: 'stripe' | 'flutterwave' | null = row.action.startsWith('STRIPE')
+        ? 'stripe'
+        : row.action.startsWith('FLW')
+          ? 'flutterwave'
+          : null;
+      const status: 'paid' | 'failed' = row.action === 'STRIPE_INVOICE_FAILED'
+        || (row.action === 'FLW_SUBSCRIPTION_RENEWAL_CHARGED' && metadata.status !== 'succeeded')
+        ? 'failed'
+        : 'paid';
+      const tier = isSubscriptionTierKey(metadata.tier) ? metadata.tier : null;
+
+      return {
+        id: row.id,
+        date: row.created_at,
+        status,
+        provider,
+        tier,
+        amount_display: typeof metadata.amount_display === 'string' ? metadata.amount_display : null,
+      };
+    });
   },
 
   /**

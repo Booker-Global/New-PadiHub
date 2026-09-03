@@ -12,8 +12,26 @@ import { getStripeProvider } from '../integrations/payments/PaymentProviderFacto
 import { contributionService } from '../services/contributionService.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { notificationService } from '../services/notificationService.js';
-import { isSubscriptionTierKey } from '../lib/constants.js';
+import { isSubscriptionTierKey, type SubscriptionTierKey } from '../lib/constants.js';
 import { planCode } from '../services/subscriptionService.js';
+
+/** Recover the tier key ('basic'/'premium') from a stored plan code like 'gb_premium'. */
+function tierFromPlanCode(plan?: string | null): SubscriptionTierKey | null {
+  if (!plan) return null;
+  if (plan.endsWith('_premium')) return 'premium';
+  if (plan.endsWith('_basic')) return 'basic';
+  return null;
+}
+
+/** Format a Stripe invoice's charged amount (minor units) using its own currency, e.g. "£4.99". */
+function formatInvoiceAmount(amountMinorUnits: number | null | undefined, currency: string | null | undefined): string | null {
+  if (typeof amountMinorUnits !== 'number' || !currency) return null;
+  try {
+    return new Intl.NumberFormat('en-GB', { style: 'currency', currency: currency.toUpperCase() }).format(amountMinorUnits / 100);
+  } catch {
+    return null;
+  }
+}
 
 export async function stripeWebhookHandler(req: Request, res: Response, next: NextFunction) {
   const signature = req.headers['stripe-signature'] as string;
@@ -76,6 +94,7 @@ async function handleStripeEvent(event: Stripe.Event) {
 
       const subId = (invoice as unknown as Record<string, unknown>).subscription;
       const subIdStr = typeof subId === 'string' ? subId : (subId as Stripe.Subscription | null)?.id ?? '';
+      let sub: typeof schema.subscriptions.$inferSelect | undefined;
       if (subIdStr) {
         await db.update(schema.subscriptions)
           .set({ billing_status: 'active' })
@@ -87,7 +106,7 @@ async function handleStripeEvent(event: Stripe.Event) {
         // switchPlan for where pending_tier is set.
         const subRows = await db.select().from(schema.subscriptions)
           .where(eq(schema.subscriptions.provider_subscription_id, subIdStr)).limit(1);
-        const sub = subRows[0];
+        sub = subRows[0];
         if (sub?.pending_tier && isSubscriptionTierKey(sub.pending_tier)) {
           const userRows = await db.select({ id: schema.users.id, country: schema.users.country, subscription_tier: schema.users.subscription_tier })
             .from(schema.users).where(eq(schema.users.id, sub.user_id)).limit(1);
@@ -101,8 +120,12 @@ async function handleStripeEvent(event: Stripe.Event) {
       }
 
       await createAuditLog({
-        action: 'STRIPE_INVOICE_PAID', entity: 'subscriptions',
-        metadata: { customerId, invoiceId: invoice.id },
+        userId: sub?.user_id, action: 'STRIPE_INVOICE_PAID', entity: 'subscriptions',
+        metadata: {
+          customerId, invoiceId: invoice.id,
+          tier: tierFromPlanCode(sub?.plan),
+          amount_display: formatInvoiceAmount(invoice.amount_paid, invoice.currency),
+        },
       });
       break;
     }
@@ -118,10 +141,15 @@ async function handleStripeEvent(event: Stripe.Event) {
 
       const subId2 = (invoice as unknown as Record<string, unknown>).subscription;
       const subIdStr2 = typeof subId2 === 'string' ? subId2 : (subId2 as Stripe.Subscription | null)?.id ?? '';
+      let subForFailedInvoice: typeof schema.subscriptions.$inferSelect | undefined;
       if (subIdStr2) {
         await db.update(schema.subscriptions)
           .set({ billing_status: 'past_due' })
           .where(eq(schema.subscriptions.provider_subscription_id, subIdStr2));
+
+        const subRows2 = await db.select().from(schema.subscriptions)
+          .where(eq(schema.subscriptions.provider_subscription_id, subIdStr2)).limit(1);
+        subForFailedInvoice = subRows2[0];
       }
 
       // Notify the user
@@ -136,8 +164,12 @@ async function handleStripeEvent(event: Stripe.Event) {
       }
 
       await createAuditLog({
-        action: 'STRIPE_INVOICE_FAILED', entity: 'subscriptions',
-        metadata: { customerId, invoiceId: invoice.id },
+        userId: userRows[0]?.id, action: 'STRIPE_INVOICE_FAILED', entity: 'subscriptions',
+        metadata: {
+          customerId, invoiceId: invoice.id,
+          tier: tierFromPlanCode(subForFailedInvoice?.plan),
+          amount_display: formatInvoiceAmount(invoice.amount_due, invoice.currency),
+        },
       });
       break;
     }
