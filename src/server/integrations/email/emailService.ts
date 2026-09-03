@@ -677,8 +677,24 @@ export async function sendVoteOutcomeEmail(to: string, groupName: string, subjec
 // ─── Subscription emails ──────────────────────────────────────────────────────
 
 export async function sendSubscriptionCreatedEmail(
-  to: string, plan: string, amount: string, renewalDate: string,
+  to: string, plan: string, amount: string, renewalDate: string, billingDeferred = false,
 ): Promise<void> {
+  if (billingDeferred) {
+    // Section D.2 — billing stays inert until the member is verified in an
+    // active (3+ member) group; make that explicit so a "subscription
+    // confirmed" email is never mistaken for "you've been charged".
+    await send(to, 'Your PadiHub subscription is set up — billing is on hold', wrap(`
+      ${h2('Subscription set up — billing on hold')}
+      ${p('Your PadiHub subscription has been set up, but you have not been charged yet.')}
+      ${table(
+        detail('Plan', plan) +
+        detail('Amount', amount) +
+        detail('Billing starts', 'Once you join or launch an active group (3+ members)'),
+      )}
+      ${p('Billing will start automatically the moment you\'re a verified member of an active savings group — you won\'t need to do anything else.')}
+    `));
+    return;
+  }
   await send(to, 'Your PadiHub subscription is active', wrap(`
     ${h2('Subscription confirmed')}
     ${p('Your PadiHub subscription has been activated.')}
@@ -688,6 +704,20 @@ export async function sendSubscriptionCreatedEmail(
       detail('Next renewal', renewalDate),
     )}
     ${p('You now have full access to all PadiHub features.')}
+  `));
+}
+
+export async function sendSubscriptionBillingResumedEmail(
+  to: string, plan: string, amount: string, renewalDate: string,
+): Promise<void> {
+  await send(to, 'Your PadiHub subscription billing has started', wrap(`
+    ${h2('Billing has started')}
+    ${p('You\'re now a verified, active member of a launched savings group — your PadiHub subscription billing has started.')}
+    ${table(
+      detail('Plan', plan) +
+      detail('Amount', amount) +
+      detail('Next renewal', renewalDate),
+    )}
   `));
 }
 

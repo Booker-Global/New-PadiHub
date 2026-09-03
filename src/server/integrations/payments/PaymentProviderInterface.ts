@@ -72,19 +72,38 @@ export interface IPaymentProvider {
     recipientName?: string;       // Flutterwave only
   }): Promise<TransferResult>;
 
-  /** Create a recurring platform subscription */
+  /**
+   * Create a recurring platform subscription. When `deferBilling` is true,
+   * the subscription must be created WITHOUT attempting to collect any
+   * payment (Section D.2 — billing stays inert at signup and only starts
+   * once the member is verified in an active, 3+ member group). Callers
+   * flip this on the moment that condition is met via resumeBilling().
+   */
   createSubscription(params: {
     customerId: string;
     userId: string;
     email: string;
     currency: string;
     tier?: 'basic' | 'premium'; // which SUBSCRIPTION_TIERS plan to bill — defaults to 'basic'
+    deferBilling?: boolean;
   }): Promise<SubscriptionResult>;
 
   /** Cancel a subscription */
   cancelSubscription(params: {
     subscriptionId: string;
   }): Promise<{ cancelled: boolean }>;
+
+  /**
+   * Actually stop the provider from attempting to collect payment on this
+   * subscription (Stripe: pause_collection). No-op for providers (e.g.
+   * Flutterwave) that never bill automatically at the provider level —
+   * their billing is gated entirely by our own DB billing_status flag
+   * instead (see scheduledJobs.monthlySubscriptionRenewalCharge).
+   */
+  pauseBilling?(subscriptionId: string): Promise<void>;
+
+  /** Resume provider-side collection previously paused by pauseBilling(). */
+  resumeBilling?(subscriptionId: string): Promise<void>;
 
   /** Verify and parse an inbound webhook payload */
   handleWebhook(params: {

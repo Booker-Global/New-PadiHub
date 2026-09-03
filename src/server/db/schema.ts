@@ -362,11 +362,13 @@ export const subscriptions = mysqlTable('subscriptions', {
   provider:                mysqlEnum('provider', ['stripe', 'flutterwave']).notNull(),
   provider_subscription_id: varchar('provider_subscription_id', { length: 255 }),
   plan:                    varchar('plan', { length: 100 }).notNull().default('free'),
-  // 'paused': DB-level bookkeeping only (see scheduledJobs.dailyPauseBillingForZeroActiveGroups) —
-  // set when a user's active-group membership count hits exactly zero. Excluded from
-  // monthlySubscriptionRenewalCharge's Flutterwave renewal charging. Does not yet call
-  // Stripe's native pause_collection API, so a Stripe subscription may still self-bill;
-  // this is a known scoping limitation, not a silent bug.
+  // 'paused': set when a user's active-group membership count hits exactly
+  // zero (Section D.2 — billing must stay inert until the member is
+  // verified in an active 3+ member group). Excluded from
+  // monthlySubscriptionRenewalCharge's Flutterwave renewal charging. For
+  // Stripe, subscriptionService also calls the provider's real
+  // pause_collection API (see StripeProvider.pauseBilling/resumeBilling)
+  // so the card is genuinely never charged while paused, not just a DB flag.
   billing_status:          mysqlEnum('billing_status', ['active', 'past_due', 'cancelled', 'trialing', 'paused']).notNull().default('trialing'),
   renewal_date:            timestamp('renewal_date'),
   // A downgrade requested mid-cycle keeps the member on their current tier's

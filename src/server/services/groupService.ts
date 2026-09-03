@@ -141,6 +141,29 @@ export const groupService = {
    * touches 'draft' (handled by activateGroup), 'closed', or 'expired'
    * groups.
    */
+  /**
+   * Section D.2 — fire subscription-billing reconciliation immediately for
+   * a set of user IDs whenever their active-group-membership count could
+   * have just changed (group launched/suspended/reactivated, or an
+   * individual member's own status flips to/from 'active'). Dynamically
+   * imported to avoid a static circular dependency (subscriptionService
+   * already imports groupService) — same pattern used elsewhere in this
+   * codebase (see membershipService/voteService). Best-effort: a failure
+   * here must never fail the group/membership action that triggered it —
+   * scheduledJobs.dailyBillingActiveGroupReconciliation is the safety net.
+   */
+  async reconcileMemberBilling(userIds: string[]): Promise<void> {
+    if (!userIds.length) return;
+    try {
+      const { subscriptionService } = await import('./subscriptionService.js');
+      for (const userId of userIds) {
+        await subscriptionService.reconcileBillingForActiveGroupMembership(userId);
+      }
+    } catch (error) {
+      console.error('[GroupService] Failed to reconcile subscription billing for active group membership:', error);
+    }
+  },
+
   async reevaluateAfterMembershipChange(groupId: string): Promise<void> {
     const group = await this.getById(groupId);
     if (group.status !== 'active' && group.status !== 'suspended') return;
@@ -148,6 +171,9 @@ export const groupService = {
     const activeCount = await this.countActiveMembers(groupId);
 
     if (group.status === 'active' && activeCount < GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH) {
+      const memberUserIds = (await db.select({ user_id: schema.memberships.user_id }).from(schema.memberships)
+        .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')))).map(m => m.user_id);
+
       await db.update(schema.savingsGroups)
         .set({ status: 'suspended', suspended_at: new Date() })
         .where(eq(schema.savingsGroups.id, groupId));
@@ -159,6 +185,7 @@ export const groupService = {
       });
       const leaderRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, group.leader_id)).limit(1);
       if (leaderRow.length) await sendGroupSuspendedLowMembersEmail(leaderRow[0].email, group.name, activeCount, GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH);
+      await this.reconcileMemberBilling(memberUserIds);
       return;
     }
 
@@ -174,6 +201,10 @@ export const groupService = {
       });
       const leaderRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, group.leader_id)).limit(1);
       if (leaderRow.length) await sendGroupReactivatedEmail(leaderRow[0].email, group.name);
+
+      const memberUserIds = (await db.select({ user_id: schema.memberships.user_id }).from(schema.memberships)
+        .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')))).map(m => m.user_id);
+      await this.reconcileMemberBilling(memberUserIds);
     }
   },
 
@@ -516,6 +547,12 @@ export const groupService = {
       });
       await sendGroupActivatedEmail(u.email, group.name);
     }
+
+    // Section D.2 — every member just became verified in an active (3+
+    // member) group for the first time this cycle; resume any deferred
+    // subscription billing immediately rather than waiting for the nightly
+    // safety-net job.
+    await this.reconcileMemberBilling(memberUserIds);
 
     return this.getById(groupId);
   },

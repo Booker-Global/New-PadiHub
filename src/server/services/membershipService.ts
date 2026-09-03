@@ -208,6 +208,9 @@ export const membershipService = {
       // here; draft groups only launch via the leader's explicit "Start
       // Group" action (groupService.activateGroup), never automatically.
       await groupService.reevaluateAfterMembershipChange(groupId);
+      // Section D.2 — this member just became active in this group; if it's
+      // their first active group, resume any deferred billing immediately.
+      await groupService.reconcileMemberBilling([userId]);
 
       return { success: true, status: 'active' as const, message: 'You have joined the group.' };
     }
@@ -330,6 +333,9 @@ export const membershipService = {
     }
 
     await groupService.reevaluateAfterMembershipChange(group.id);
+    // Section D.2 — this member just became active in this group; if it's
+    // their first active group, resume any deferred billing immediately.
+    await groupService.reconcileMemberBilling([membership.user_id]);
 
     return { success: true, rotation_order: nextRotationOrder };
   },
@@ -655,6 +661,10 @@ export const membershipService = {
     }
 
     await groupService.reevaluateAfterMembershipChange(groupId);
+    // Section D.2 — the departed member's own active-group-membership count
+    // may have just hit zero (if this was their only active group); pause
+    // their billing immediately rather than waiting for the nightly sweep.
+    await groupService.reconcileMemberBilling([userId]);
     return true;
   },
 

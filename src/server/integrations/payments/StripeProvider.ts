@@ -99,6 +99,7 @@ export class StripeProvider implements IPaymentProvider {
 
   async createSubscription(params: {
     customerId: string; userId: string; email: string; currency: string; tier?: 'basic' | 'premium';
+    deferBilling?: boolean;
   }): Promise<SubscriptionResult> {
     const stripe = getStripe();
     // Basic (£4.99/mo) and Premium (£14.99/mo) are separate Stripe
@@ -111,11 +112,18 @@ export class StripeProvider implements IPaymentProvider {
       throw new Error(`${params.tier === 'premium' ? 'STRIPE_PRICE_ID_PREMIUM_MONTHLY' : 'STRIPE_PRICE_ID_BASIC_MONTHLY'} environment variable is not set.`);
     }
 
+    // Section D.2 — billing must stay inert until the member is verified in
+    // an active (3+ member) group. pause_collection: 'void' tells Stripe to
+    // never generate/attempt an invoice for this subscription while set, so
+    // the card is genuinely never charged at signup — this is the real
+    // provider-level defer, not just a DB flag subscriptionService also
+    // keeps in sync (see resumeBilling/pauseBilling below).
     const subscription = await stripe.subscriptions.create({
       customer: params.customerId,
       items:    [{ price: priceId }],
       metadata: { padihub_user_id: params.userId },
       payment_behavior: 'default_incomplete',
+      ...(params.deferBilling ? { pause_collection: { behavior: 'void' as const } } : {}),
     }) as unknown as Stripe.Subscription & { current_period_end: number };
 
     const renewalDate = new Date(subscription.current_period_end * 1000);
@@ -130,6 +138,18 @@ export class StripeProvider implements IPaymentProvider {
     const stripe = getStripe();
     await stripe.subscriptions.cancel(params.subscriptionId);
     return { cancelled: true };
+  }
+
+  /** Section D.2 — actually stop Stripe from attempting to collect payment. */
+  async pauseBilling(subscriptionId: string): Promise<void> {
+    const stripe = getStripe();
+    await stripe.subscriptions.update(subscriptionId, { pause_collection: { behavior: 'void' } });
+  }
+
+  /** Section D.2 — resume real Stripe collection once the member is verified in an active (3+ member) group. */
+  async resumeBilling(subscriptionId: string): Promise<void> {
+    const stripe = getStripe();
+    await stripe.subscriptions.update(subscriptionId, { pause_collection: null });
   }
 
   async handleWebhook(params: { rawBody: Buffer; signature: string }): Promise<WebhookResult> {
