@@ -75,6 +75,20 @@ function getBaseAppUrl() {
   }
 }
 
+/**
+ * Validates a client-supplied `next` return path (e.g. so a member can be
+ * brought back to an invite's join page after finishing payment/payout
+ * setup via an external hosted-checkout redirect) is a safe, same-origin
+ * relative path — never an absolute/external URL — before it's embedded in
+ * a Stripe/Flutterwave return URL.
+ */
+function sanitizeReturnPath(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('/') || trimmed.startsWith('//')) return undefined;
+  return trimmed;
+}
+
 function buildFlutterwaveSetupTxRef(userId: string, contributionId: string) {
   return `${FLUTTERWAVE_SETUP_TX_REF_PREFIX}__${userId}__${contributionId}__${randomUUID()}`;
 }
@@ -325,11 +339,12 @@ export const paymentController = {
   createFlutterwavePaymentLink: async (req: Request, res: Response, next: NextFunction) => {
     try {
       const userId = req.user!.userId;
-      const { contribution_id, terms_accepted, setup_mode, billing_address } = req.body as {
+      const { contribution_id, terms_accepted, setup_mode, billing_address, next: nextPath } = req.body as {
         contribution_id?: string;
         terms_accepted?: boolean;
         setup_mode?: 'add' | 'change';
         billing_address?: { line1?: string; city?: string; postal_code?: string };
+        next?: string;
       };
       if (terms_accepted !== true) {
         throw new AppError('You must accept the payment terms & conditions to save a payment method.', 400, 'TERMS_NOT_ACCEPTED');
@@ -363,6 +378,8 @@ export const paymentController = {
         currency = user.currency;
         country = user.country;
         redirectUrl = new URL('/payments/methods', getBaseAppUrl());
+        const sanitizedNext = sanitizeReturnPath(nextPath);
+        if (sanitizedNext) redirectUrl.searchParams.set('next', sanitizedNext);
       }
 
       const verificationAmount = getFlutterwaveSetupAmount();
@@ -556,8 +573,8 @@ export const paymentController = {
       // have to re-type them; Stripe's hosted onboarding link is only used
       // for whatever requirements are still outstanding afterwards (normally
       // identity verification), and is skipped entirely if nothing is due.
-      const { account_holder_name, sort_code, account_number: uk_account_number } = req.body as {
-        account_holder_name?: string; sort_code?: string; account_number?: string;
+      const { account_holder_name, sort_code, account_number: uk_account_number, next: nextPath } = req.body as {
+        account_holder_name?: string; sort_code?: string; account_number?: string; next?: string;
       };
       if (!account_holder_name || !sort_code || !uk_account_number) {
         throw new AppError('account_holder_name, sort_code, and account_number are required for UK accounts.', 400);
@@ -590,8 +607,9 @@ export const paymentController = {
         await createAuditLog({ userId, action: 'STRIPE_EXTERNAL_ACCOUNT_ATTACHED', entity: 'users', entityId: userId });
 
         const outstanding = await stripeProvider.getOutstandingRequirements(accountId);
+        const sanitizedNext = sanitizeReturnPath(nextPath);
         const onboardingUrl = outstanding.length
-          ? (await stripeProvider.createOnboardingLink(accountId, hadVerifiedPayoutDestination ? 'change' : 'add')).onboardingUrl
+          ? (await stripeProvider.createOnboardingLink(accountId, hadVerifiedPayoutDestination ? 'change' : 'add', sanitizedNext)).onboardingUrl
           : undefined;
 
         res.json({ success: true, data: { accountId, onboardingUrl } });

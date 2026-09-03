@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Helmet } from '@dr.pogodin/react-helmet';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { ChevronLeft, CreditCard, CheckCircle, Shield, XCircle, ArrowRight, RefreshCw } from 'lucide-react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { MotionDiv } from '@/lib/motion-safe';
@@ -11,6 +11,22 @@ import { getValidSession } from '@/lib/session';
 
 const fadeUp = { hidden: { opacity: 0, y: 16 }, visible: { opacity: 1, y: 0, transition: { duration: 0.4, ease: 'easeOut' as const } } };
 const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.07 } } };
+
+/** Mirrors src/pages/verify-identity.tsx's getReturnPath/getReturnLabel — a
+ * member who arrived here from an invite's onboarding checklist (join.tsx)
+ * needs a way back, otherwise they're stranded after choosing a plan and
+ * never actually finish joining. */
+function getReturnPath(searchParams: { get(name: string): string | null }) {
+  const candidate = searchParams.get('redirect') || searchParams.get('next');
+  if (!candidate || !candidate.startsWith('/') || candidate.startsWith('//')) return null;
+  return candidate;
+}
+
+function getReturnLabel(path: string) {
+  if (path.includes('/join')) return 'Continue joining the group';
+  if (path === '/savings-groups/create') return 'Continue creating your group';
+  return 'Continue';
+}
 
 const tierConfig = {
   basic: {
@@ -88,6 +104,8 @@ function getCountryFromStatus(status?: SubscriptionStatus | null): CountryCode |
 }
 
 export default function ManageMembershipPage() {
+  const [searchParams] = useSearchParams();
+  const returnPath = getReturnPath(searchParams);
   const [loading, setLoading] = useState(true);
   const [pageError, setPageError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -353,6 +371,18 @@ export default function ManageMembershipPage() {
               <p className="text-gray-500 text-sm">Update your monthly plan and billing settings</p>
             </div>
           </MotionDiv>
+
+          {returnPath && (
+            <MotionDiv variants={fadeUp} className="mb-4">
+              <Link
+                to={returnPath}
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-bold text-white"
+                style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}
+              >
+                <ArrowRight size={14} /> {getReturnLabel(returnPath)}
+              </Link>
+            </MotionDiv>
+          )}
 
           {pageError && (
             <MotionDiv variants={fadeUp} className="mb-4">

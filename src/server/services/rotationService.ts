@@ -152,6 +152,17 @@ export const rotationService = {
       .orderBy(desc(schema.rotations.cycle_number));
   },
 
+  /** Every rotation payout a user has ever been the recipient of, across all
+   * of their groups — powers the cross-group "Contributions & Payouts at a
+   * glance" summary on the Savings Groups list page. Mirrors
+   * contributionService.getForMember()'s member-scoped (not group-scoped)
+   * query shape. */
+  async getForUser(userId: string) {
+    return db.select().from(schema.rotations)
+      .where(eq(schema.rotations.recipient_id, userId))
+      .orderBy(desc(schema.rotations.cycle_number));
+  },
+
   async createForCycle(groupId: string, cycleNumber: number, recipientId: string, payoutDate: Date) {
     
     const id = uuidv4();
