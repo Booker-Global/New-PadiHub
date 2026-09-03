@@ -110,8 +110,13 @@ app.post('/api/identity/verify/webhook',
   stripeIdentityWebhook,
 );
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Default express.json() body limit is 100kb — far too small for a profile
+// picture uploaded as a base64 data URL (see profile/edit.tsx's FileReader
+// readAsDataURL), which was crashing PUT /api/users/profile with
+// "PayloadTooLargeError: request entity too large". 10mb comfortably covers
+// a base64-encoded photo while still bounding request size.
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // ── Security headers + CORS ───────────────────────────────────────────────────
 app.use(helmet({

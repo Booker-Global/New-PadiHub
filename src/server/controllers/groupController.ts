@@ -64,7 +64,13 @@ const createSchema = baseGroupSchema.superRefine(refinePayoutDay).superRefine(re
 
 const updateSchema = baseGroupSchema.partial().omit({
   country: true, currency: true,
-  contribution_amount: true, contribution_frequency: true,
+  // contribution_frequency (daily/weekly/monthly) is fixed at creation —
+  // changing it would invalidate payout_day's meaning (day-of-week vs
+  // day-of-month) and every already-scheduled rotation date. Contribution
+  // amount and payout_day themselves ARE editable by the Owner (Section
+  // K.5) — see groupService.update() for the payout_day re-validation
+  // against the group's existing (unchanged) frequency.
+  contribution_frequency: true,
   // Lifecycle length is a one-time choice made at creation — never editable
   // afterwards (see groupService.scheduleClosure for the one allowed
   // post-creation change: an indefinite group's Owner scheduling closure).

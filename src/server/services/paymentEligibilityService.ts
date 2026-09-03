@@ -23,6 +23,7 @@ type EligibilityUser = {
   country: string;
   email_verified: boolean;
   identity_verified: boolean;
+  subscription_status: 'free' | 'trial' | 'active' | 'expired' | 'cancelled';
   subscription_tier: 'basic' | 'premium' | null;
   stripe_payment_method_id: string | null;
   stripe_connected_account_id: string | null;
@@ -63,6 +64,7 @@ export async function getPaymentEligibility(userId: string) {
     country:                      schema.users.country,
     email_verified:               schema.users.email_verified,
     identity_verified:            schema.users.identity_verified,
+    subscription_status:          schema.users.subscription_status,
     subscription_tier:            schema.users.subscription_tier,
     stripe_payment_method_id:     schema.users.stripe_payment_method_id,
     stripe_connected_account_id:  schema.users.stripe_connected_account_id,
@@ -89,17 +91,19 @@ export async function getPaymentEligibility(userId: string) {
   const emailVerified = Boolean(user.email_verified);
   const identityVerified = Boolean(user.identity_verified);
   const subscriptionTierSelected = user.subscription_tier === 'basic' || user.subscription_tier === 'premium';
+  const subscriptionActive = user.subscription_status === 'active' || user.subscription_status === 'trial';
 
   return {
     emailVerified,
     identityVerified,
     subscriptionTierSelected,
+    subscriptionActive,
     subscriptionTier: user.subscription_tier,
     hasPaymentMethod,
     paymentMethodVerified,
     hasPayout,
     payoutVerified,
-    ready: emailVerified && identityVerified && subscriptionTierSelected && paymentMethodVerified && payoutVerified,
+    ready: emailVerified && identityVerified && subscriptionTierSelected && subscriptionActive && paymentMethodVerified && payoutVerified,
   };
 }
 
@@ -184,9 +188,9 @@ async function notifyOnboardingComplete(userId: string, tier: SubscriptionTierKe
 /**
  * Throws a 403 error unless the user has completed EVERY onboarding step
  * required before creating or joining a savings group: verified email,
- * verified identity, a chosen subscription tier, a verified payment method,
- * and a verified payout destination. Call before allowing a user to create
- * or join a savings group.
+ * verified identity, a chosen and ACTIVE subscription, a verified payment
+ * method, and a verified payout destination. Call before allowing a user to
+ * create or join a savings group.
  *
  * The message names the *next* missing step and links to the dashboard page
  * that completes it (never an API route), so a blocked member always knows

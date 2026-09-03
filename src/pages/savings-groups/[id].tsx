@@ -21,6 +21,7 @@ import {
   ThumbsUp,
   ThumbsDown,
   PlayCircle,
+  Settings,
 } from 'lucide-react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { Button } from '@/components/ui/button';
@@ -32,6 +33,9 @@ import { getValidSession } from '@/lib/session';
 // verified (active) members; the backend is the real gate, this is just for
 // disabling the "Start Group" button and showing progress up front.
 const GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH = 3;
+// Mirrors GROUP_MAX_MEMBERS in src/server/lib/constants.ts — the backend is
+// the real gate, this only bounds the "Edit Group" member-count input.
+const GROUP_MAX_MEMBERS_LIMIT = 20;
 
 const fadeUp = {
   hidden: { opacity: 0, y: 16 },
@@ -51,7 +55,9 @@ interface SavingsGroup {
   currency: 'GBP' | 'NGN';
   contribution_amount: string | number;
   contribution_frequency: 'daily' | 'weekly' | 'monthly';
+  payout_day?: number | null;
   maximum_members: number;
+  min_trust_score: number;
   rotation_method: 'manual' | 'random' | 'trust_score';
   current_rotation_position: number;
   current_cycle: number;
@@ -258,6 +264,14 @@ export default function SavingsGroupDetailPage() {
   const [inviteNotice, setInviteNotice] = useState('');
   const [inviteLink, setInviteLink] = useState('');
   const [inviteToken, setInviteToken] = useState('');
+  const [editOpen, setEditOpen] = useState(false);
+  const [editMaxMembers, setEditMaxMembers] = useState('');
+  const [editMinTrustScore, setEditMinTrustScore] = useState('');
+  const [editContributionAmount, setEditContributionAmount] = useState('');
+  const [editPayoutDay, setEditPayoutDay] = useState('');
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState('');
+  const [editNotice, setEditNotice] = useState('');
   const [membershipActionId, setMembershipActionId] = useState<string | null>(null);
   const [membershipActionError, setMembershipActionError] = useState('');
   const [admissionVoteId, setAdmissionVoteId] = useState<string | null>(null);
@@ -648,6 +662,67 @@ export default function SavingsGroupDetailPage() {
       setInviteError('Network error. Please check your connection and try again.');
     } finally {
       setInviteLoading(false);
+    }
+  };
+
+  const openEditModal = () => {
+    if (!group) return;
+    setEditMaxMembers(String(group.maximum_members));
+    setEditMinTrustScore(String(group.min_trust_score ?? 0));
+    setEditContributionAmount(String(group.contribution_amount ?? ''));
+    setEditPayoutDay(group.payout_day !== null && group.payout_day !== undefined ? String(group.payout_day) : '');
+    setEditError('');
+    setEditNotice('');
+    setEditOpen(true);
+  };
+
+  const closeEditModal = () => {
+    setEditOpen(false);
+    setEditSaving(false);
+    setEditError('');
+    setEditNotice('');
+  };
+
+  const handleSaveEdit = async () => {
+    if (!id || !group) return;
+
+    const activeSession = getValidSession();
+    if (!activeSession?.token) {
+      setEditError('Please log in to edit this group.');
+      return;
+    }
+
+    setEditSaving(true);
+    setEditError('');
+    setEditNotice('');
+
+    try {
+      const response = await window.fetch(`/api/groups/${id}`, {
+        method: 'PUT',
+        headers: {
+          Authorization: 'Bearer ' + activeSession.token,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          maximum_members: Number(editMaxMembers),
+          min_trust_score: Number(editMinTrustScore),
+          contribution_amount: editContributionAmount,
+          payout_day: editPayoutDay !== '' ? Number(editPayoutDay) : undefined,
+        }),
+      });
+
+      const json = await response.json() as ApiResponse<SavingsGroup>;
+      if (!response.ok) {
+        setEditError(getErrorMessage(json, 'Could not save these changes right now.'));
+        return;
+      }
+
+      if (json.data) setGroup(json.data);
+      setEditNotice('Group settings saved. Active members have been notified.');
+    } catch {
+      setEditError('Network error. Please check your connection and try again.');
+    } finally {
+      setEditSaving(false);
     }
   };
 
@@ -1141,12 +1216,19 @@ export default function SavingsGroupDetailPage() {
               </div>
 
               <div className="flex gap-2 mt-4 flex-wrap">
-                <button onClick={openInviteModal} className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all hover:bg-white/10" style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.75)' }}>
-                  <UserPlus size={12} /> Invite
-                </button>
-                <button onClick={openInviteModal} className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all hover:bg-white/10" style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.75)' }}>
-                  <Share2 size={12} /> Share
-                </button>
+                {group.leader_id === currentUserId && (
+                  <>
+                    <button onClick={openInviteModal} className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all hover:bg-white/10" style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.75)' }}>
+                      <UserPlus size={12} /> Invite
+                    </button>
+                    <button onClick={openInviteModal} className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all hover:bg-white/10" style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.75)' }}>
+                      <Share2 size={12} /> Share
+                    </button>
+                    <button onClick={openEditModal} className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all hover:bg-white/10" style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.75)' }}>
+                      <Settings size={12} /> Edit Group
+                    </button>
+                  </>
+                )}
                 <Link to={`/savings-groups/${group.id}/leave`} className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all hover:bg-white/10" style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.75)' }}>
                   <LogOut size={12} /> Leave
                 </Link>
@@ -1529,9 +1611,10 @@ export default function SavingsGroupDetailPage() {
                         </div>
                       )}
 
-                      {group.leader_id === currentUserId && (
+                      {currentMembership?.status === 'active' && (
                         <div className="rounded-2xl p-3 mb-4" style={{ background: '#F9FAFB', border: '1px solid #F3F4F6' }}>
                           <p className="text-xs font-bold text-gray-900 mb-2">Propose a contribution increase</p>
+                          <p className="text-[11px] text-gray-400 mb-2">Every other active member must unanimously agree within 48 hours. If passed, the higher amount applies until everyone has received a payout at that level this cycle, then it reverts.</p>
                           <div className="flex items-center gap-2 flex-wrap">
                             <input
                               type="number"
@@ -1760,6 +1843,55 @@ export default function SavingsGroupDetailPage() {
                   <Button variant="outline" onClick={closeInviteModal} className="flex-1 rounded-2xl font-semibold">Close</Button>
                   <Button onClick={() => void handleCreateInvite()} disabled={inviteLoading} className="flex-1 rounded-2xl font-bold" style={{ background: '#2EAF6F', color: '#fff' }}>
                     {inviteLoading ? 'Sending…' : inviteEmail.trim() ? 'Send invite' : 'Create link'}
+                  </Button>
+                </div>
+              </div>
+            </MotionDiv>
+          </>
+        )}
+
+        {editOpen && group && (
+          <>
+            <MotionDiv initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm" onClick={closeEditModal} />
+            <MotionDiv initial={{ opacity: 0, scale: 0.96, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 20 }} transition={{ type: 'spring', stiffness: 350, damping: 28 }} className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
+              <div className="bg-white rounded-3xl shadow-2xl p-7 w-full max-w-md pointer-events-auto relative max-h-[90vh] overflow-y-auto">
+                <h2 className="text-xl font-extrabold text-gray-900 mb-2" style={{ fontFamily: 'Nunito, sans-serif' }}>Edit group settings</h2>
+                <p className="text-sm text-gray-500 mb-5">Changes apply immediately and every active member is notified by email.</p>
+
+                {editError && (
+                  <div style={{ borderRadius: 16, padding: 16, fontSize: 14, fontWeight: 500, background: '#FEF2F2', color: '#DC2626', border: '1px solid #FECACA', marginBottom: 16 }}>
+                    {editError}
+                  </div>
+                )}
+                {editNotice && (
+                  <div style={{ borderRadius: 16, padding: 16, fontSize: 14, fontWeight: 500, background: '#F0FDF4', color: '#15803D', border: '1px solid #BBF7D0', marginBottom: 16 }}>
+                    {editNotice}
+                  </div>
+                )}
+
+                <label className="block text-sm font-bold text-gray-700 mb-1.5">Contribution amount ({group.currency})</label>
+                <input value={editContributionAmount} onChange={event => setEditContributionAmount(event.target.value)} type="text" inputMode="decimal" placeholder="0.00" className="w-full px-4 py-3 rounded-2xl border border-gray-200 text-sm focus:outline-none focus:border-green-400 transition-colors mb-4" />
+
+                {group.contribution_frequency !== 'daily' && (
+                  <>
+                    <label className="block text-sm font-bold text-gray-700 mb-1.5">
+                      {group.contribution_frequency === 'weekly' ? 'Payout day of week (0=Sunday .. 6=Saturday)' : 'Payout day of month (1-31)'}
+                    </label>
+                    <input value={editPayoutDay} onChange={event => setEditPayoutDay(event.target.value)} type="number" min={group.contribution_frequency === 'weekly' ? 0 : 1} max={group.contribution_frequency === 'weekly' ? 6 : 31} className="w-full px-4 py-3 rounded-2xl border border-gray-200 text-sm focus:outline-none focus:border-green-400 transition-colors mb-4" />
+                  </>
+                )}
+
+                <label className="block text-sm font-bold text-gray-700 mb-1.5">Maximum members (3-{GROUP_MAX_MEMBERS_LIMIT})</label>
+                <input value={editMaxMembers} onChange={event => setEditMaxMembers(event.target.value)} type="number" min={3} max={GROUP_MAX_MEMBERS_LIMIT} className="w-full px-4 py-3 rounded-2xl border border-gray-200 text-sm focus:outline-none focus:border-green-400 transition-colors mb-4" />
+
+                <label className="block text-sm font-bold text-gray-700 mb-1.5">Minimum Trust Score™ for new join requests</label>
+                <p className="text-xs text-gray-400 mb-1.5">Only applies to members who request to join themselves — never to people you invite directly.</p>
+                <input value={editMinTrustScore} onChange={event => setEditMinTrustScore(event.target.value)} type="number" min={0} max={100} className="w-full px-4 py-3 rounded-2xl border border-gray-200 text-sm focus:outline-none focus:border-green-400 transition-colors mb-4" />
+
+                <div className="flex gap-3">
+                  <Button variant="outline" onClick={closeEditModal} className="flex-1 rounded-2xl font-semibold">Close</Button>
+                  <Button onClick={() => void handleSaveEdit()} disabled={editSaving} className="flex-1 rounded-2xl font-bold" style={{ background: '#2EAF6F', color: '#fff' }}>
+                    {editSaving ? 'Saving…' : 'Save changes'}
                   </Button>
                 </div>
               </div>

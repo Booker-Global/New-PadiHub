@@ -50,6 +50,10 @@ function describeProviderError(err: unknown, fallback: string): string {
   return fallback;
 }
 
+function isStripeSubscriptionAwaitingConfirmation(country: string, providerStatus: string): boolean {
+  return country === 'GB' && providerStatus === 'incomplete';
+}
+
 type PlanSelectionResult = { tier: SubscriptionTierKey; plan: string; monthly_amount: number };
 type PlanSwitchResult = {
   tier: SubscriptionTierKey;
@@ -296,6 +300,13 @@ export const subscriptionService = {
         formatTierPrice(tier, country),
         result.renewalDate ? result.renewalDate.toLocaleDateString('en-GB') : 'your next billing date',
       );
+    } else if (isStripeSubscriptionAwaitingConfirmation(country, result.status)) {
+      await notificationService.create({
+        userId,
+        type: 'subscription_payment_pending',
+        title: 'Complete payment verification',
+        message: 'Your bank still needs an extra verification step before your subscription can go active. Once payment is confirmed, your access will update automatically.',
+      });
     } else {
       await notificationService.create({
         userId,
@@ -421,14 +432,24 @@ export const subscriptionService = {
       });
 
       if (!upgradeBillingIsActive) {
-        upgradeBillingFailed = true;
-        await notificationService.create({
-          userId,
-          type: 'subscription_payment_failed',
-          title: 'Payment could not be completed',
-          message: 'We could not confirm payment for your upgraded plan. Please check your card details or complete any additional verification your bank requires.',
-        });
-        await sendSubscriptionPaymentFailedEmail(user.email, newAmount);
+        if (isStripeSubscriptionAwaitingConfirmation(user.country, result.status)) {
+          upgradeBillingFailed = true;
+          await notificationService.create({
+            userId,
+            type: 'subscription_payment_pending',
+            title: 'Upgrade awaiting payment verification',
+            message: 'Your bank still needs an extra verification step before your upgraded plan can go active. Once payment is confirmed, your access will update automatically.',
+          });
+        } else {
+          upgradeBillingFailed = true;
+          await notificationService.create({
+            userId,
+            type: 'subscription_payment_failed',
+            title: 'Payment could not be completed',
+            message: 'We could not confirm payment for your upgraded plan. Please check your card details or complete any additional verification your bank requires.',
+          });
+          await sendSubscriptionPaymentFailedEmail(user.email, newAmount);
+        }
       }
     }
 

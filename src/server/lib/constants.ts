@@ -55,7 +55,7 @@ export const GROUP_DEFAULT_STRIKE_THRESHOLD     = 2; // missed contributions bef
 export const GROUP_DEFAULT_SUSPENSION_THRESHOLD = 3; // max permitted contribution defaults before Compensated Compression removes the member
 export const GROUP_DEFAULT_VOTING_THRESHOLD     = 51; // % of votes required to pass a group decision
 export const GROUP_DEFAULT_MIN_TRUST_SCORE      = 0; // no minimum Trust Score required to join, unless the creator sets one
-export const GROUP_MAX_MEMBERS                  = 10; // platform-wide hard cap for any savings group
+export const GROUP_MAX_MEMBERS                  = 20; // platform-wide hard cap for any savings group
 
 /**
  * Group launch/lifecycle rules (Draft → Active → Suspended → Expired) — see

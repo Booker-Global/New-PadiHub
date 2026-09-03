@@ -131,6 +131,8 @@ export default function DashboardPage() {
   const [contributions, setContributions] = useState<Contribution[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [onboarding, setOnboarding] = useState<OnboardingProgress | null>(null);
+  const createGroupBlockedByTier = onboarding?.subscription_tier === 'basic';
+  const createGroupHref = createGroupBlockedByTier ? '/subscription/manage' : '/savings-groups/create';
 
   const loadDashboard = useCallback(async () => {
     const session = getValidSession();
@@ -368,15 +370,19 @@ export default function DashboardPage() {
 
             {groups.length === 0 ? (
               <Link
-                to="/savings-groups/create"
+                to={createGroupHref}
                 className="rounded-3xl bg-white p-8 flex flex-col items-center justify-center text-center gap-3"
                 style={{ border: '1px dashed #D1D5DB' }}
               >
                 <div className="w-12 h-12 rounded-2xl flex items-center justify-center" style={{ background: '#2EAF6F18' }}>
                   <Plus className="w-6 h-6" style={{ color: '#2EAF6F' }} />
                 </div>
-                <p className="text-gray-900 font-bold">Create your first savings group</p>
-                <p className="text-gray-500 text-sm">You haven't joined or created any groups yet.</p>
+                <p className="text-gray-900 font-bold">{createGroupBlockedByTier ? 'Upgrade to create a savings group' : 'Create your first savings group'}</p>
+                <p className="text-gray-500 text-sm">
+                  {createGroupBlockedByTier
+                    ? 'Basic plans can join groups, but creating one is a Premium feature.'
+                    : 'You haven\'t joined or created any groups yet.'}
+                </p>
               </Link>
             ) : (
               <div className="space-y-3">
@@ -438,9 +444,9 @@ export default function DashboardPage() {
 
           {/* ── Quick actions ────────────────────────────────────────── */}
           <MotionDiv variants={fadeUp} className="mt-6 grid grid-cols-2 gap-3">
-            <Link to="/savings-groups/create">
-              <Button className="w-full h-12 rounded-2xl font-bold" style={{ background: '#2EAF6F' }}>
-                <Plus className="w-4 h-4 mr-2" /> Create Group
+            <Link to={createGroupHref}>
+              <Button className="w-full h-12 rounded-2xl font-bold" style={{ background: createGroupBlockedByTier ? '#0F172A' : '#2EAF6F' }}>
+                <Plus className="w-4 h-4 mr-2" /> {createGroupBlockedByTier ? 'Upgrade to Create' : 'Create Group'}
               </Button>
             </Link>
             <Link to="/savings-groups">
@@ -448,6 +454,11 @@ export default function DashboardPage() {
                 <Users className="w-4 h-4 mr-2" /> Browse Groups
               </Button>
             </Link>
+            {createGroupBlockedByTier && (
+              <p className="col-span-2 text-xs text-gray-500">
+                Basic plans can&apos;t create groups. Upgrade to Premium to create up to 3 groups.
+              </p>
+            )}
           </MotionDiv>
         </MotionDiv>
       </div>

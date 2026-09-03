@@ -29,11 +29,14 @@ export type OnboardingEligibility = {
   emailVerified: boolean;
   identityVerified: boolean;
   subscriptionTierSelected: boolean;
+  subscriptionActive: boolean;
   paymentMethodVerified: boolean;
   payoutVerified: boolean;
 };
 
 export function buildOnboardingSteps(eligibility: OnboardingEligibility): OnboardingStep[] {
+  const subscriptionAwaitingConfirmation = eligibility.subscriptionTierSelected && !eligibility.subscriptionActive;
+
   return [
     {
       key: 'email',
@@ -44,10 +47,12 @@ export function buildOnboardingSteps(eligibility: OnboardingEligibility): Onboar
     },
     {
       key: 'subscription',
-      label: 'Choose your subscription plan',
-      description: 'Pick Basic or Premium and accept the terms. Your subscription fee is only charged once you are part of a valid, active group with at least three members.',
+      label: subscriptionAwaitingConfirmation ? 'Complete your subscription payment' : 'Choose your subscription plan',
+      description: subscriptionAwaitingConfirmation
+        ? 'Your plan is selected, but your first subscription charge has not been confirmed yet. Complete any extra bank/card verification your payment provider asks for so your subscription can go active.'
+        : 'Pick Basic or Premium and accept the terms. Your subscription must go active before you can create or join savings groups.',
       href: '/subscription/manage',
-      complete: eligibility.subscriptionTierSelected,
+      complete: eligibility.subscriptionTierSelected && eligibility.subscriptionActive,
     },
     {
       key: 'payment_method',

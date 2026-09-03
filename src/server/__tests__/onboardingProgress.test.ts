@@ -5,6 +5,7 @@ const nothingDone: OnboardingEligibility = {
   emailVerified: false,
   identityVerified: false,
   subscriptionTierSelected: false,
+  subscriptionActive: false,
   paymentMethodVerified: false,
   payoutVerified: false,
 };
@@ -44,8 +45,18 @@ describe('buildOnboardingSteps', () => {
     expect(outstanding).toContain('payout');
   });
 
-  it('explains that the subscription fee only starts with a valid three-member group', () => {
+  it('keeps the subscription step incomplete until billing is active', () => {
+    const subscriptionStep = buildOnboardingSteps({
+      ...nothingDone,
+      subscriptionTierSelected: true,
+      subscriptionActive: false,
+    }).find(step => step.key === 'subscription');
+    expect(subscriptionStep?.complete).toBe(false);
+    expect(subscriptionStep?.label).toContain('payment');
+  });
+
+  it('explains that the subscription must go active before group access is allowed', () => {
     const subscriptionStep = buildOnboardingSteps(nothingDone).find(step => step.key === 'subscription');
-    expect(subscriptionStep?.description).toContain('three members');
+    expect(subscriptionStep?.description).toContain('go active');
   });
 });

@@ -398,6 +398,16 @@ export async function sendGroupReactivatedEmail(to: string, groupName: string): 
   `));
 }
 
+/** Notify every active member (except the Owner who made the change) that the group's settings/parameters were edited. */
+export async function sendGroupSettingsUpdatedEmail(to: string, groupName: string): Promise<void> {
+  await send(to, `${groupName}'s settings have been updated`, wrap(`
+    ${h2('Group settings updated')}
+    ${p(`The group leader has updated <strong>${groupName}</strong>'s settings — this may include the contribution amount, payout date, membership limit, or minimum Trust Score for new join requests.`)}
+    ${p('Sign in to your dashboard to review the latest details before your next contribution is due.')}
+    ${btn('View Group', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
+  `));
+}
+
 /** Notify the group leader that a group stuck below the minimum member count for 30 days has auto-expired. */
 export async function sendGroupExpiredEmail(to: string, groupName: string): Promise<void> {
   await send(to, `${groupName} has expired`, wrap(`
@@ -841,10 +851,10 @@ export async function sendIdentityVerificationFailedEmail(to: string, firstName:
 // ─── Onboarding completion ────────────────────────────────────────────────────
 
 /**
- * Sent once, the first time a member finishes every onboarding step:
- * confirmed email, verified identity, chosen subscription plan, saved payment
- * card and payout details. Confirms the tier they're on and spells out
- * exactly what that tier lets them do — see
+ * Sent once, the first time a member finishes every onboarding step AND their
+ * subscription is genuinely active: confirmed email, verified identity,
+ * chosen subscription plan, saved payment card and payout details. Confirms
+ * the tier they're on and spells out exactly what that tier lets them do — see
  * paymentEligibilityService.notifyOnboardingComplete().
  */
 export async function sendProfileSetupCompleteEmail(
@@ -865,7 +875,7 @@ export async function sendProfileSetupCompleteEmail(
     ${p(canCreate
       ? `You can now create up to <strong>${plan.maxGroupsCreate}</strong> savings groups and be a member of up to <strong>${plan.maxGroupsJoin}</strong> in total.`
       : `You can now join up to <strong>${plan.maxGroupsJoin}</strong> savings groups. Creating your own group is a Premium feature — you can upgrade at any time.`)}
-    ${p('Your subscription fee is only charged once you are part of a valid, active group with at least three members.')}
+    ${p('Your subscription is now active and your payment setup is complete. If a future renewal ever needs attention, we’ll email you right away.')}
     ${btn(canCreate ? 'Create or Join a Group' : 'Find a Group to Join', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
   `));
 }

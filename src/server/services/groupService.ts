@@ -20,7 +20,9 @@ import {
   sendGroupSuspendedLowMembersEmail,
   sendGroupReactivatedEmail,
   sendGroupCreatedEmail,
+  sendGroupSettingsUpdatedEmail,
 } from '../integrations/email/emailService.js';
+import { payoutDayBounds } from '../lib/payoutSchedule.js';
 
 function assignProvider(country: string) {
   return country === 'NG' ? 'flutterwave' : 'stripe';
@@ -372,6 +374,7 @@ export const groupService = {
 
   async update(groupId: string, leaderId: string, data: Partial<{
     name: string; description: string; maximum_members: number; min_trust_score: number;
+    contribution_amount: string; payout_day: number;
     strike_threshold: number; suspension_threshold: number;
     voting_threshold: number; allow_payout_swaps: boolean;
   }>, ipAddress?: string) {
@@ -379,8 +382,55 @@ export const groupService = {
     const group = await this.getById(groupId);
     if (group.leader_id !== leaderId) throw new AppError('Only the group leader can update this group.', 403);
 
+    // Never let the Owner shrink capacity below the members already active
+    // in the group — that would silently strand people already admitted.
+    if (data.maximum_members !== undefined) {
+      const activeCount = await this.countActiveMembers(groupId);
+      if (data.maximum_members < activeCount) {
+        throw new AppError(
+          `This group already has ${activeCount} active members — the maximum can't be set below that.`,
+          400,
+          'GROUP_MEMBER_LIMIT_BELOW_ACTIVE',
+        );
+      }
+    }
+
+    // payout_day's valid range depends on contribution_frequency, which is
+    // fixed at creation and never editable here — re-validate against the
+    // group's existing (unchanged) frequency rather than trusting the caller.
+    if (data.payout_day !== undefined) {
+      const bounds = payoutDayBounds(group.contribution_frequency);
+      if (bounds && (data.payout_day < bounds.min || data.payout_day > bounds.max)) {
+        throw new AppError(
+          `payout_day must be between ${bounds.min} and ${bounds.max} for ${group.contribution_frequency} groups.`,
+          400,
+          'INVALID_PAYOUT_DAY',
+        );
+      }
+    }
+
     await db.update(schema.savingsGroups).set(data).where(eq(schema.savingsGroups.id, groupId));
     await createAuditLog({ userId: leaderId, action: 'GROUP_UPDATED', entity: 'savings_groups', entityId: groupId, ipAddress });
+
+    // A permanent contribution-amount or payout-date change materially
+    // affects every member's expectations going forward — notify everyone,
+    // not just the Owner who made the change.
+    if (data.contribution_amount !== undefined || data.payout_day !== undefined || data.maximum_members !== undefined || data.min_trust_score !== undefined) {
+      const activeMembers = await db.select({ id: schema.users.id, email: schema.users.email })
+        .from(schema.memberships)
+        .innerJoin(schema.users, eq(schema.memberships.user_id, schema.users.id))
+        .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')));
+      for (const member of activeMembers) {
+        if (member.id === leaderId) continue;
+        await notificationService.create({
+          userId: member.id, type: 'group_settings_updated',
+          title: 'Group Settings Updated',
+          message: `"${group.name}"'s settings were updated by the group leader — check the group dashboard for the latest contribution amount, payout date, and membership rules.`,
+        });
+        await sendGroupSettingsUpdatedEmail(member.email, group.name);
+      }
+    }
+
     return this.getById(groupId);
   },
 

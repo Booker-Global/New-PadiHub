@@ -52,3 +52,14 @@ if ((window as any).__SSR_OK__ === true) {
 } else {
   createRoot(rootElement).render(tree);
 }
+
+// Clear the one-shot chunk-reload guard (see RouteErrorBoundary.tsx) once
+// the app has mounted successfully, so a *later* stale-chunk error in the
+// same browser tab (e.g. after another deploy happens mid-session) can
+// still trigger one more automatic recovery reload instead of being
+// silently suppressed for the rest of the session.
+try {
+  window.sessionStorage?.removeItem('padihub_chunk_reload_attempted');
+} catch {
+  // sessionStorage can throw in private-browsing/locked-down contexts; safe to ignore.
+}

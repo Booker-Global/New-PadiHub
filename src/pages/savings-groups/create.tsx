@@ -35,7 +35,9 @@ const TOTAL_STEPS = 7;
  * GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH and the API's `maximum_members` minimum.
  */
 const MIN_GROUP_MEMBERS = 3;
-const MAX_GROUP_MEMBERS = 10;
+// Mirrors GROUP_MAX_MEMBERS in src/server/lib/constants.ts — the backend is
+// the real gate; this only bounds the wizard's member-count stepper.
+const MAX_GROUP_MEMBERS = 20;
 const FIXED_GRACE_PERIOD_HOURS = 72;
 
 /** Mirrors SUBSCRIPTION_TIERS.premium.maxGroupsCreate in src/server/lib/constants.ts. */
