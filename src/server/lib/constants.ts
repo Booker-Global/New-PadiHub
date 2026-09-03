@@ -141,3 +141,12 @@ export function formatTierPrice(tier: SubscriptionTierKey, country: string): str
     ? `₦${SUBSCRIPTION_TIERS[tier].priceNGN.toLocaleString('en-NG')}`
     : `£${SUBSCRIPTION_TIERS[tier].priceGBP.toFixed(2)}`;
 }
+
+/**
+ * Human-readable country name for a 2-letter code, used in user-facing error
+ * messages (e.g. the cross-border group membership guard) — never expose the
+ * raw 'GB'/'NG' code to a member.
+ */
+export function countryDisplayName(country: string): string {
+  return country === 'NG' ? 'Nigeria' : 'the United Kingdom';
+}

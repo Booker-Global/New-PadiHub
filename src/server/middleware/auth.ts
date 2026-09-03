@@ -68,3 +68,31 @@ export function requireRole(...roles: string[]) {
     next();
   };
 }
+
+/**
+ * Best-effort auth for public endpoints that behave differently for signed-in
+ * visitors (e.g. group search, which must use the caller's own profile
+ * country rather than a client-supplied query param once they're logged in).
+ * Never rejects the request — an absent/invalid token just leaves
+ * `req.user` unset, same as an anonymous visitor.
+ */
+export async function optionalAuthenticate(req: Request, _res: Response, next: NextFunction) {
+  const header = req.headers.authorization;
+  if (!header?.startsWith('Bearer ')) return next();
+
+  try {
+    const payload = jwt.verify(header.slice(7), JWT_SECRET()) as unknown as JwtPayload;
+    const userRows = await db.select({
+      password_changed_at: schema.users.password_changed_at,
+      account_status:      schema.users.account_status,
+      active:              schema.users.active,
+    }).from(schema.users).where(eq(schema.users.id, payload.userId)).limit(1);
+    const user = userRows[0];
+    const tokenStillValid = user && user.active && user.account_status !== 'deactivated'
+      && (!user.password_changed_at || !payload.iat || payload.iat >= Math.floor(user.password_changed_at.getTime() / 1000));
+    if (tokenStillValid) req.user = payload;
+  } catch {
+    // Ignore — treat as anonymous.
+  }
+  next();
+}

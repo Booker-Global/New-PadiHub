@@ -8,7 +8,7 @@ import { notificationService } from './notificationService.js';
 import { trustScoreService } from './trustScoreService.js';
 import { groupService } from './groupService.js';
 import { assertPaymentSetupComplete } from './paymentEligibilityService.js';
-import { TRUST_SCORE_DELTA_MEMBER_SUSPENDED, SUBSCRIPTION_TIERS, isSubscriptionTierKey } from '../lib/constants.js';
+import { TRUST_SCORE_DELTA_MEMBER_SUSPENDED, SUBSCRIPTION_TIERS, isSubscriptionTierKey, countryDisplayName } from '../lib/constants.js';
 import {
   sendMemberRemovedEmail,
   sendMemberExitCompressionEmail,
@@ -65,13 +65,8 @@ export const membershipService = {
       );
     }
 
-    // Every member eventually contributes and receives a payout, so the full
-    // onboarding gate (email + identity + subscription tier + payment method
-    // + payout destination — all VERIFIED, not just started) applies before
-    // joining any group. Only verified members may even request to join.
-    await assertPaymentSetupComplete(userId);
-
     const userRows = await db.select({
+      country: schema.users.country,
       trust_score: schema.users.trust_score,
       subscription_tier: schema.users.subscription_tier,
       first_name: schema.users.first_name,
@@ -79,6 +74,24 @@ export const membershipService = {
     }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
     if (!userRows.length) throw new AppError('User not found.', 404);
     const user = userRows[0];
+
+    // Groups are strictly single-country — a UK member can never join a
+    // Nigeria-based group and vice versa — because contribution charging and
+    // payouts run through a single payment provider per group (Stripe/GBP
+    // for GB, Flutterwave/NGN for NG) and can't be split per-member.
+    if (user.country !== group.country) {
+      throw new AppError(
+        `This group is based in ${countryDisplayName(group.country)} and only accepts members registered in ${countryDisplayName(group.country)}. Your account is registered in ${countryDisplayName(user.country)}.`,
+        403,
+        'GROUP_COUNTRY_MISMATCH',
+      );
+    }
+
+    // Every member eventually contributes and receives a payout, so the full
+    // onboarding gate (email + identity + subscription tier + payment method
+    // + payout destination — all VERIFIED, not just started) applies before
+    // joining any group. Only verified members may even request to join.
+    await assertPaymentSetupComplete(userId);
 
     // Enforce the member's subscription-tier group-join limit (counts both
     // active memberships and outstanding pending requests).

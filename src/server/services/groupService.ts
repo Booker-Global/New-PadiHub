@@ -11,6 +11,7 @@ import {
   GROUP_DEFAULT_VOTING_THRESHOLD, GROUP_DEFAULT_MIN_TRUST_SCORE,
   SUBSCRIPTION_TIERS, isSubscriptionTierKey,
   GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH, GROUP_MAX_MEMBERS, clampGroupMaximumMembers, isDailyFrequencyAllowed,
+  countryDisplayName,
 } from '../lib/constants.js';
 import {
   sendGroupInvitationEmail,
@@ -156,6 +157,12 @@ export const groupService = {
    * eligible to join. Anonymous visitors can call this too (search itself
    * doesn't require an account — only *requesting to join* does).
    */
+  async getUserCountry(userId: string): Promise<string | null> {
+    const rows = await db.select({ country: schema.users.country })
+      .from(schema.users).where(eq(schema.users.id, userId)).limit(1);
+    return rows.length ? rows[0].country : null;
+  },
+
   async search(country: string, query?: string) {
     const rows = await db.select({
       id:                     schema.savingsGroups.id,
@@ -234,6 +241,19 @@ export const groupService = {
         'Identity verification is required before creating a group. Complete verification at /verify-identity.',
         403,
         'VERIFICATION_REQUIRED',
+      );
+    }
+
+    // A group's country (and therefore its payment provider — Stripe/GBP for
+    // GB, Flutterwave/NGN for NG) must match its creator's own account
+    // country. Every member added later is held to the same rule (see
+    // membershipService.join()/createInvitation() above), so this can never
+    // be a mixed-country group.
+    if (leaderRows.length && leaderRows[0].country !== data.country) {
+      throw new AppError(
+        `You can only create a group in ${countryDisplayName(leaderRows[0].country)}, matching your own account's country.`,
+        403,
+        'GROUP_COUNTRY_MISMATCH',
       );
     }
 
@@ -441,6 +461,26 @@ export const groupService = {
         400,
         'GROUP_FULL',
       );
+    }
+
+    // If the invited address already belongs to a registered PadiHub member,
+    // block the invite outright when their account is registered in a
+    // different country to this group — groups are strictly single-country
+    // (Stripe/GBP for GB, Flutterwave/NGN for NG) and can never mix members
+    // across the two payment rails. Brand-new invitees (no account yet)
+    // aren't checked here — they choose their own country at sign-up, and
+    // the same guard re-applies in membershipService.join() when they
+    // actually accept the invite.
+    if (email) {
+      const invitedUserRows = await db.select({ country: schema.users.country })
+        .from(schema.users).where(eq(schema.users.email, email.trim().toLowerCase())).limit(1);
+      if (invitedUserRows.length && invitedUserRows[0].country !== group.country) {
+        throw new AppError(
+          `${email} is registered in ${countryDisplayName(invitedUserRows[0].country)}, but this group is based in ${countryDisplayName(group.country)}. Groups can only include members from the same country.`,
+          400,
+          'GROUP_COUNTRY_MISMATCH',
+        );
+      }
     }
 
     const token = uuidv4();

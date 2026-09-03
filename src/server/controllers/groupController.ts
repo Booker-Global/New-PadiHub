@@ -69,17 +69,26 @@ export const groupController = {
   },
 
   /**
-   * GET /api/groups/search — public (no auth) group discovery, always scoped
-   * to a single country so members only see groups they're eligible to join
+   * GET /api/groups/search — group discovery, always scoped to a single
+   * country so members only see groups they're actually eligible to join
    * (per requirement: "Users should only be able to see groups in their
-   * location (UK or Nigeria) when searching"). The frontend resolves the
-   * country from the visitor's IP (see /api/geo) or, if logged in, from
-   * their profile country.
+   * location (UK or Nigeria) when searching"). Signed-in callers (a valid
+   * bearer token — see optionalAuthenticate) are scoped to their own
+   * server-verified profile country, ignoring any client-supplied
+   * `country` param, since group membership itself is enforced by profile
+   * country and search results must match. Anonymous visitors fall back to
+   * the `country` param the frontend resolves from IP (see /api/geo).
    */
   search: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const countryParam = (qsOpt(req.query.country) ?? 'GB').toUpperCase();
-      const country = countryParam === 'NG' ? 'NG' : 'GB';
+      let country: 'GB' | 'NG';
+      if (req.user) {
+        const profileCountry = await groupService.getUserCountry(req.user.userId);
+        country = profileCountry === 'NG' ? 'NG' : 'GB';
+      } else {
+        const countryParam = (qsOpt(req.query.country) ?? 'GB').toUpperCase();
+        country = countryParam === 'NG' ? 'NG' : 'GB';
+      }
       const data = await groupService.search(country, qsOpt(req.query.query));
       res.json({ success: true, data });
     } catch (e) { next(e); }

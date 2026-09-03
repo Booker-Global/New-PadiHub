@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState, useEffect, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { AnimatePresence } from 'motion/react';
@@ -216,6 +216,28 @@ export default function CreateGroupWizard() {
   const [inviteSummary, setInviteSummary] = useState<{ sent: string[]; failed: { email: string; reason: string }[] } | null>(null);
   const [missingSteps, setMissingSteps] = useState<OnboardingStep[]>([]);
   const verificationReturnPath = `${location.pathname}${location.search}`;
+
+  // Groups are strictly single-country (Stripe/GBP for GB, Flutterwave/NGN
+  // for NG members) — a group's currency must always match its creator's own
+  // account country, so the currency choice below is locked to it rather
+  // than left as a free pick that would fail server-side on submit.
+  useEffect(() => {
+    const session = getValidSession();
+    if (!session?.token) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await window.fetch('/api/users/profile', {
+          headers: { Authorization: 'Bearer ' + session.token },
+        });
+        const json = await response.json().catch(() => null) as ApiResponse<{ country?: 'GB' | 'NG' }> | null;
+        if (!cancelled && response.ok && json?.data?.country) {
+          setData(current => ({ ...current, currency: json.data?.country === 'NG' ? 'NGN' : 'GBP' }));
+        }
+      } catch { /* keep the default currency if this fails */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const normalizedAmount = useMemo(() => normalizeContributionAmount(data.amount), [data.amount]);
   const amountError = data.amount.trim() && !normalizedAmount
@@ -600,14 +622,12 @@ export default function CreateGroupWizard() {
                       </div>
                       <div>
                         <label className="text-sm font-bold text-gray-700 block mb-1.5">Currency</label>
-                        <select
-                          value={data.currency}
-                          onChange={event => set('currency', event.target.value as GroupData['currency'])}
-                          className="w-full px-4 py-3 rounded-2xl border border-gray-200 text-sm focus:outline-none focus:border-green-400 transition-colors bg-white"
-                        >
-                          <option value="GBP">GBP (£)</option>
-                          <option value="NGN">NGN (₦)</option>
-                        </select>
+                        <div className="w-full px-4 py-3 rounded-2xl border border-gray-200 text-sm bg-gray-50 text-gray-700 font-bold">
+                          {data.currency === 'NGN' ? 'NGN (₦)' : 'GBP (£)'}
+                        </div>
+                        <p className="text-xs text-gray-400 mt-1">
+                          Matches your account&apos;s country — every group can only include members from that same country.
+                        </p>
                       </div>
                     </div>
                     <div>

@@ -13,7 +13,7 @@ import health_get_1 from "./api/health/GET";
 import cors, { type CorsOptions } from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import { authenticate, requireRole } from './middleware/auth.js';
+import { authenticate, requireRole, optionalAuthenticate } from './middleware/auth.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { authController } from './controllers/authController.js';
 import { userController } from './controllers/userController.js';
@@ -212,7 +212,7 @@ app.get(   '/api/users/trust-history', authenticate, userController.getTrustHist
 
 // ── Groups ───────────────────────────────────────────────────────────�[...]
 app.get(   '/api/groups',                    authenticate, groupController.list);
-app.get(   '/api/groups/search',              groupController.search);
+app.get(   '/api/groups/search',              optionalAuthenticate, groupController.search);
 app.get(   '/api/groups/leader-dashboard',    authenticate, groupController.getLeaderDashboard);
 app.get(   '/api/groups/:id',                authenticate, groupController.getOne);
 app.post(  '/api/groups',                    authenticate, ...groupController.create);
