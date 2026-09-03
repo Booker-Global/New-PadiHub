@@ -178,18 +178,26 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
  * every value ever shipped stays in the list forever, so this never changes
  * the meaning of existing rows, it only allows new values going forward.
  */
-const REQUIRED_ENUM_VALUES: Record<string, Record<string, string[]>> = {
+const REQUIRED_ENUM_VALUES: Record<string, Record<string, { values: string[]; nullable?: boolean }>> = {
   savings_groups: {
-    status: ['draft', 'active', 'suspended', 'closed', 'expired'],
+    status: { values: ['draft', 'active', 'suspended', 'closed', 'expired'] },
   },
   contributions: {
-    payment_status: ['scheduled', 'due', 'paid', 'failed', 'missed', 'pending_default', 'defaulted'],
+    payment_status: { values: ['scheduled', 'due', 'paid', 'failed', 'missed', 'pending_default', 'defaulted'] },
   },
   votes: {
-    proposal_type: ['payout_swap', 'exceptional_request', 'member_admission', 'contribution_claim', 'member_removal'],
+    proposal_type: { values: ['payout_swap', 'exceptional_request', 'member_admission', 'contribution_claim', 'member_removal'] },
   },
   subscriptions: {
-    billing_status: ['active', 'past_due', 'cancelled', 'trialing', 'paused'],
+    billing_status: { values: ['active', 'past_due', 'cancelled', 'trialing', 'paused'] },
+    // Nullable — a subscription doesn't necessarily have a pending downgrade/upgrade queued.
+    pending_tier: { values: ['basic', 'premium'], nullable: true },
+  },
+  users: {
+    // Nullable — a user may not have selected a plan yet (see "No plan selected yet" in
+    // subscription/manage). Some deployed DBs still have this ENUM without 'premium' (created
+    // before it was widened), causing `errno 1265 "Data truncated for column"` on selectPlan.
+    subscription_tier: { values: ['basic', 'premium'], nullable: true },
   },
 };
 
@@ -267,7 +275,7 @@ export async function ensureSchemaSync(): Promise<void> {
   }
 
   for (const [table, columns] of Object.entries(REQUIRED_ENUM_VALUES)) {
-    for (const [column, values] of Object.entries(columns)) {
+    for (const [column, { values, nullable }] of Object.entries(columns)) {
       try {
         const [rows] = await poolConnection.query(
           'SELECT COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?',
@@ -281,7 +289,7 @@ export async function ensureSchemaSync(): Promise<void> {
 
         console.warn(`[PadiHub] Schema drift detected: ${table}.${column} is missing enum value(s) ${missing.join(', ')} — widening it now.`);
         const enumList = values.map(v => `'${v}'`).join(',');
-        await poolConnection.query(`ALTER TABLE \`${table}\` MODIFY COLUMN \`${column}\` ENUM(${enumList}) NOT NULL`);
+        await poolConnection.query(`ALTER TABLE \`${table}\` MODIFY COLUMN \`${column}\` ENUM(${enumList}) ${nullable ? 'NULL' : 'NOT NULL'}`);
         console.log(`[PadiHub] ✓ Widened enum ${table}.${column} to include: ${values.join(', ')}.`);
       } catch (err) {
         console.error(
