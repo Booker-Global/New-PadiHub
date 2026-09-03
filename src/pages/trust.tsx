@@ -81,7 +81,7 @@ function buildRecommendations(stats: UserStats) {
   if (!stats.identity_verified) {
     recommendations.push({
       title: 'Verify your identity',
-      desc: 'Confirm your identity to unlock full trust and access — worth +50 Trust',
+      desc: 'Confirm your identity to unlock full trust and access — worth +10 Trust',
       action: 'Go to profile', color: '#2EAF6F', icon: CheckCircle, to: '/profile',
     });
   }
@@ -387,7 +387,7 @@ export default function TrustScorePage() {
                 <p className="font-extrabold text-white mb-1" style={{ fontFamily: 'Nunito, sans-serif' }}>How Trust Score™ works</p>
                 <p className="text-sm" style={{ color: 'rgba(255,255,255,0.5)' }}>
                   Trust grows through positive participation and reliability: +2 for every on-time contribution,
-                  +3 when a savings cycle completes in your favour, and +50 for verifying your identity.
+                  +3 when a savings cycle completes in your favour, and +10 for verifying your identity.
                   Missing a contribution costs 5 points, and being suspended from a group costs 10.
                 </p>
               </div>

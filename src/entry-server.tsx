@@ -28,6 +28,7 @@ import {
 } from 'react-router-dom';
 
 import RootLayout from './layouts/RootLayout';
+import RouteErrorBoundary from './components/RouteErrorBoundary';
 import Spinner from './components/Spinner';
 import { routes } from './routes';
 
@@ -57,6 +58,7 @@ const routeTree: RouteObject[] = [
         </RootLayout>
       </Suspense>
     ),
+    errorElement: <RouteErrorBoundary />,
     children: routes,
   },
 ];

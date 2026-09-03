@@ -3,7 +3,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MotionDiv } from '@/lib/motion-safe';
 import {
-  Bell, Shield, Lock, Eye, EyeOff, ChevronRight, Check, Trash2, Download, LogOut,
+  Bell, Shield, Lock, Eye, ChevronRight, Check, Trash2, Download, LogOut,
 } from 'lucide-react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -486,9 +486,6 @@ export default function SettingsPage() {
             <p className="text-xs text-gray-400 mb-4">Control what others can see about you</p>
             <SettingRow icon={Eye} label="Show Trust Score™" description="Visible to other group members" color="#2EAF6F">
               <Toggle value={privacy.showTrust} onChange={(value) => setPrivacy((current) => ({ ...current, showTrust: value }))} />
-            </SettingRow>
-            <SettingRow icon={EyeOff} label="Public profile" description="Allow others to find your profile" color="#8B5CF6">
-              <Toggle value={privacy.publicProfile} onChange={(value) => setPrivacy((current) => ({ ...current, publicProfile: value }))} />
             </SettingRow>
           </MotionDiv>
 

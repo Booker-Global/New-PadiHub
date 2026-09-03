@@ -49,6 +49,18 @@ export function errorHandler(
     });
   }
 
+  // body-parser's PayloadTooLargeError (e.g. a profile picture upload too
+  // large for the JSON body limit) is a plain Error, not an AppError — give
+  // it a clear, actionable 413 instead of falling through to the generic
+  // 500 "unexpected error" below.
+  if ((err as Error & { type?: string; status?: number }).type === 'entity.too.large') {
+    return res.status(413).json({
+      success: false,
+      message: 'That upload is too large. Please choose a smaller photo (under 10MB) and try again.',
+      code:    'PAYLOAD_TOO_LARGE',
+    });
+  }
+
   // Log the full error (including its full `.cause` chain) with request
   // context for easier debugging
   console.error('[PadiHub Error]', {

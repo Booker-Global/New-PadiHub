@@ -261,12 +261,16 @@ export async function dailyGroupLifecycleExpiry(): Promise<void> {
 }
 
 /**
- * Section 3 — subscription billing only stays "live" while a user's
+ * Section D.2 — subscription billing only stays "live" while a user's
  * active-group-membership count is above zero; pause it the moment that
  * count hits exactly zero, and resume it automatically once they're a
- * verified member of an active group again. See
- * subscriptionService.reconcileBillingForActiveGroupMembership for the
- * bookkeeping-only mechanics and its documented limitations.
+ * verified member of an active group again. Every membership/group-status
+ * change that could affect this now reconciles billing immediately at the
+ * call site (groupService.activateGroup/reevaluateAfterMembershipChange,
+ * membershipService.join/_activatePendingMembership/departMember) — this
+ * daily sweep is just the safety net in case any of those individual call
+ * sites is ever missed. See subscriptionService.reconcileBillingForActiveGroupMembership
+ * for the real provider-level pause_collection/resume mechanics.
  */
 export async function dailyBillingActiveGroupReconciliation(): Promise<void> {
   await runJob('daily_billing_active_group_reconciliation', async () => {

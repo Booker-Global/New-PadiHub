@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { createElement, lazy, Suspense } from 'react';
 import {
   Outlet,
   RouterProvider,
@@ -9,6 +9,7 @@ import {
 import AiroErrorBoundary from '../dev-tools/src/AiroErrorBoundary';
 import CookieBannerErrorBoundary from '@/components/CookieBannerErrorBoundary';
 import RootLayout from './layouts/RootLayout';
+import RouteErrorBoundary from './components/RouteErrorBoundary';
 import Spinner from './components/Spinner';
 import { routes } from './routes';
 
@@ -51,6 +52,7 @@ const routeTree: RouteObject[] = [
       ) : (
         rootElement
       ),
+    errorElement: createElement(RouteErrorBoundary),
     children: routes,
   },
 ];

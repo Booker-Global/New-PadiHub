@@ -33,6 +33,11 @@ function formatInvoiceAmount(amountMinorUnits: number | null | undefined, curren
   }
 }
 
+function stripeInvoiceSubscriptionId(invoice: Stripe.Invoice): string | null {
+  const subId = (invoice as unknown as Record<string, unknown>).subscription;
+  return typeof subId === 'string' ? subId : (subId as Stripe.Subscription | null)?.id ?? null;
+}
+
 export async function stripeWebhookHandler(req: Request, res: Response, next: NextFunction) {
   const signature = req.headers['stripe-signature'] as string;
   if (!signature) return res.status(400).json({ error: 'Missing stripe-signature header.' });
@@ -86,37 +91,46 @@ async function handleStripeEvent(event: Stripe.Event) {
     case 'invoice.payment_succeeded': {
       const invoice = event.data.object as Stripe.Invoice;
       const customerId = typeof invoice.customer === 'string' ? invoice.customer : invoice.customer?.id;
-      if (!customerId) break;
+      const subIdStr = stripeInvoiceSubscriptionId(invoice);
+      if (!customerId || !subIdStr) break;
+
+      const subRows = await db.select().from(schema.subscriptions)
+        .where(eq(schema.subscriptions.provider_subscription_id, subIdStr)).limit(1);
+      const sub = subRows[0];
+      if (!sub || sub.provider !== 'stripe') {
+        console.log(`[StripeWebhook] Ignoring invoice.payment_succeeded for untracked subscription ${subIdStr}`);
+        break;
+      }
+
+      const userRows = await db.select({
+        id: schema.users.id,
+        country: schema.users.country,
+        subscription_tier: schema.users.subscription_tier,
+        stripe_customer_id: schema.users.stripe_customer_id,
+      }).from(schema.users).where(eq(schema.users.id, sub.user_id)).limit(1);
+      const user = userRows[0];
+      if (!user) break;
+      if (user.stripe_customer_id && user.stripe_customer_id !== customerId) {
+        console.warn(`[StripeWebhook] Ignoring invoice.payment_succeeded for subscription ${subIdStr} due to customer mismatch.`);
+        break;
+      }
 
       await db.update(schema.users)
         .set({ subscription_status: 'active' })
-        .where(eq(schema.users.stripe_customer_id, customerId));
+        .where(eq(schema.users.id, sub.user_id));
+      await db.update(schema.subscriptions)
+        .set({ billing_status: 'active' })
+        .where(eq(schema.subscriptions.id, sub.id));
 
-      const subId = (invoice as unknown as Record<string, unknown>).subscription;
-      const subIdStr = typeof subId === 'string' ? subId : (subId as Stripe.Subscription | null)?.id ?? '';
-      let sub: typeof schema.subscriptions.$inferSelect | undefined;
-      if (subIdStr) {
-        await db.update(schema.subscriptions)
-          .set({ billing_status: 'active' })
-          .where(eq(schema.subscriptions.provider_subscription_id, subIdStr));
-
-        // A mid-cycle downgrade request keeps the member on their current
-        // tier's limits until this renewal — apply it now that the renewal
-        // invoice has actually been paid. See subscriptionService's
-        // switchPlan for where pending_tier is set.
-        const subRows = await db.select().from(schema.subscriptions)
-          .where(eq(schema.subscriptions.provider_subscription_id, subIdStr)).limit(1);
-        sub = subRows[0];
-        if (sub?.pending_tier && isSubscriptionTierKey(sub.pending_tier)) {
-          const userRows = await db.select({ id: schema.users.id, country: schema.users.country, subscription_tier: schema.users.subscription_tier })
-            .from(schema.users).where(eq(schema.users.id, sub.user_id)).limit(1);
-          if (userRows.length && sub.pending_tier !== userRows[0].subscription_tier) {
-            const previousTier = userRows[0].subscription_tier;
-            await db.update(schema.users).set({ subscription_tier: sub.pending_tier }).where(eq(schema.users.id, sub.user_id));
-            await db.update(schema.subscriptions).set({ plan: planCode(userRows[0].country, sub.pending_tier), pending_tier: null }).where(eq(schema.subscriptions.id, sub.id));
-            await createAuditLog({ userId: sub.user_id, action: 'SUBSCRIPTION_TIER_SWITCHED', entity: 'subscriptions', entityId: sub.id, metadata: { from: previousTier, to: sub.pending_tier, appliedAtRenewal: true } });
-          }
-        }
+      // A mid-cycle downgrade request keeps the member on their current
+      // tier's limits until this renewal — apply it now that the renewal
+      // invoice has actually been paid. See subscriptionService's
+      // switchPlan for where pending_tier is set.
+      if (sub.pending_tier && isSubscriptionTierKey(sub.pending_tier) && sub.pending_tier !== user.subscription_tier) {
+        const previousTier = user.subscription_tier;
+        await db.update(schema.users).set({ subscription_tier: sub.pending_tier }).where(eq(schema.users.id, sub.user_id));
+        await db.update(schema.subscriptions).set({ plan: planCode(user.country, sub.pending_tier), pending_tier: null }).where(eq(schema.subscriptions.id, sub.id));
+        await createAuditLog({ userId: sub.user_id, action: 'SUBSCRIPTION_TIER_SWITCHED', entity: 'subscriptions', entityId: sub.id, metadata: { from: previousTier, to: sub.pending_tier, appliedAtRenewal: true } });
       }
 
       await createAuditLog({
@@ -133,42 +147,73 @@ async function handleStripeEvent(event: Stripe.Event) {
     case 'invoice.payment_failed': {
       const invoice = event.data.object as Stripe.Invoice;
       const customerId = typeof invoice.customer === 'string' ? invoice.customer : invoice.customer?.id;
-      if (!customerId) break;
+      const subIdStr2 = stripeInvoiceSubscriptionId(invoice);
+      if (!customerId || !subIdStr2) break;
 
-      await db.update(schema.users)
-        .set({ subscription_status: 'expired' })
-        .where(eq(schema.users.stripe_customer_id, customerId));
-
-      const subId2 = (invoice as unknown as Record<string, unknown>).subscription;
-      const subIdStr2 = typeof subId2 === 'string' ? subId2 : (subId2 as Stripe.Subscription | null)?.id ?? '';
-      let subForFailedInvoice: typeof schema.subscriptions.$inferSelect | undefined;
-      if (subIdStr2) {
-        await db.update(schema.subscriptions)
-          .set({ billing_status: 'past_due' })
-          .where(eq(schema.subscriptions.provider_subscription_id, subIdStr2));
-
-        const subRows2 = await db.select().from(schema.subscriptions)
-          .where(eq(schema.subscriptions.provider_subscription_id, subIdStr2)).limit(1);
-        subForFailedInvoice = subRows2[0];
+      const subRows2 = await db.select().from(schema.subscriptions)
+        .where(eq(schema.subscriptions.provider_subscription_id, subIdStr2)).limit(1);
+      const subForFailedInvoice = subRows2[0];
+      if (!subForFailedInvoice || subForFailedInvoice.provider !== 'stripe') {
+        console.log(`[StripeWebhook] Ignoring invoice.payment_failed for untracked subscription ${subIdStr2}`);
+        break;
       }
 
-      // Notify the user
-      const userRows = await db.select({ id: schema.users.id })
-        .from(schema.users).where(eq(schema.users.stripe_customer_id, customerId)).limit(1);
-      if (userRows.length) {
+      const userRows = await db.select({
+        id: schema.users.id,
+        subscription_status: schema.users.subscription_status,
+        stripe_customer_id: schema.users.stripe_customer_id,
+      }).from(schema.users).where(eq(schema.users.id, subForFailedInvoice.user_id)).limit(1);
+      const user = userRows[0];
+      if (!user) break;
+      if (user.stripe_customer_id && user.stripe_customer_id !== customerId) {
+        console.warn(`[StripeWebhook] Ignoring invoice.payment_failed for subscription ${subIdStr2} due to customer mismatch.`);
+        break;
+      }
+
+      const isInitialInvoiceFailure = invoice.billing_reason === 'subscription_create';
+      const subscriptionAlreadyRecovered = isInitialInvoiceFailure && (
+        subForFailedInvoice.billing_status === 'active'
+        || user.subscription_status === 'active'
+        || user.subscription_status === 'trial'
+      );
+      if (subscriptionAlreadyRecovered) {
+        console.log(`[StripeWebhook] Ignoring stale initial invoice.payment_failed for already-active subscription ${subIdStr2}`);
+        break;
+      }
+
+      await db.update(schema.subscriptions)
+        .set({ billing_status: 'past_due' })
+        .where(eq(schema.subscriptions.id, subForFailedInvoice.id));
+
+      if (!isInitialInvoiceFailure) {
+        await db.update(schema.users)
+          .set({ subscription_status: 'expired' })
+          .where(eq(schema.users.id, user.id));
+      }
+
+      const shouldNotifyUser = !isInitialInvoiceFailure && (
+        subForFailedInvoice.billing_status === 'active'
+        || subForFailedInvoice.billing_status === 'trialing'
+        || subForFailedInvoice.billing_status === 'paused'
+        || user.subscription_status === 'active'
+        || user.subscription_status === 'trial'
+      );
+      if (shouldNotifyUser) {
         await notificationService.create({
-          userId: userRows[0].id, type: 'subscription_payment_failed',
+          userId: user.id, type: 'subscription_payment_failed',
           title: 'Subscription Payment Failed',
           message: 'Your subscription payment failed. Please update your payment method to keep access.',
         });
       }
 
       await createAuditLog({
-        userId: userRows[0]?.id, action: 'STRIPE_INVOICE_FAILED', entity: 'subscriptions',
+        userId: user.id, action: 'STRIPE_INVOICE_FAILED', entity: 'subscriptions',
         metadata: {
           customerId, invoiceId: invoice.id,
           tier: tierFromPlanCode(subForFailedInvoice?.plan),
           amount_display: formatInvoiceAmount(invoice.amount_due, invoice.currency),
+          billing_reason: invoice.billing_reason,
+          initial_invoice_ignored_for_access: isInitialInvoiceFailure,
         },
       });
       break;

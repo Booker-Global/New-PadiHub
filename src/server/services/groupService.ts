@@ -20,7 +20,9 @@ import {
   sendGroupSuspendedLowMembersEmail,
   sendGroupReactivatedEmail,
   sendGroupCreatedEmail,
+  sendGroupSettingsUpdatedEmail,
 } from '../integrations/email/emailService.js';
+import { payoutDayBounds } from '../lib/payoutSchedule.js';
 
 function assignProvider(country: string) {
   return country === 'NG' ? 'flutterwave' : 'stripe';
@@ -139,6 +141,29 @@ export const groupService = {
    * touches 'draft' (handled by activateGroup), 'closed', or 'expired'
    * groups.
    */
+  /**
+   * Section D.2 — fire subscription-billing reconciliation immediately for
+   * a set of user IDs whenever their active-group-membership count could
+   * have just changed (group launched/suspended/reactivated, or an
+   * individual member's own status flips to/from 'active'). Dynamically
+   * imported to avoid a static circular dependency (subscriptionService
+   * already imports groupService) — same pattern used elsewhere in this
+   * codebase (see membershipService/voteService). Best-effort: a failure
+   * here must never fail the group/membership action that triggered it —
+   * scheduledJobs.dailyBillingActiveGroupReconciliation is the safety net.
+   */
+  async reconcileMemberBilling(userIds: string[]): Promise<void> {
+    if (!userIds.length) return;
+    try {
+      const { subscriptionService } = await import('./subscriptionService.js');
+      for (const userId of userIds) {
+        await subscriptionService.reconcileBillingForActiveGroupMembership(userId);
+      }
+    } catch (error) {
+      console.error('[GroupService] Failed to reconcile subscription billing for active group membership:', error);
+    }
+  },
+
   async reevaluateAfterMembershipChange(groupId: string): Promise<void> {
     const group = await this.getById(groupId);
     if (group.status !== 'active' && group.status !== 'suspended') return;
@@ -146,6 +171,9 @@ export const groupService = {
     const activeCount = await this.countActiveMembers(groupId);
 
     if (group.status === 'active' && activeCount < GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH) {
+      const memberUserIds = (await db.select({ user_id: schema.memberships.user_id }).from(schema.memberships)
+        .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')))).map(m => m.user_id);
+
       await db.update(schema.savingsGroups)
         .set({ status: 'suspended', suspended_at: new Date() })
         .where(eq(schema.savingsGroups.id, groupId));
@@ -157,6 +185,7 @@ export const groupService = {
       });
       const leaderRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, group.leader_id)).limit(1);
       if (leaderRow.length) await sendGroupSuspendedLowMembersEmail(leaderRow[0].email, group.name, activeCount, GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH);
+      await this.reconcileMemberBilling(memberUserIds);
       return;
     }
 
@@ -172,6 +201,10 @@ export const groupService = {
       });
       const leaderRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, group.leader_id)).limit(1);
       if (leaderRow.length) await sendGroupReactivatedEmail(leaderRow[0].email, group.name);
+
+      const memberUserIds = (await db.select({ user_id: schema.memberships.user_id }).from(schema.memberships)
+        .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')))).map(m => m.user_id);
+      await this.reconcileMemberBilling(memberUserIds);
     }
   },
 
@@ -372,6 +405,7 @@ export const groupService = {
 
   async update(groupId: string, leaderId: string, data: Partial<{
     name: string; description: string; maximum_members: number; min_trust_score: number;
+    contribution_amount: string; payout_day: number;
     strike_threshold: number; suspension_threshold: number;
     voting_threshold: number; allow_payout_swaps: boolean;
   }>, ipAddress?: string) {
@@ -379,8 +413,55 @@ export const groupService = {
     const group = await this.getById(groupId);
     if (group.leader_id !== leaderId) throw new AppError('Only the group leader can update this group.', 403);
 
+    // Never let the Owner shrink capacity below the members already active
+    // in the group — that would silently strand people already admitted.
+    if (data.maximum_members !== undefined) {
+      const activeCount = await this.countActiveMembers(groupId);
+      if (data.maximum_members < activeCount) {
+        throw new AppError(
+          `This group already has ${activeCount} active members — the maximum can't be set below that.`,
+          400,
+          'GROUP_MEMBER_LIMIT_BELOW_ACTIVE',
+        );
+      }
+    }
+
+    // payout_day's valid range depends on contribution_frequency, which is
+    // fixed at creation and never editable here — re-validate against the
+    // group's existing (unchanged) frequency rather than trusting the caller.
+    if (data.payout_day !== undefined) {
+      const bounds = payoutDayBounds(group.contribution_frequency);
+      if (bounds && (data.payout_day < bounds.min || data.payout_day > bounds.max)) {
+        throw new AppError(
+          `payout_day must be between ${bounds.min} and ${bounds.max} for ${group.contribution_frequency} groups.`,
+          400,
+          'INVALID_PAYOUT_DAY',
+        );
+      }
+    }
+
     await db.update(schema.savingsGroups).set(data).where(eq(schema.savingsGroups.id, groupId));
     await createAuditLog({ userId: leaderId, action: 'GROUP_UPDATED', entity: 'savings_groups', entityId: groupId, ipAddress });
+
+    // A permanent contribution-amount or payout-date change materially
+    // affects every member's expectations going forward — notify everyone,
+    // not just the Owner who made the change.
+    if (data.contribution_amount !== undefined || data.payout_day !== undefined || data.maximum_members !== undefined || data.min_trust_score !== undefined) {
+      const activeMembers = await db.select({ id: schema.users.id, email: schema.users.email })
+        .from(schema.memberships)
+        .innerJoin(schema.users, eq(schema.memberships.user_id, schema.users.id))
+        .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')));
+      for (const member of activeMembers) {
+        if (member.id === leaderId) continue;
+        await notificationService.create({
+          userId: member.id, type: 'group_settings_updated',
+          title: 'Group Settings Updated',
+          message: `"${group.name}"'s settings were updated by the group leader — check the group dashboard for the latest contribution amount, payout date, and membership rules.`,
+        });
+        await sendGroupSettingsUpdatedEmail(member.email, group.name);
+      }
+    }
+
     return this.getById(groupId);
   },
 
@@ -466,6 +547,12 @@ export const groupService = {
       });
       await sendGroupActivatedEmail(u.email, group.name);
     }
+
+    // Section D.2 — every member just became verified in an active (3+
+    // member) group for the first time this cycle; resume any deferred
+    // subscription billing immediately rather than waiting for the nightly
+    // safety-net job.
+    await this.reconcileMemberBilling(memberUserIds);
 
     return this.getById(groupId);
   },
@@ -628,6 +715,64 @@ export const groupService = {
     if (inv.accepted) throw new AppError('Invitation already used.', 400);
     if (new Date() > inv.expires_at) throw new AppError('Invitation has expired.', 400);
     return inv;
+  },
+
+  /**
+   * Fallback lookup used by membershipService.join(): finds the most recent
+   * still-unaccepted invitation the leader sent to this exact email address
+   * for this group, regardless of whether its token has expired or the
+   * caller even has the token in hand (e.g. they're clicking "Join" straight
+   * from the group page rather than the emailed link, or the 7-day link
+   * expired while they were completing onboarding — payment, subscription,
+   * and identity verification can easily take longer than that). A leader's
+   * invite is a standing vetting decision, not a one-shot ticket, so an
+   * expired token must never force an already-invited person through the
+   * Trust-Score-gated self-request/approval flow instead.
+   */
+  async findOpenInvitationForEmail(groupId: string, email?: string | null) {
+    if (!email) return null;
+    const normalized = email.trim().toLowerCase();
+    const rows = await db.select().from(schema.groupInvitations)
+      .where(and(eq(schema.groupInvitations.group_id, groupId), eq(schema.groupInvitations.accepted, false)));
+    const matches = rows.filter(row => (row.email ?? '').trim().toLowerCase() === normalized);
+    if (!matches.length) return null;
+    return matches.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+  },
+
+  /**
+   * Every still-open (unaccepted) invitation addressed to this email, across
+   * ALL groups — powers the "you have a pending group invitation" banner
+   * that must stay visible on the invitee's dashboard/profile throughout
+   * signup and onboarding (Section 0.1), so they never lose sight of it
+   * once payment, subscription, and identity verification are complete.
+   */
+  async getPendingInvitationsForEmail(email?: string | null) {
+    if (!email) return [];
+    const normalized = email.trim().toLowerCase();
+    const rows = await db.select({
+      token:      schema.groupInvitations.token,
+      group_id:   schema.groupInvitations.group_id,
+      email:      schema.groupInvitations.email,
+      expires_at: schema.groupInvitations.expires_at,
+      created_at: schema.groupInvitations.created_at,
+      group_name: schema.savingsGroups.name,
+      group_status: schema.savingsGroups.status,
+    })
+      .from(schema.groupInvitations)
+      .innerJoin(schema.savingsGroups, eq(schema.groupInvitations.group_id, schema.savingsGroups.id))
+      .where(eq(schema.groupInvitations.accepted, false));
+
+    return rows
+      .filter(row => (row.email ?? '').trim().toLowerCase() === normalized)
+      .filter(row => row.group_status !== 'closed' && row.group_status !== 'expired')
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .map(row => ({
+        token: row.token,
+        group_id: row.group_id,
+        group_name: row.group_name,
+        expired: new Date() > row.expires_at,
+        join_link: `/savings-groups/${row.group_id}/join?invite_token=${row.token}`,
+      }));
   },
 
   /**

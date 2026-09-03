@@ -52,6 +52,7 @@ type UserProfile = {
   trust_score?: number | null;
   account_status?: string | null;
   subscription_status?: string | null;
+  subscription_tier?: 'basic' | 'premium' | null;
   email_verified?: boolean | null;
   identity_verified?: boolean | null;
   notification_preferences?: Record<string, unknown> | null;
@@ -63,20 +64,6 @@ type ApiResponse<T> = {
   message?: string;
   errors?: Record<string, string[]>;
 };
-
-function Toggle({ on, onChange, disabled }: { on: boolean; onChange: (value: boolean) => void; disabled?: boolean }) {
-  return (
-    <button
-      onClick={() => onChange(!on)}
-      className="relative w-10 h-5 rounded-full transition-all flex-shrink-0 disabled:opacity-50"
-      style={{ background: on ? '#2EAF6F' : '#D1D5DB' }}
-      type="button"
-      disabled={disabled}
-    >
-      <div className="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all" style={{ left: on ? '22px' : '2px' }} />
-    </button>
-  );
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -178,7 +165,6 @@ export default function ProfilePage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [profile, setProfile] = useState<UserProfile>(getFallbackProfile());
   const [preferences, setPreferences] = useState<Record<string, unknown>>({});
-  const [savingToggle, setSavingToggle] = useState<'publicProfile' | null>(null);
   const [signingOut, setSigningOut] = useState(false);
   const { toastState, show: showToast, hide: hideToast } = useSuccessToast();
 
@@ -244,8 +230,10 @@ export default function ProfilePage() {
   const country = formatCountry(profile.country);
   const currency = profile.currency || 'Not set';
   const accountStatus = humanizeStatus(profile.account_status);
-  const subscriptionStatus = humanizeStatus(profile.subscription_status);
-  const isActivelySubscribed = profile.subscription_status === 'active';
+  const isActivelySubscribed = profile.subscription_status === 'active' || profile.subscription_status === 'trial';
+  const subscriptionTierLabel = isActivelySubscribed && profile.subscription_tier
+    ? humanizeStatus(profile.subscription_tier)
+    : 'Unsubscribed';
 
   const achievements = [
     {
@@ -259,13 +247,8 @@ export default function ProfilePage() {
       icon: Shield,
     },
     {
-      title: accountStatus,
-      color: '#8B5CF6',
-      icon: User,
-    },
-    {
-      title: subscriptionStatus,
-      color: '#F59E0B',
+      title: subscriptionTierLabel,
+      color: isActivelySubscribed ? '#8B5CF6' : '#9CA3AF',
       icon: TrendingUp,
     },
   ];
@@ -286,7 +269,6 @@ export default function ProfilePage() {
       icon: Eye,
       color: '#8B5CF6',
       items: [
-        { label: 'Public Profile', value: privacy.publicProfile ? 'On' : 'Off', link: '/settings' },
         { label: 'Show Trust Score™', value: privacy.showTrust ? 'On' : 'Off', link: '/settings' },
       ],
     },
@@ -314,63 +296,10 @@ export default function ProfilePage() {
       color: '#EF4444',
       items: [
         { label: 'Account Status', value: accountStatus, link: '/profile/edit' },
-        { label: 'Subscription', value: subscriptionStatus, link: '/subscription/manage' },
+        { label: 'Subscription', value: subscriptionTierLabel, link: '/subscription/manage' },
       ],
     },
   ];
-
-  const persistPreferences = async (nextPreferences: Record<string, unknown>, successMessage?: string) => {
-    const session = getValidSession();
-    if (!session?.token) {
-      throw new Error('Your session has expired. Please sign in again.');
-    }
-
-    const response = await globalThis.fetch('/api/users/preferences', {
-      method: 'PUT',
-      headers: {
-        Authorization: 'Bearer ' + session.token,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ preferences: nextPreferences }),
-    });
-
-    const payload = await response.json().catch(() => null) as ApiResponse<null> | null;
-    if (!response.ok || !payload?.success) {
-      throw new Error(getApiErrorMessage(payload, 'Unable to update your settings right now.'));
-    }
-
-    setPreferences(nextPreferences);
-    if (successMessage) {
-      showToast('Settings updated', successMessage, 'default');
-    }
-  };
-
-  const handleQuickToggle = (key: 'publicProfile', nextValue: boolean) => {
-    const previousPreferences = preferences;
-    const nextPreferences: Record<string, unknown> = {
-      ...preferences,
-      privacy: {
-        ...privacy,
-        publicProfile: nextValue,
-      },
-    };
-
-    setPreferences(nextPreferences);
-    setSavingToggle(key);
-
-    void persistPreferences(
-      nextPreferences,
-      'Your public profile preference was saved.',
-    ).catch((error: unknown) => {
-      setPreferences(previousPreferences);
-      const message = error instanceof Error && error.message
-        ? error.message
-        : 'Unable to update your settings right now.';
-      showToast('Could not update setting', message, 'badge');
-    }).finally(() => {
-      setSavingToggle(null);
-    });
-  };
 
   const handleSignOut = () => {
     if (signingOut) return;
@@ -512,7 +441,7 @@ export default function ProfilePage() {
             <div className="flex items-center justify-between mb-3">
               <h2 className="font-extrabold text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>Achievements</h2>
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               {achievements.map((achievement) => (
                 <div key={achievement.title} className="rounded-2xl p-3 text-center" style={{ background: `${achievement.color}10`, border: `1px solid ${achievement.color}20` }}>
                   <div className="w-9 h-9 rounded-full flex items-center justify-center mx-auto mb-1.5" style={{ background: `linear-gradient(135deg, ${achievement.color}, ${achievement.color}cc)` }}>
@@ -539,19 +468,6 @@ export default function ProfilePage() {
               </div>
               <ChevronRight size={14} className="text-gray-300 flex-shrink-0" />
             </Link>
-          </MotionDiv>
-
-          <MotionDiv variants={fadeUp} className="rounded-3xl p-5 mb-5 bg-white" style={{ border: '1px solid #F3F4F6' }}>
-            <h2 className="font-extrabold text-gray-900 mb-4" style={{ fontFamily: 'Nunito, sans-serif' }}>Quick Settings</h2>
-            <div className="flex flex-col gap-3">
-              <div className="flex items-center justify-between p-3 rounded-2xl" style={{ background: '#F9FAFB' }}>
-                <div>
-                  <p className="text-sm font-bold text-gray-900">Public Profile</p>
-                  <p className="text-xs text-gray-400">Allow members to find and view your profile</p>
-                </div>
-                <Toggle on={privacy.publicProfile} onChange={(value) => handleQuickToggle('publicProfile', value)} disabled={savingToggle === 'publicProfile'} />
-              </div>
-            </div>
           </MotionDiv>
 
           {accountSections.map((section) => (

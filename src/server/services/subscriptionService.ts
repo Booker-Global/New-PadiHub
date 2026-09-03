@@ -28,6 +28,7 @@ import {
   sendSubscriptionCancelledEmail,
   sendSubscriptionTierChangedEmail,
   sendSubscriptionPaymentFailedEmail,
+  sendSubscriptionBillingResumedEmail,
 } from '../integrations/email/emailService.js';
 
 export function planCode(country: string, tier: SubscriptionTierKey): string {
@@ -48,6 +49,10 @@ function describeProviderError(err: unknown, fallback: string): string {
   }
   if (err instanceof Error) return err.message || fallback;
   return fallback;
+}
+
+function isStripeSubscriptionAwaitingConfirmation(country: string, providerStatus: string): boolean {
+  return country === 'GB' && providerStatus === 'incomplete';
 }
 
 type PlanSelectionResult = { tier: SubscriptionTierKey; plan: string; monthly_amount: number };
@@ -179,7 +184,10 @@ export const subscriptionService = {
 
     const existing = await db.select().from(schema.subscriptions)
       .where(eq(schema.subscriptions.user_id, userId)).limit(1);
-    if (existing.length && existing[0].billing_status === 'active') {
+    // 'paused' (Section D.2 — deferred until an active 3+ member group) is
+    // just as much an already-created subscription as 'active' — re-running
+    // createSubscription here would create a duplicate provider subscription.
+    if (existing.length && (existing[0].billing_status === 'active' || existing[0].billing_status === 'paused')) {
       return existing[0];
     }
 
@@ -197,6 +205,14 @@ export const subscriptionService = {
     const user = userRows[0];
 
     const provider = getPaymentProvider(country);
+
+    // Section D.2 — subscription billing must stay inert (no charge
+    // attempted) until the member is verified in an active (3+ member)
+    // group; see reconcileBillingForActiveGroupMembership below for where
+    // this flips to live billing (and back to paused) as group membership
+    // changes.
+    const activeGroupCount = await groupService.countActiveGroupMembershipsForUser(userId);
+    const deferBilling = activeGroupCount === 0;
 
     // Ensure customer record exists
     let customerId = country === 'NG' ? user.flutterwave_customer_id : user.stripe_customer_id;
@@ -236,6 +252,7 @@ export const subscriptionService = {
         email:    user.email,
         currency: user.currency,
         tier,
+        deferBilling,
       });
     } catch (err) {
       throw new AppError(
@@ -248,12 +265,18 @@ export const subscriptionService = {
     // which does NOT synchronously confirm/charge the card — if the card is
     // declined or needs 3D-Secure, Stripe returns successfully but with
     // status 'incomplete' (no exception thrown). Only treat the subscription
-    // as genuinely billed if the provider reports it active/trialing, so we
+    // as genuinely confirmed if the provider reports it active/trialing, so we
     // never show "Active" or send the welcome email for a card that hasn't
-    // actually been charged yet. invoice.payment_succeeded/failed webhooks
+    // actually been verified yet. invoice.payment_succeeded/failed webhooks
     // reconcile this to the real outcome once Stripe finishes processing.
+    // Note: when deferBilling is set, Stripe never attempts a charge at all
+    // (pause_collection), so this will be true trivially — that's exactly
+    // the point (Section D.2: no failure is possible for a charge that was
+    // never attempted).
     const billingIsActive = result.status === 'active' || result.status === 'trialing';
-    const billingStatus = billingIsActive ? 'active' : 'past_due';
+    // The subscription is only genuinely BILLING (money can actually move)
+    // if the provider confirmed it AND we didn't defer collection.
+    const billingStatus = !billingIsActive ? 'past_due' : deferBilling ? 'paused' : 'active';
 
     // Upsert subscription record
     const existing = await db.select().from(schema.subscriptions)
@@ -280,13 +303,19 @@ export const subscriptionService = {
       });
     }
 
+    // subscription_status is the FUNCTIONAL eligibility gate (payment method
+    // verified + plan chosen) used by paymentEligibilityService to allow
+    // joining/creating a group — it must become 'active' as soon as the
+    // provider confirms the card, independent of billing_status/deferBilling
+    // above (otherwise a member could never join the very group that would
+    // make billing_status flip to 'active').
     await db.update(schema.users)
       .set({ subscription_tier: tier, ...(billingIsActive ? { subscription_status: 'active' as const } : {}) })
       .where(eq(schema.users.id, userId));
 
     await createAuditLog({
-      userId, action: billingIsActive ? 'SUBSCRIPTION_CREATED' : 'SUBSCRIPTION_PAYMENT_PENDING', entity: 'subscriptions',
-      metadata: { subscriptionId: result.subscriptionId, country, tier, amount_display: formatTierPrice(tier, country), providerStatus: result.status },
+      userId, action: billingIsActive ? (deferBilling ? 'SUBSCRIPTION_CREATED_BILLING_DEFERRED' : 'SUBSCRIPTION_CREATED') : 'SUBSCRIPTION_PAYMENT_PENDING', entity: 'subscriptions',
+      metadata: { subscriptionId: result.subscriptionId, country, tier, amount_display: formatTierPrice(tier, country), providerStatus: result.status, deferBilling },
     });
 
     if (billingIsActive) {
@@ -295,7 +324,15 @@ export const subscriptionService = {
         SUBSCRIPTION_TIERS[tier].name,
         formatTierPrice(tier, country),
         result.renewalDate ? result.renewalDate.toLocaleDateString('en-GB') : 'your next billing date',
+        deferBilling,
       );
+    } else if (isStripeSubscriptionAwaitingConfirmation(country, result.status)) {
+      await notificationService.create({
+        userId,
+        type: 'subscription_payment_pending',
+        title: 'Complete payment verification',
+        message: 'Your bank still needs an extra verification step before your subscription can go active. Once payment is confirmed, your access will update automatically.',
+      });
     } else {
       await notificationService.create({
         userId,
@@ -381,6 +418,11 @@ export const subscriptionService = {
         console.error('[SubscriptionService] Failed to cancel previous provider subscription during upgrade:', error);
       }
 
+      // Section D.2 — same defer-until-active-group rule as createSubscription()
+      // applies to a brand-new provider subscription created here too.
+      const activeGroupCount = await groupService.countActiveGroupMembershipsForUser(userId);
+      const deferBilling = activeGroupCount === 0;
+
       const result = await (async () => {
         try {
           return await provider.createSubscription({
@@ -389,6 +431,7 @@ export const subscriptionService = {
             email:    user.email,
             currency: user.currency,
             tier:     newTier,
+            deferBilling,
           });
         } catch (err) {
           throw new AppError(
@@ -402,11 +445,12 @@ export const subscriptionService = {
       // default_incomplete subscription can come back non-active if the
       // card is declined or needs 3D-Secure, without throwing.
       const upgradeBillingIsActive = result.status === 'active' || result.status === 'trialing';
+      const upgradeBillingStatus = !upgradeBillingIsActive ? 'past_due' : deferBilling ? 'paused' : 'active';
 
       await db.update(schema.subscriptions).set({
         provider_subscription_id: result.subscriptionId,
         plan:                     planCode(user.country, newTier),
-        billing_status:           upgradeBillingIsActive ? 'active' : 'past_due',
+        billing_status:           upgradeBillingStatus,
         renewal_date:             result.renewalDate,
         pending_tier:             null,
       }).where(eq(schema.subscriptions.user_id, userId));
@@ -416,19 +460,30 @@ export const subscriptionService = {
       // real billing-history event alongside SUBSCRIPTION_CREATED/renewal
       // charges, since getBillingHistory() below reads from these logs.
       await createAuditLog({
-        userId, action: upgradeBillingIsActive ? 'SUBSCRIPTION_CREATED' : 'SUBSCRIPTION_PAYMENT_PENDING', entity: 'subscriptions',
-        metadata: { subscriptionId: result.subscriptionId, country: user.country, tier: newTier, amount_display: newAmount, providerStatus: result.status },
+        userId, action: upgradeBillingIsActive ? (deferBilling ? 'SUBSCRIPTION_CREATED_BILLING_DEFERRED' : 'SUBSCRIPTION_CREATED') : 'SUBSCRIPTION_PAYMENT_PENDING', entity: 'subscriptions',
+        metadata: { subscriptionId: result.subscriptionId, country: user.country, tier: newTier, amount_display: newAmount, providerStatus: result.status, deferBilling },
       });
 
+
       if (!upgradeBillingIsActive) {
-        upgradeBillingFailed = true;
-        await notificationService.create({
-          userId,
-          type: 'subscription_payment_failed',
-          title: 'Payment could not be completed',
-          message: 'We could not confirm payment for your upgraded plan. Please check your card details or complete any additional verification your bank requires.',
-        });
-        await sendSubscriptionPaymentFailedEmail(user.email, newAmount);
+        if (isStripeSubscriptionAwaitingConfirmation(user.country, result.status)) {
+          upgradeBillingFailed = true;
+          await notificationService.create({
+            userId,
+            type: 'subscription_payment_pending',
+            title: 'Upgrade awaiting payment verification',
+            message: 'Your bank still needs an extra verification step before your upgraded plan can go active. Once payment is confirmed, your access will update automatically.',
+          });
+        } else {
+          upgradeBillingFailed = true;
+          await notificationService.create({
+            userId,
+            type: 'subscription_payment_failed',
+            title: 'Payment could not be completed',
+            message: 'We could not confirm payment for your upgraded plan. Please check your card details or complete any additional verification your bank requires.',
+          });
+          await sendSubscriptionPaymentFailedEmail(user.email, newAmount);
+        }
       }
     }
 
@@ -587,17 +642,25 @@ export const subscriptionService = {
   },
 
   /**
-   * Section 3 — subscription billing is only ever "live" (billing_status
-   * 'active') while the user is a verified member of at least one 'active'
-   * (launched) group; it's inert/paused otherwise. Called once per user per
-   * day by scheduledJobs.dailyBillingActiveGroupReconciliation. This is
-   * DB-bookkeeping only: it does NOT call the provider's own
-   * pause_collection API, so Stripe subscriptions keep renewing on
-   * schedule at the provider — see monthlySubscriptionRenewalCharge's
-   * existing billing_status filter, which already skips 'paused' users for
-   * the Flutterwave path (Stripe self-bills via webhooks and isn't
-   * affected either way by this DB flag). This is a known, documented
-   * limitation given project scope, not a silent gap.
+   * Section D.2 — subscription billing is only ever "live" (billing_status
+   * 'active', and genuinely being collected by the provider) while the user
+   * is a verified member of at least one 'active' (launched) group; it's
+   * inert/paused otherwise. Called immediately after any event that could
+   * change a user's active-group-membership count (group activation,
+   * reactivation, joining, leaving, removal — see call sites), and as a
+   * daily safety-net sweep by scheduledJobs.dailyBillingActiveGroupReconciliation
+   * in case any individual call site is ever missed.
+   *
+   * Stripe (GB): actually calls provider.pauseBilling/resumeBilling, which
+   * sets/clears Stripe's own pause_collection, so the subscription
+   * genuinely stops/starts being charged at the provider — not just our DB
+   * flag. Flutterwave (NG) has no real recurring-billing engine to pause —
+   * pauseBilling/resumeBilling are no-ops there by design (see
+   * FlutterwaveProvider) — so enforcement is entirely via the
+   * billing_status DB flag written below, which
+   * monthlySubscriptionRenewalCharge (scheduledJobs.ts) already filters on
+   * (only ever charges rows where billing_status IN ('active','trialing')),
+   * so NG renewals are equally deferred/resumed by this same flag flip.
    */
   async reconcileBillingForActiveGroupMembership(userId: string) {
     const subRows = await db.select().from(schema.subscriptions)
@@ -606,14 +669,48 @@ export const subscriptionService = {
     const sub = subRows[0];
     if (sub.billing_status === 'cancelled') return;
 
+    const userRows = await db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1);
+    if (!userRows.length) return;
+    const user = userRows[0];
+    const provider = getPaymentProvider(user.country);
+
     const activeGroupCount = await groupService.countActiveGroupMembershipsForUser(userId);
 
     if (activeGroupCount === 0 && sub.billing_status !== 'paused') {
+      if (sub.provider_subscription_id) {
+        try {
+          await provider.pauseBilling?.(sub.provider_subscription_id);
+        } catch (error) {
+          console.error('[SubscriptionService] Failed to pause provider billing:', error);
+        }
+      }
       await db.update(schema.subscriptions).set({ billing_status: 'paused' }).where(eq(schema.subscriptions.user_id, userId));
       await createAuditLog({ userId, action: 'SUBSCRIPTION_BILLING_PAUSED', entity: 'subscriptions', metadata: { reason: 'zero_active_group_memberships' } });
     } else if (activeGroupCount > 0 && sub.billing_status === 'paused') {
+      if (sub.provider_subscription_id) {
+        try {
+          await provider.resumeBilling?.(sub.provider_subscription_id);
+        } catch (error) {
+          console.error('[SubscriptionService] Failed to resume provider billing:', error);
+        }
+      }
       await db.update(schema.subscriptions).set({ billing_status: 'active' }).where(eq(schema.subscriptions.user_id, userId));
       await createAuditLog({ userId, action: 'SUBSCRIPTION_BILLING_RESUMED', entity: 'subscriptions', metadata: { activeGroupCount } });
+
+      if (isSubscriptionTierKey(user.subscription_tier)) {
+        await sendSubscriptionBillingResumedEmail(
+          user.email,
+          SUBSCRIPTION_TIERS[user.subscription_tier].name,
+          formatTierPrice(user.subscription_tier, user.country),
+          sub.renewal_date ? new Date(sub.renewal_date).toLocaleDateString('en-GB') : 'your next billing date',
+        );
+      }
+      await notificationService.create({
+        userId, type: 'subscription_billing_resumed',
+        title: 'Billing has started',
+        message: 'You\'re now an active member of a launched group — your PadiHub subscription billing has started.',
+      });
     }
   },
 };
+
