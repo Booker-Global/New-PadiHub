@@ -6,11 +6,18 @@
  * payout destination (to receive their turn) are required BEFORE joining or
  * creating a group — not deferred until the member's payout is due.
  */
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { getStripeProvider } from '../integrations/payments/PaymentProviderFactory.js';
+import { notificationService } from './notificationService.js';
+import { sendProfileSetupCompleteEmail } from '../integrations/email/emailService.js';
+import { SUBSCRIPTION_TIERS, isSubscriptionTierKey, formatTierPrice, type SubscriptionTierKey } from '../lib/constants.js';
+
+function lowerFirst(value: string): string {
+  return value.charAt(0).toLowerCase() + value.slice(1);
+}
 
 type EligibilityUser = {
   id: string;
@@ -98,25 +105,168 @@ export async function getPaymentEligibility(userId: string) {
 }
 
 /**
+ * The ordered onboarding path every member must finish before they can
+ * create or join a savings group (steps a–d of the agreed flow):
+ *   a) sign up and confirm their email address,
+ *   b) verify their identity,
+ *   c) choose a subscription plan and accept the terms,
+ *   d) add a payment card and payout details.
+ *
+ * `href` is always a member-facing dashboard page — never an API route — so
+ * the same list can drive the blocked-action message, the dashboard's
+ * profile-completion card, and the invitation flow.
+ */
+export type OnboardingStep = {
+  key: 'email' | 'identity' | 'subscription' | 'payment_method' | 'payout';
+  label: string;
+  description: string;
+  href: string;
+  complete: boolean;
+};
+
+function buildOnboardingSteps(eligibility: Awaited<ReturnType<typeof getPaymentEligibility>>): OnboardingStep[] {
+  return [
+    {
+      key: 'email',
+      label: 'Confirm your email address',
+      description: 'Confirm the email address you signed up with so we can reach you about your groups.',
+      href: '/verify-email',
+      complete: eligibility.emailVerified,
+    },
+    {
+      key: 'identity',
+      label: 'Verify your identity',
+      description: 'A quick ID and selfie check that keeps every PadiHub savings group trustworthy.',
+      href: '/verify-identity',
+      complete: eligibility.identityVerified,
+    },
+    {
+      key: 'subscription',
+      label: 'Choose your subscription plan',
+      description: 'Pick Basic or Premium and accept the terms. Your subscription fee is only charged once you are part of a valid, active group with at least three members.',
+      href: '/onboarding',
+      complete: eligibility.subscriptionTierSelected,
+    },
+    {
+      key: 'payment_method',
+      label: 'Add your payment card',
+      description: 'The card your contributions (and your subscription) are charged to.',
+      href: '/payments/methods',
+      complete: eligibility.paymentMethodVerified,
+    },
+    {
+      key: 'payout',
+      label: 'Add your payout details',
+      description: 'Where we send your money when it is your turn to be paid out.',
+      href: '/payments/payout',
+      complete: eligibility.payoutVerified,
+    },
+  ];
+}
+
+/**
+ * Everything the dashboard's profile-completion card (and the group
+ * create/join gate) needs: the ordered steps, which are done, how far along
+ * the member is, and what their plan lets them do once they're finished.
+ */
+export async function getOnboardingProgress(userId: string) {
+  const eligibility = await getPaymentEligibility(userId);
+  const steps = buildOnboardingSteps(eligibility);
+  const completedCount = steps.filter(step => step.complete).length;
+  const tier = isSubscriptionTierKey(eligibility.subscriptionTier) ? eligibility.subscriptionTier : null;
+
+  if (eligibility.ready) {
+    // Fire-and-forget: the "your profile is complete" email must never block
+    // or fail the request that happened to notice the completion.
+    void notifyOnboardingComplete(userId, tier).catch(err => {
+      console.error('[paymentEligibilityService] Could not send profile-complete confirmation:', err);
+    });
+  }
+
+  return {
+    steps,
+    completed_steps: completedCount,
+    total_steps: steps.length,
+    completion_percent: Math.round((completedCount / steps.length) * 100),
+    complete: eligibility.ready,
+    next_step: steps.find(step => !step.complete) ?? null,
+    subscription_tier: tier,
+    can_create_groups: tier ? SUBSCRIPTION_TIERS[tier].maxGroupsCreate > 0 : false,
+    max_groups_create: tier ? SUBSCRIPTION_TIERS[tier].maxGroupsCreate : 0,
+    max_groups_join: tier ? SUBSCRIPTION_TIERS[tier].maxGroupsJoin : 0,
+  };
+}
+
+/**
+ * Sends the "your profile setup is complete" email exactly once per member.
+ * The conditional UPDATE ... WHERE ... IS NULL is what makes this idempotent:
+ * only the first caller to flip the column sees affectedRows > 0, so two
+ * concurrent requests can never both send the email.
+ */
+async function notifyOnboardingComplete(userId: string, tier: SubscriptionTierKey | null): Promise<void> {
+  if (!tier) return;
+
+  const result = await db.update(schema.users)
+    .set({ onboarding_completed_email_sent_at: new Date() })
+    .where(and(
+      eq(schema.users.id, userId),
+      isNull(schema.users.onboarding_completed_email_sent_at),
+    ));
+
+  const affectedRows = (result as unknown as { affectedRows?: number }[])[0]?.affectedRows
+    ?? (result as unknown as { affectedRows?: number }).affectedRows
+    ?? 0;
+  if (!affectedRows) return;
+
+  const rows = await db.select({
+    email:      schema.users.email,
+    first_name: schema.users.first_name,
+    country:    schema.users.country,
+  }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
+  if (!rows.length) return;
+
+  const plan = SUBSCRIPTION_TIERS[tier];
+  await notificationService.create({
+    userId,
+    type: 'profile_setup_complete',
+    title: 'Profile Setup Complete',
+    message: plan.maxGroupsCreate > 0
+      ? `Your profile is complete on the ${plan.name} plan — you can now create up to ${plan.maxGroupsCreate} groups and join up to ${plan.maxGroupsJoin}.`
+      : `Your profile is complete on the ${plan.name} plan — you can now join up to ${plan.maxGroupsJoin} groups. Upgrade to Premium if you'd like to create your own group.`,
+  });
+  await sendProfileSetupCompleteEmail(rows[0].email, rows[0].first_name, {
+    tierName:        plan.name,
+    monthlyPrice:    formatTierPrice(tier, rows[0].country),
+    maxGroupsCreate: plan.maxGroupsCreate,
+    maxGroupsJoin:   plan.maxGroupsJoin,
+  });
+}
+
+/**
  * Throws a 403 error unless the user has completed EVERY onboarding step
  * required before creating or joining a savings group: verified email,
  * verified identity, a chosen subscription tier, a verified payment method,
  * and a verified payout destination. Call before allowing a user to create
  * or join a savings group.
+ *
+ * The message names the *next* missing step and links to the dashboard page
+ * that completes it (never an API route), so a blocked member always knows
+ * exactly what to do next.
  */
 export async function assertPaymentSetupComplete(userId: string): Promise<void> {
   const eligibility = await getPaymentEligibility(userId);
   if (eligibility.ready) return;
 
-  const missing: string[] = [];
-  if (!eligibility.emailVerified) missing.push('a verified email address');
-  if (!eligibility.identityVerified) missing.push('identity verification (/verify-identity)');
-  if (!eligibility.subscriptionTierSelected) missing.push('a chosen subscription plan (/onboarding)');
-  if (!eligibility.paymentMethodVerified) missing.push('a verified payment method (/payments/methods)');
-  if (!eligibility.payoutVerified) missing.push('a verified payout destination (/payments/payout)');
+  const steps = buildOnboardingSteps(eligibility);
+  const outstanding = steps.filter(step => !step.complete);
+  const nextStep = outstanding[0];
+  const remainder = outstanding.slice(1);
 
   throw new AppError(
-    `Before joining or creating a group, complete: ${missing.join('; ')}.`,
+    `Before joining or creating a group you still need to ${lowerFirst(nextStep.label)} — do it at ${nextStep.href}.`
+      + (remainder.length
+        ? ` After that: ${remainder.map(step => `${lowerFirst(step.label)} (${step.href})`).join('; ')}.`
+        : ''),
     403,
     'PAYMENT_SETUP_REQUIRED',
   );

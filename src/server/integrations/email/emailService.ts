@@ -208,16 +208,19 @@ export async function sendAccountDeletedEmail(to: string, name: string): Promise
 // ─── Group emails ─────────────────────────────────────────────────────────────
 
 export async function sendGroupInvitationEmail(
-  to: string, groupName: string, inviteLink: string, expiresAt: string,
+  to: string, groupName: string, inviteLink: string, expiresAt: string, inviterName?: string,
 ): Promise<void> {
+  const appUrl = process.env.APP_URL ?? 'https://padihub.com';
   await send(to, `You've been invited to join ${groupName} on PadiHub`, wrap(`
-    ${h2(`You're invited to join a savings group`)}
-    ${p(`You have been invited to join <strong>${groupName}</strong> on PadiHub.`)}
+    ${h2('You\'re invited to join a savings group')}
+    ${p(`${inviterName ? `<strong>${escapeHtml(inviterName)}</strong> has invited you` : 'You have been invited'} to join <strong>${escapeHtml(groupName)}</strong> on PadiHub.`)}
     ${table(
-      detail('Group', groupName) +
+      detail('Group', escapeHtml(groupName)) +
       detail('Invite expires', expiresAt),
     )}
     ${btn('Accept Invitation', inviteLink)}
+    ${p(`Already have a PadiHub account? <a href="${appUrl}/login" style="color:#2EAF6F;">Log in</a> and the link above takes you straight to the group. New to PadiHub? <a href="${appUrl}/get-started" style="color:#2EAF6F;">Create your free account</a> first — the same link will still be waiting for you.`)}
+    ${p('Before you can join, we\'ll walk you through completing your profile: confirm your email, verify your identity, choose your subscription plan, and add your payment card and payout details. Your subscription fee is only charged once you\'re part of a valid, active group with at least three members.')}
     ${p('<small style="color:#9CA3AF;">If you don\'t know who sent this, you can safely ignore it.</small>')}
   `));
 }
@@ -227,7 +230,7 @@ export async function sendInvitationAcceptedEmail(
 ): Promise<void> {
   await send(to, `${memberName} joined ${groupName}`, wrap(`
     ${h2('New member joined your group')}
-    ${p(`<strong>${memberName}</strong> has accepted their invitation and joined <strong>${groupName}</strong>.`)}
+    ${p(`<strong>${escapeHtml(memberName)}</strong> has completed their PadiHub profile setup — confirmed email, verified identity, subscription plan, payment card and payout details — accepted your invitation and joined <strong>${escapeHtml(groupName)}</strong>.`)}
     ${table(
       detail('Group', groupName) +
       detail('New member', memberName) +
@@ -779,5 +782,37 @@ export async function sendIdentityVerificationFailedEmail(to: string, firstName:
     ${p('This can happen for a number of reasons — a document photo that didn\'t match, bank details that didn\'t resolve to your name, or a step that timed out. You can try again as many times as you need to.')}
     ${btn('Try Verification Again', `${process.env.APP_URL ?? 'https://padihub.com'}/verify-identity`)}
     ${p('If you keep running into trouble, our support team is happy to help — just reply to this email or open a support ticket.')}
+  `));
+}
+
+// ─── Onboarding completion ────────────────────────────────────────────────────
+
+/**
+ * Sent once, the first time a member finishes every onboarding step:
+ * confirmed email, verified identity, chosen subscription plan, saved payment
+ * card and payout details. Confirms the tier they're on and spells out
+ * exactly what that tier lets them do — see
+ * paymentEligibilityService.notifyOnboardingComplete().
+ */
+export async function sendProfileSetupCompleteEmail(
+  to: string,
+  firstName: string,
+  plan: { tierName: string; monthlyPrice: string; maxGroupsCreate: number; maxGroupsJoin: number },
+): Promise<void> {
+  const canCreate = plan.maxGroupsCreate > 0;
+  await send(to, `Your PadiHub profile is complete — ${plan.tierName} plan`, wrap(`
+    ${h2(`You're all set, ${escapeHtml(firstName)}!`)}
+    ${p('Your PadiHub profile setup is complete. Your email is confirmed, your identity is verified, your plan is chosen and both your payment card and payout details are on file.')}
+    ${table(
+      detail('Plan', escapeHtml(plan.tierName)) +
+      detail('Monthly subscription', plan.monthlyPrice) +
+      detail('Groups you can create', canCreate ? String(plan.maxGroupsCreate) : 'None — upgrade to Premium to create groups') +
+      detail('Groups you can join', String(plan.maxGroupsJoin)),
+    )}
+    ${p(canCreate
+      ? `You can now create up to <strong>${plan.maxGroupsCreate}</strong> savings groups and be a member of up to <strong>${plan.maxGroupsJoin}</strong> in total.`
+      : `You can now join up to <strong>${plan.maxGroupsJoin}</strong> savings groups. Creating your own group is a Premium feature — you can upgrade at any time.`)}
+    ${p('Your subscription fee is only charged once you are part of a valid, active group with at least three members.')}
+    ${btn(canCreate ? 'Create or Join a Group' : 'Find a Group to Join', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
   `));
 }

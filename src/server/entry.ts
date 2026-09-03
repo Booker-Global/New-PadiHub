@@ -207,6 +207,7 @@ app.delete('/api/users/profile',       authenticate, userController.deleteProfil
 app.get(   '/api/users/notifications', authenticate, userController.getNotifications);
 app.put(   '/api/users/preferences',   authenticate, ...userController.updatePreferences);
 app.get(   '/api/users/stats',         authenticate, userController.getStats);
+app.get(   '/api/users/onboarding-status', authenticate, userController.getOnboardingStatus);
 app.get(   '/api/users/trust-history', authenticate, userController.getTrustHistory);
 
 // ── Groups ───────────────────────────────────────────────────────────�[...]

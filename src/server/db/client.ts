@@ -120,6 +120,7 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
     { column: 'stripe_identity_session_id',  sqlType: 'VARCHAR(255) NULL' },
     { column: 'bvn_verification_reference',  sqlType: 'VARCHAR(255) NULL' },
     { column: 'last_login_at',               sqlType: 'TIMESTAMP NULL' },
+    { column: 'onboarding_completed_email_sent_at', sqlType: 'TIMESTAMP NULL' },
     { column: 'subscription_tier',           sqlType: "ENUM('basic','premium') NULL" },
     { column: 'identity_verification_status', sqlType: "ENUM('not_started','pending','verified','failed') NOT NULL DEFAULT 'not_started'" },
     { column: 'identity_verification_fee_amount', sqlType: 'DECIMAL(12,2) NULL' },

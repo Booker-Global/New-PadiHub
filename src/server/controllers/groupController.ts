@@ -4,6 +4,7 @@ import { groupService } from '../services/groupService.js';
 import { validate } from '../middleware/validate.js';
 import { qsOpt, pp, ip } from '../lib/reqHelpers.js';
 import { payoutDayBounds } from '../lib/payoutSchedule.js';
+import { GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH } from '../lib/constants.js';
 
 const baseGroupSchema = z.object({
   name:                   z.string().min(2).max(200),
@@ -13,7 +14,9 @@ const baseGroupSchema = z.object({
   contribution_amount:    z.string().regex(/^\d+(\.\d{1,2})?$/),
   contribution_frequency: z.enum(['daily', 'weekly', 'monthly']),
   payout_day:             z.number().int().min(0).max(31).optional(),
-  maximum_members:        z.number().int().min(2).max(50),
+  // A rotating savings group needs at least GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH
+  // members to ever launch, so a smaller group size can never be valid.
+  maximum_members:        z.number().int().min(GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH).max(50),
   min_trust_score:        z.number().int().min(0).max(100).optional(),
   rotation_method:        z.enum(['manual', 'random']),
   strike_threshold:       z.number().int().min(1).optional(),
@@ -50,7 +53,12 @@ const updateSchema = baseGroupSchema.partial().omit({
   contribution_amount: true, contribution_frequency: true,
 });
 
-const inviteSchema = z.object({ email: z.string().email().optional() });
+// A single invite (`email`) or a batch of them (`emails`) — the create-group
+// wizard collects a comma-separated list, so both shapes are accepted.
+const inviteSchema = z.object({
+  email:  z.string().email().optional(),
+  emails: z.array(z.string().email()).max(50).optional(),
+});
 
 export const groupController = {
   list: async (req: Request, res: Response, next: NextFunction) => {
@@ -142,11 +150,16 @@ export const groupController = {
     validate(inviteSchema),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const data = await groupService.createInvitation(
-          pp(req.params.id),
-          req.user!.userId,
-          req.body.email,
-        );
+        const body = req.body as { email?: string; emails?: string[] };
+        const emails = [...(body.emails ?? []), ...(body.email ? [body.email] : [])];
+
+        if (!emails.length) {
+          const data = await groupService.createInvitation(pp(req.params.id), req.user!.userId);
+          res.status(201).json({ success: true, data });
+          return;
+        }
+
+        const data = await groupService.createInvitations(pp(req.params.id), req.user!.userId, emails);
         res.status(201).json({ success: true, data });
       } catch (e) { next(e); }
     },

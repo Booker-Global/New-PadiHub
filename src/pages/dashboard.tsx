@@ -4,7 +4,7 @@ import { Helmet } from '@dr.pogodin/react-helmet';
 import { MotionDiv } from '@/lib/motion-safe';
 import {
   Shield, Users, Calendar, ArrowRight,
-  ChevronRight, Plus, Bell, AlertCircle,
+  ChevronRight, Plus, Bell, AlertCircle, CheckCircle2, Circle,
 } from 'lucide-react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { Button } from '@/components/ui/button';
@@ -44,6 +44,27 @@ interface Contribution {
   amount_due: string | number;
   due_date: string;
   payment_status: string;
+}
+
+interface OnboardingStep {
+  key: string;
+  label: string;
+  description: string;
+  href: string;
+  complete: boolean;
+}
+
+interface OnboardingProgress {
+  steps: OnboardingStep[];
+  completed_steps: number;
+  total_steps: number;
+  completion_percent: number;
+  complete: boolean;
+  next_step: OnboardingStep | null;
+  subscription_tier: 'basic' | 'premium' | null;
+  can_create_groups: boolean;
+  max_groups_create: number;
+  max_groups_join: number;
 }
 
 interface Notification {
@@ -109,6 +130,7 @@ export default function DashboardPage() {
   const [groups, setGroups] = useState<SavingsGroup[]>([]);
   const [contributions, setContributions] = useState<Contribution[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [onboarding, setOnboarding] = useState<OnboardingProgress | null>(null);
 
   const loadDashboard = useCallback(async () => {
     const session = getValidSession();
@@ -123,12 +145,13 @@ export default function DashboardPage() {
 
     try {
       const headers = { Authorization: 'Bearer ' + session.token };
-      const [profileRes, statsRes, groupsRes, contribRes, notifRes] = await Promise.all([
+      const [profileRes, statsRes, groupsRes, contribRes, notifRes, onboardingRes] = await Promise.all([
         window.fetch('/api/users/profile', { headers }),
         window.fetch('/api/users/stats', { headers }),
         window.fetch('/api/groups', { headers }),
         window.fetch('/api/contributions', { headers }),
         window.fetch('/api/notifications?limit=3', { headers }),
+        window.fetch('/api/users/onboarding-status', { headers }),
       ]);
 
       // Each response is applied independently — one endpoint failing (e.g. a
@@ -152,6 +175,9 @@ export default function DashboardPage() {
 
       const notifJson = await readJson<Notification[]>(notifRes);
       if (notifRes.ok) setNotifications(notifJson?.data ?? []);
+
+      const onboardingJson = await readJson<OnboardingProgress>(onboardingRes);
+      if (onboardingRes.ok) setOnboarding(onboardingJson?.data ?? null);
     } catch {
       setError('Network error. Please check your connection and try again.');
     } finally {
@@ -226,6 +252,62 @@ export default function DashboardPage() {
               )}
             </Link>
           </MotionDiv>
+
+          {/* ── Profile completion (hidden once every step is done) ──── */}
+          {onboarding && !onboarding.complete && (
+            <MotionDiv variants={fadeUp} className="mt-5">
+              <div className="rounded-3xl bg-white p-6" style={{ border: '1px solid #F3F4F6', boxShadow: '0 4px 24px rgba(0,0,0,0.06)' }}>
+                <div className="flex items-start justify-between gap-4 flex-wrap">
+                  <div>
+                    <p className="text-gray-500 text-xs font-bold uppercase tracking-wide">Complete your profile</p>
+                    <p className="text-gray-900 text-2xl font-black">{onboarding.completion_percent}%</p>
+                    <p className="text-sm text-gray-500">
+                      {onboarding.completed_steps} of {onboarding.total_steps} steps done — finish them all to create or join a savings group.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-4 h-2 rounded-full bg-gray-100 overflow-hidden">
+                  <div className="h-full rounded-full" style={{ width: `${onboarding.completion_percent}%`, background: '#2EAF6F' }} />
+                </div>
+
+                <div className="mt-4 space-y-2">
+                  {onboarding.steps.map(step => (
+                    step.complete ? (
+                      <div key={step.key} className="flex items-center gap-3 rounded-2xl p-3" style={{ background: '#F9FAFB' }}>
+                        <CheckCircle2 className="w-5 h-5 flex-shrink-0" style={{ color: '#2EAF6F' }} />
+                        <p className="text-sm font-semibold text-gray-500 line-through">{step.label}</p>
+                      </div>
+                    ) : (
+                      <Link
+                        key={step.key}
+                        to={step.href}
+                        className="flex items-center gap-3 rounded-2xl p-3"
+                        style={{ border: '1px solid #F3F4F6' }}
+                      >
+                        <Circle className="w-5 h-5 flex-shrink-0 text-gray-300" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-bold text-gray-900">{step.label}</p>
+                          <p className="text-xs text-gray-500">{step.description}</p>
+                        </div>
+                        <ChevronRight className="w-4 h-4 text-gray-300 flex-shrink-0" />
+                      </Link>
+                    )
+                  ))}
+                </div>
+
+                {onboarding.next_step && (
+                  <Link
+                    to={onboarding.next_step.href}
+                    className="mt-4 inline-flex items-center gap-2 rounded-2xl px-5 py-3 text-sm font-bold text-white"
+                    style={{ background: '#2EAF6F' }}
+                  >
+                    {onboarding.next_step.label} <ArrowRight className="w-4 h-4" />
+                  </Link>
+                )}
+              </div>
+            </MotionDiv>
+          )}
 
           {/* ── Payment due (only shown if something is actually due) ── */}
           {dueContribution && (

@@ -79,6 +79,34 @@ export class StripeIdentityProvider implements IIdentityVerificationProvider {
     };
   }
 
+  /**
+   * Ask Stripe directly what happened to this member's VerificationSession.
+   *
+   * The terminal verified/requires_input result normally arrives by webhook,
+   * but a webhook can be missing (endpoint not configured in a sandbox),
+   * delayed, or lost — which would otherwise leave the member stuck on
+   * "Pending" forever with no way to finish onboarding. Callers use this to
+   * reconcile our stored status with Stripe's on demand (same self-heal
+   * pattern as refreshStripePayoutVerification for Connect accounts).
+   *
+   * Returns `null` when there's nothing to reconcile (no session on file, or
+   * Stripe could not be reached — never throws, so a status poll can't 500).
+   */
+  async getRemoteSessionStatus(userId: string): Promise<Stripe.Identity.VerificationSession.Status | null> {
+    const rows = await db.select({ stripe_identity_session_id: schema.users.stripe_identity_session_id })
+      .from(schema.users).where(eq(schema.users.id, userId)).limit(1);
+    const sessionId = rows[0]?.stripe_identity_session_id;
+    if (!sessionId) return null;
+
+    try {
+      const session = await getStripe().identity.verificationSessions.retrieve(sessionId);
+      return session.status;
+    } catch (err) {
+      console.warn('[StripeIdentityProvider] Could not retrieve verification session:', err instanceof Error ? err.message : err);
+      return null;
+    }
+  }
+
   async handleWebhook(payload: Buffer, signature: string): Promise<IdentityWebhookResult> {
     const stripe = getStripe();
     const secret = process.env.STRIPE_IDENTITY_WEBHOOK_SECRET;
