@@ -20,6 +20,9 @@ declare global {
       toggle?: () => void;
       maximize?: () => void;
       minimize?: () => void;
+      hideWidget?: () => void;
+      showWidget?: () => void;
+      onLoad?: () => void;
       [key: string]: unknown;
     };
     Tawk_LoadStart?: Date;

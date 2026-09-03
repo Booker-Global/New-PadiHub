@@ -11,6 +11,10 @@ import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { getStripeProvider, getFlutterwaveProvider } from '../integrations/payments/PaymentProviderFactory.js';
+import {
+  sendPaymentMethodUpdatedEmail,
+  sendPayoutDestinationUpdatedEmail,
+} from '../integrations/email/emailService.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { contributionService } from '../services/contributionService.js';
 import { getPaymentEligibility } from '../services/paymentEligibilityService.js';
@@ -47,6 +51,18 @@ async function getContributionContext(userId: string, contributionId: string) {
     user,
     group: groupRows[0],
   };
+}
+
+function getUserDisplayName(user: {
+  display_name?: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+  email?: string | null;
+}) {
+  return user.display_name?.trim()
+    || `${user.first_name ?? ''} ${user.last_name ?? ''}`.trim()
+    || user.email?.split('@')[0]
+    || 'PadiHub member';
 }
 
 function getBaseAppUrl() {
@@ -246,6 +262,7 @@ export const paymentController = {
       }
 
       const user = await getUserOrThrow(userId);
+      const hadVerifiedPaymentMethod = Boolean(user.stripe_payment_method_id && user.payment_method_verified_at);
       if (!user.stripe_customer_id) {
         throw new AppError('No Stripe customer record. Start payment method setup again.', 400, 'PAYMENT_CUSTOMER_MISSING');
       }
@@ -287,6 +304,9 @@ export const paymentController = {
         entityId: userId,
         metadata: { paymentMethodId: payment_method_id },
       });
+      if (hadVerifiedPaymentMethod) {
+        await sendPaymentMethodUpdatedEmail(user.email, getUserDisplayName(user));
+      }
 
       // The platform subscription is intentionally NOT created/charged here.
       // For UK members, the card is only ever saved (never charged) at this
@@ -305,7 +325,11 @@ export const paymentController = {
   createFlutterwavePaymentLink: async (req: Request, res: Response, next: NextFunction) => {
     try {
       const userId = req.user!.userId;
-      const { contribution_id, terms_accepted } = req.body as { contribution_id?: string; terms_accepted?: boolean };
+      const { contribution_id, terms_accepted, setup_mode } = req.body as {
+        contribution_id?: string;
+        terms_accepted?: boolean;
+        setup_mode?: 'add' | 'change';
+      };
       if (terms_accepted !== true) {
         throw new AppError('You must accept the payment terms & conditions to save a payment method.', 400, 'TERMS_NOT_ACCEPTED');
       }
@@ -343,6 +367,7 @@ export const paymentController = {
       const verificationAmount = getFlutterwaveSetupAmount();
       const txRef = buildFlutterwaveSetupTxRef(userId, contribution_id ?? 'standalone');
       redirectUrl.searchParams.set('setup_provider', 'flutterwave');
+      redirectUrl.searchParams.set('setup_mode', setup_mode === 'change' ? 'change' : 'add');
 
       const result = await getFlutterwaveProvider().createHostedPaymentLink({
         amount: verificationAmount,
@@ -396,6 +421,7 @@ export const paymentController = {
       if (!tx_ref) throw new AppError('tx_ref is required.', 400);
 
       const user = await getUserOrThrow(userId);
+      const hadVerifiedPaymentMethod = Boolean(user.flutterwave_card_token && user.payment_method_verified_at);
       const result = await getFlutterwaveProvider().verifyTransaction({
         transactionId: transaction_id.toString(),
       });
@@ -442,6 +468,9 @@ export const paymentController = {
           txRef: result.txRef,
         },
       });
+      if (hadVerifiedPaymentMethod) {
+        await sendPaymentMethodUpdatedEmail(user.email, getUserDisplayName(user));
+      }
 
       // The platform subscription is intentionally NOT created/charged here.
       // For NG members, this only saves a reusable card token — the
@@ -465,6 +494,9 @@ export const paymentController = {
     try {
       const userId = req.user!.userId;
       const user = await getUserOrThrow(userId);
+      const hadVerifiedPayoutDestination = user.country === 'NG'
+        ? Boolean(user.flutterwave_subaccount_id && user.payout_verified_at)
+        : Boolean(user.stripe_connected_account_id && user.payout_verified_at);
 
       if (user.country === 'NG') {
         // Flutterwave subaccount — requires bank details from request body
@@ -498,6 +530,9 @@ export const paymentController = {
           .where(eq(schema.users.id, userId));
 
         await createAuditLog({ userId, action: 'FLW_SUBACCOUNT_CREATED', entity: 'users', entityId: userId });
+        if (hadVerifiedPayoutDestination) {
+          await sendPayoutDestinationUpdatedEmail(user.email, getUserDisplayName(user));
+        }
         return res.json({ success: true, data: result });
       }
 
@@ -541,10 +576,13 @@ export const paymentController = {
 
         const outstanding = await stripeProvider.getOutstandingRequirements(accountId);
         const onboardingUrl = outstanding.length
-          ? (await stripeProvider.createOnboardingLink(accountId)).onboardingUrl
+          ? (await stripeProvider.createOnboardingLink(accountId, hadVerifiedPayoutDestination ? 'change' : 'add')).onboardingUrl
           : undefined;
 
         res.json({ success: true, data: { accountId, onboardingUrl } });
+        if (hadVerifiedPayoutDestination) {
+          await sendPayoutDestinationUpdatedEmail(user.email, getUserDisplayName(user));
+        }
       } catch (providerErr) {
         throw new AppError(
           describeProviderError(providerErr, 'Could not connect your Stripe payout account.'),

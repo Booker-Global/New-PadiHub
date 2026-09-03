@@ -12,7 +12,7 @@ const nothingDone: OnboardingEligibility = {
 describe('buildOnboardingSteps', () => {
   it('returns the five required steps in the order members must complete them', () => {
     expect(buildOnboardingSteps(nothingDone).map(step => step.key)).toEqual([
-      'email', 'identity', 'subscription', 'payment_method', 'payout',
+      'email', 'subscription', 'payment_method', 'payout', 'identity',
     ]);
   });
 

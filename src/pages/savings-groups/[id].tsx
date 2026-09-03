@@ -51,7 +51,7 @@ interface SavingsGroup {
   contribution_amount: string | number;
   contribution_frequency: 'daily' | 'weekly' | 'monthly';
   maximum_members: number;
-  rotation_method: 'manual' | 'random';
+  rotation_method: 'manual' | 'random' | 'trust_score';
   current_rotation_position: number;
   current_cycle: number;
   strike_threshold: number;
@@ -62,6 +62,13 @@ interface SavingsGroup {
   status: 'draft' | 'active' | 'suspended' | 'closed' | 'expired';
   created_at: string;
   updated_at: string;
+  // See src/server/db/schema.ts doc comments — a "rotation" here means one
+  // full lap through every currently-active member (distinct from
+  // current_cycle, which is a single member's payout turn).
+  group_duration_type: 'fixed' | 'indefinite';
+  group_duration_rotations: number | null;
+  full_rotations_completed: number;
+  closure_scheduled: boolean;
 }
 
 interface Membership {
@@ -109,9 +116,10 @@ interface InvitationResult {
 interface Vote {
   id: string;
   group_id: string;
-  proposal_type: 'payout_swap' | 'exceptional_request' | 'member_admission' | 'contribution_claim';
+  proposal_type: 'payout_swap' | 'exceptional_request' | 'member_admission' | 'contribution_claim' | 'member_removal';
   proposer_id: string;
   proposal_text: string;
+  target_member_id?: string | null;
   voting_deadline: string;
   status: 'open' | 'approved' | 'rejected' | 'expired';
   created_at: string;
@@ -151,6 +159,12 @@ function formatDate(date: string) {
 
 function titleCase(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function describeRotationMethod(rotationMethod: SavingsGroup['rotation_method']) {
+  return rotationMethod === 'manual' || rotationMethod === 'trust_score'
+    ? 'Trust Score'
+    : titleCase(rotationMethod);
 }
 
 function shortId(value: string) {
@@ -222,12 +236,20 @@ export default function SavingsGroupDetailPage() {
   const [claimSubmitting, setClaimSubmitting] = useState(false);
   const [claimError, setClaimError] = useState('');
   const [claimNotice, setClaimNotice] = useState('');
+  const [closureSubmitting, setClosureSubmitting] = useState(false);
+  const [closureError, setClosureError] = useState('');
+  const [closureNotice, setClosureNotice] = useState('');
   const [votes, setVotes] = useState<Vote[]>([]);
   const [swapTarget, setSwapTarget] = useState('');
   const [swapNote, setSwapNote] = useState('');
   const [swapSubmitting, setSwapSubmitting] = useState(false);
   const [swapError, setSwapError] = useState('');
   const [swapNotice, setSwapNotice] = useState('');
+  const [removalTarget, setRemovalTarget] = useState('');
+  const [removalReason, setRemovalReason] = useState('');
+  const [removalSubmitting, setRemovalSubmitting] = useState(false);
+  const [removalError, setRemovalError] = useState('');
+  const [removalNotice, setRemovalNotice] = useState('');
   const [voteActionId, setVoteActionId] = useState<string | null>(null);
   const [voteActionError, setVoteActionError] = useState('');
   const [activating, setActivating] = useState(false);
@@ -390,13 +412,14 @@ export default function SavingsGroupDetailPage() {
   );
 
   const openGovernanceVotes = useMemo(
-    () => votes.filter(vote => (vote.proposal_type === 'member_admission' || vote.proposal_type === 'contribution_claim') && vote.status === 'open'),
+    () => votes.filter(vote => (vote.proposal_type === 'member_admission' || vote.proposal_type === 'contribution_claim' || vote.proposal_type === 'member_removal') && vote.status === 'open'),
     [votes],
   );
 
   function describeGovernanceVote(vote: Vote) {
     if (vote.proposal_type === 'member_admission') return 'New Member Admission — needs a unanimous accept from every active member';
     if (vote.proposal_type === 'contribution_claim') return 'Contribution Increase Request — needs a unanimous accept from every active member';
+    if (vote.proposal_type === 'member_removal') return `Remove ${getMemberDisplayName(vote.target_member_id ?? '')} — needs a unanimous accept from every other active member`;
     return vote.proposal_text;
   }
 
@@ -606,6 +629,40 @@ export default function SavingsGroupDetailPage() {
     }
   };
 
+  const handleScheduleClosure = async () => {
+    if (!id) return;
+    const activeSession = getValidSession();
+    if (!activeSession?.token) {
+      setClosureError('Please log in to close this group.');
+      return;
+    }
+    if (!window.confirm('Close this group once the current payout rotation finishes? This cannot be undone.')) return;
+
+    setClosureSubmitting(true);
+    setClosureError('');
+    setClosureNotice('');
+
+    try {
+      const response = await window.fetch(`/api/groups/${id}/schedule-closure`, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + activeSession.token },
+      });
+      const json = await response.json() as ApiResponse<{ already_scheduled?: boolean }>;
+      if (!response.ok) {
+        setClosureError(getErrorMessage(json, 'Could not schedule this group to close.'));
+        return;
+      }
+      setClosureNotice(json.data?.already_scheduled
+        ? 'Closure was already scheduled — this group will close once the current rotation completes.'
+        : 'Closure scheduled. This group will close automatically once the current payout rotation completes, and every member will be emailed.');
+      await loadData();
+    } catch {
+      setClosureError('Network error. Please check your connection and try again.');
+    } finally {
+      setClosureSubmitting(false);
+    }
+  };
+
   const handleProposeSwap = async () => {
     if (!id || !swapTarget) {
       setSwapError('Please choose a member to swap payout positions with.');
@@ -643,6 +700,46 @@ export default function SavingsGroupDetailPage() {
       setSwapError('Network error. Please check your connection and try again.');
     } finally {
       setSwapSubmitting(false);
+    }
+  };
+
+  const handleProposeRemoval = async () => {
+    if (!id || !removalTarget) {
+      setRemovalError('Please choose a member to propose removing.');
+      return;
+    }
+    const activeSession = getValidSession();
+    if (!activeSession?.token) {
+      setRemovalError('Please log in to propose a member removal.');
+      return;
+    }
+
+    setRemovalSubmitting(true);
+    setRemovalError('');
+    setRemovalNotice('');
+
+    try {
+      const response = await window.fetch('/api/votes/member-removal', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer ' + activeSession.token,
+        },
+        body: JSON.stringify({ group_id: id, target_member_id: removalTarget, reason: removalReason || undefined }),
+      });
+      const json = await response.json() as ApiResponse<{ id: string }>;
+      if (!response.ok) {
+        setRemovalError(getErrorMessage(json, 'Could not propose this member removal.'));
+        return;
+      }
+      setRemovalNotice('Removal vote started. Every other active member has 48 hours to respond — it only passes if all agree.');
+      setRemovalTarget('');
+      setRemovalReason('');
+      await loadData();
+    } catch {
+      setRemovalError('Network error. Please check your connection and try again.');
+    } finally {
+      setRemovalSubmitting(false);
     }
   };
 
@@ -796,6 +893,30 @@ export default function SavingsGroupDetailPage() {
                 </div>
               )}
 
+              {(group.status === 'active' || group.status === 'suspended') && (
+                <div className="rounded-xl p-3 mb-3" style={{ background: 'rgba(255,255,255,0.06)' }}>
+                  <p className="text-xs" style={{ color: 'rgba(255,255,255,0.6)' }}>
+                    {group.group_duration_type === 'fixed'
+                      ? `Runs for ${group.group_duration_rotations} complete payout rotation(s) — ${group.full_rotations_completed} done so far, then closes automatically.`
+                      : group.closure_scheduled
+                        ? 'Closure scheduled — this group will close once the current payout rotation completes.'
+                        : 'Indefinite — keeps rotating until the Owner closes it.'}
+                  </p>
+                  {group.leader_id === currentUserId && group.group_duration_type === 'indefinite' && !group.closure_scheduled && (
+                    <button
+                      onClick={() => void handleScheduleClosure()}
+                      disabled={closureSubmitting}
+                      className="mt-2 flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold"
+                      style={{ background: 'rgba(239,68,68,0.15)', color: '#FCA5A5', cursor: closureSubmitting ? 'not-allowed' : 'pointer' }}
+                    >
+                      {closureSubmitting ? 'Scheduling…' : 'Close Group'}
+                    </button>
+                  )}
+                  {closureError && <p className="text-xs font-semibold mt-2" style={{ color: '#FCA5A5' }}>{closureError}</p>}
+                  {closureNotice && <p className="text-xs font-semibold mt-2" style={{ color: '#86EFAC' }}>{closureNotice}</p>}
+                </div>
+              )}
+
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
                 {[
                   { label: 'Contribution', value: formatCurrency(group.contribution_amount, group.currency), color: groupColor },
@@ -819,7 +940,7 @@ export default function SavingsGroupDetailPage() {
                   <div className="h-2 rounded-full transition-all duration-500" style={{ width: `${occupancyPercentage}%`, background: `linear-gradient(90deg, ${groupColor}, #F59E0B)` }} />
                 </div>
                 <div className="flex items-center justify-between mt-3 text-xs" style={{ color: 'rgba(255,255,255,0.45)' }}>
-                  <span>Rotation method: {titleCase(group.rotation_method)}</span>
+                  <span>Rotation method: {describeRotationMethod(group.rotation_method)}</span>
                   <span>Position {group.current_rotation_position}</span>
                 </div>
               </div>
@@ -1127,8 +1248,53 @@ export default function SavingsGroupDetailPage() {
                         <h2 className="font-extrabold text-gray-900 text-sm" style={{ fontFamily: 'Nunito, sans-serif' }}>Governance votes</h2>
                       </div>
                       <p className="text-xs text-gray-500 mb-3">
-                        New-member admissions and contribution-increase requests require a unanimous accept from every active member within 48 hours.
+                        New-member admissions, contribution-increase requests, and member-removal proposals require a unanimous accept from every other active member within 48 hours.
                       </p>
+
+                      {currentMembership?.status === 'active' && (
+                        <div className="rounded-2xl p-3 mb-4" style={{ background: '#F9FAFB', border: '1px solid #F3F4F6' }}>
+                          <p className="text-xs font-bold text-gray-900 mb-2">Propose removing a member</p>
+                          <p className="text-[11px] text-gray-400 mb-2">Every other active member must unanimously agree. The member currently due this cycle&apos;s payout can&apos;t be targeted until they&apos;ve received it.</p>
+                          {removalError && (
+                            <div className="rounded-xl p-2.5 mb-2 text-xs font-semibold flex items-center gap-2" style={{ background: 'rgba(239,68,68,0.08)', color: '#B91C1C' }}>
+                              <AlertTriangle size={13} /> {removalError}
+                            </div>
+                          )}
+                          {removalNotice && (
+                            <div className="rounded-xl p-2.5 mb-2 text-xs font-semibold flex items-center gap-2" style={{ background: 'rgba(46,175,111,0.08)', color: '#1d8a55' }}>
+                              <CheckCircle size={13} /> {removalNotice}
+                            </div>
+                          )}
+                          <div className="flex flex-col sm:flex-row gap-2">
+                            <select
+                              value={removalTarget}
+                              onChange={event => setRemovalTarget(event.target.value)}
+                              className="flex-1 px-3 py-2 rounded-xl text-sm border border-gray-200 focus:outline-none focus:border-purple-400"
+                            >
+                              <option value="">Choose a member…</option>
+                              {swapCandidates.map(candidate => (
+                                <option key={candidate.id} value={candidate.user_id}>
+                                  {getMemberDisplayName(candidate.user_id)}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              onClick={() => void handleProposeRemoval()}
+                              disabled={removalSubmitting || !removalTarget}
+                              className="px-4 py-2 rounded-xl text-xs font-bold text-white whitespace-nowrap"
+                              style={{ background: removalSubmitting || !removalTarget ? '#D1D5DB' : 'linear-gradient(135deg, #8B5CF6, #6D28D9)', cursor: removalSubmitting || !removalTarget ? 'not-allowed' : 'pointer' }}
+                            >
+                              {removalSubmitting ? 'Submitting…' : 'Start removal vote'}
+                            </button>
+                          </div>
+                          <input
+                            value={removalReason}
+                            onChange={event => setRemovalReason(event.target.value)}
+                            placeholder="Optional reason for the group"
+                            className="w-full mt-2 px-3 py-2 rounded-xl text-sm border border-gray-200 focus:outline-none focus:border-purple-400"
+                          />
+                        </div>
+                      )}
 
                       {group.leader_id === currentUserId && (
                         <div className="rounded-2xl p-3 mb-4" style={{ background: '#F9FAFB', border: '1px solid #F3F4F6' }}>
@@ -1163,28 +1329,33 @@ export default function SavingsGroupDetailPage() {
                         <div className="flex flex-col gap-2">
                           {openGovernanceVotes.map(vote => {
                             const busy = voteActionId === vote.id;
+                            const isTargetOfRemoval = vote.proposal_type === 'member_removal' && vote.target_member_id === currentUserId;
                             return (
                               <div key={vote.id} className="rounded-2xl p-3" style={{ background: '#F9FAFB', border: '1px solid #F3F4F6' }}>
                                 <p className="text-xs font-bold text-gray-900">{describeGovernanceVote(vote)}</p>
                                 <p className="text-[11px] text-gray-400 mt-1">Voting closes {formatDate(vote.voting_deadline)}</p>
-                                <div className="flex items-center gap-2 mt-2">
-                                  <button
-                                    onClick={() => void handleCastVote(vote.id, 'approve')}
-                                    disabled={busy}
-                                    className="flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold text-white"
-                                    style={{ background: busy ? '#D1D5DB' : 'linear-gradient(135deg, #2EAF6F, #1d8a55)', cursor: busy ? 'not-allowed' : 'pointer' }}
-                                  >
-                                    <ThumbsUp size={12} /> Accept
-                                  </button>
-                                  <button
-                                    onClick={() => void handleCastVote(vote.id, 'reject')}
-                                    disabled={busy}
-                                    className="flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold"
-                                    style={{ background: '#FEE2E2', color: '#B91C1C', cursor: busy ? 'not-allowed' : 'pointer' }}
-                                  >
-                                    <ThumbsDown size={12} /> Decline
-                                  </button>
-                                </div>
+                                {isTargetOfRemoval ? (
+                                  <p className="text-[11px] font-semibold mt-2" style={{ color: '#B91C1C' }}>A vote to remove you from this group is open — you can&apos;t vote on your own removal.</p>
+                                ) : (
+                                  <div className="flex items-center gap-2 mt-2">
+                                    <button
+                                      onClick={() => void handleCastVote(vote.id, 'approve')}
+                                      disabled={busy}
+                                      className="flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold text-white"
+                                      style={{ background: busy ? '#D1D5DB' : 'linear-gradient(135deg, #2EAF6F, #1d8a55)', cursor: busy ? 'not-allowed' : 'pointer' }}
+                                    >
+                                      <ThumbsUp size={12} /> Accept
+                                    </button>
+                                    <button
+                                      onClick={() => void handleCastVote(vote.id, 'reject')}
+                                      disabled={busy}
+                                      className="flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold"
+                                      style={{ background: '#FEE2E2', color: '#B91C1C', cursor: busy ? 'not-allowed' : 'pointer' }}
+                                    >
+                                      <ThumbsDown size={12} /> Decline
+                                    </button>
+                                  </div>
+                                )}
                               </div>
                             );
                           })}
@@ -1257,7 +1428,7 @@ export default function SavingsGroupDetailPage() {
                       { icon: Clock, color: '#F59E0B', label: 'Suspension threshold', value: `${group.suspension_threshold} missed payment${group.suspension_threshold === 1 ? '' : 's'} before suspension` },
                       { icon: Users, color: '#8B5CF6', label: 'Voting threshold', value: `${group.voting_threshold}% approval required` },
                       { icon: TrendingUp, color: '#2EAF6F', label: 'Payout swaps', value: group.allow_payout_swaps ? 'Allowed' : 'Not allowed' },
-                      { icon: Shield, color: '#2eafaf', label: 'Rotation method', value: titleCase(group.rotation_method) },
+                      { icon: Shield, color: '#2eafaf', label: 'Rotation method', value: describeRotationMethod(group.rotation_method) },
                     ].map(rule => (
                       <div key={rule.label} className="flex items-start gap-4 p-4 rounded-2xl" style={{ background: '#F9FAFB' }}>
                         <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: `${rule.color}15` }}>

@@ -55,6 +55,7 @@ export const GROUP_DEFAULT_STRIKE_THRESHOLD     = 2; // missed contributions bef
 export const GROUP_DEFAULT_SUSPENSION_THRESHOLD = 3; // max permitted contribution defaults before Compensated Compression removes the member
 export const GROUP_DEFAULT_VOTING_THRESHOLD     = 51; // % of votes required to pass a group decision
 export const GROUP_DEFAULT_MIN_TRUST_SCORE      = 0; // no minimum Trust Score required to join, unless the creator sets one
+export const GROUP_MAX_MEMBERS                  = 10; // platform-wide hard cap for any savings group
 
 /**
  * Group launch/lifecycle rules (Draft → Active → Suspended → Expired) — see
@@ -64,6 +65,10 @@ export const GROUP_DEFAULT_MIN_TRUST_SCORE      = 0; // no minimum Trust Score r
 export const GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH = 3; // "Start Group" stays disabled below this
 export const GROUP_STUCK_BELOW_MIN_EXPIRY_DAYS  = 30; // draft/suspended groups auto-expire after this many days stuck below the minimum
 export const GROUP_STUCK_EXPIRY_REMINDER_DAYS_BEFORE = [7, 3, 1]; // reminder nudges before auto-expiry
+
+export function clampGroupMaximumMembers(maximumMembers: number): number {
+  return Math.min(maximumMembers, GROUP_MAX_MEMBERS);
+}
 
 /**
  * A missed/failed contribution charge gets exactly one automatic retry, at
@@ -137,3 +142,11 @@ export function formatTierPrice(tier: SubscriptionTierKey, country: string): str
     : `£${SUBSCRIPTION_TIERS[tier].priceGBP.toFixed(2)}`;
 }
 
+/**
+ * Human-readable country name for a 2-letter code, used in user-facing error
+ * messages (e.g. the cross-border group membership guard) — never expose the
+ * raw 'GB'/'NG' code to a member.
+ */
+export function countryDisplayName(country: string): string {
+  return country === 'NG' ? 'Nigeria' : 'the United Kingdom';
+}

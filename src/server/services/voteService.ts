@@ -11,7 +11,7 @@ import { sendGovernanceVoteEmail, sendVoteOutcomeEmail } from '../integrations/e
 
 const APP_URL = process.env.APP_URL ?? 'https://padihub.com';
 
-type ProposalType = 'payout_swap' | 'exceptional_request' | 'member_admission' | 'contribution_claim';
+type ProposalType = 'payout_swap' | 'exceptional_request' | 'member_admission' | 'contribution_claim' | 'member_removal';
 type VoteRow = typeof schema.votes.$inferSelect;
 
 /** Human-readable subject line for each governance vote email, by proposal type. */
@@ -20,6 +20,7 @@ function subjectFor(type: ProposalType): string {
     case 'member_admission':   return 'New Member Admission — Vote Required';
     case 'contribution_claim': return 'Contribution Increase Request — Vote Required';
     case 'payout_swap':        return 'Payout Swap Request';
+    case 'member_removal':     return 'Member Removal — Vote Required';
     default:                   return 'Vote Required';
   }
 }
@@ -122,6 +123,54 @@ export const voteService = {
     }, ipAddress, { autoApproveProposer: true });
   },
 
+  /**
+   * Section 15.D — any member can initiate a unanimous vote to remove a
+   * specific OTHER member. The target cannot vote on their own removal, and
+   * cannot be targeted at all while they're the group's currently-designated
+   * payout recipient for the in-progress cycle (until they've received that
+   * cycle's payout) — this stops the vote mechanism being used to strip a
+   * payout from someone in good standing.
+   */
+  async proposeMemberRemoval(groupId: string, proposerId: string, targetMemberId: string, reason: string | undefined, ipAddress?: string) {
+    if (proposerId === targetMemberId) throw new AppError('You cannot propose your own removal.', 400);
+
+    const groupRows = await db.select().from(schema.savingsGroups).where(eq(schema.savingsGroups.id, groupId)).limit(1);
+    if (!groupRows.length) throw new AppError('Group not found.', 404);
+    const group = groupRows[0];
+
+    const memberRows = await db.select().from(schema.memberships)
+      .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')));
+    const proposer = memberRows.find(m => m.user_id === proposerId);
+    const target = memberRows.find(m => m.user_id === targetMemberId);
+    if (!proposer) throw new AppError('You are not an active member of this group.', 403);
+    if (!target) throw new AppError('The selected member is not an active member of this group.', 404);
+
+    const currentRotationRows = await db.select().from(schema.rotations)
+      .where(and(eq(schema.rotations.group_id, groupId), eq(schema.rotations.cycle_number, group.current_cycle)))
+      .limit(1);
+    const currentRotation = currentRotationRows[0];
+    if (currentRotation && currentRotation.recipient_id === targetMemberId && currentRotation.payout_status !== 'completed') {
+      throw new AppError(
+        'This member is the current cycle\u2019s designated payout recipient and cannot be targeted by a removal vote until after they receive that payout.',
+        403, 'PAYOUT_RECIPIENT_PROTECTED',
+      );
+    }
+
+    const targetUserRows = await db.select({ first_name: schema.users.first_name, last_name: schema.users.last_name })
+      .from(schema.users).where(eq(schema.users.id, targetMemberId)).limit(1);
+    const targetName = targetUserRows.length ? `${targetUserRows[0].first_name} ${targetUserRows[0].last_name}`.trim() : 'this member';
+
+    return this.create({
+      group_id:           groupId,
+      proposal_type:      'member_removal',
+      proposer_id:        proposerId,
+      proposal_text:      `Remove ${targetName} from "${group.name}"?${reason?.trim() ? ` Reason given: ${reason.trim()}` : ''} Every other active member must agree — a single decline or a 48-hour timeout keeps them in the group.`,
+      target_member_id:   targetMemberId,
+      requires_unanimous: true,
+      voting_deadline:    new Date(Date.now() + GOVERNANCE_VOTE_DEADLINE_MS),
+    }, ipAddress, { autoApproveProposer: true });
+  },
+
   /** Swaps rotation_order between the proposer and the target member once a payout_swap vote is approved. */
   async executePayoutSwapIfApproved(vote: VoteRow) {
     if (vote.proposal_type !== 'payout_swap' || !vote.target_member_id) return;
@@ -183,14 +232,19 @@ export const voteService = {
 
     // Who needs to be asked to respond: the single target member (1:1
     // matters like payout_swap), or every active member except the
-    // auto-approved proposer (unanimous / legacy percentage votes).
+    // auto-approved proposer (unanimous / legacy percentage votes) — and,
+    // for member_removal specifically, also excluding the target, who
+    // cannot vote on their own removal.
     let recipientIds: string[];
-    if (data.target_member_id) {
+    if (data.target_member_id && data.proposal_type === 'payout_swap') {
       recipientIds = [data.target_member_id];
     } else {
       const members = await db.select().from(schema.memberships)
         .where(and(eq(schema.memberships.group_id, data.group_id), eq(schema.memberships.status, 'active')));
       recipientIds = members.map(m => m.user_id).filter(uid => !(opts?.autoApproveProposer && uid === data.proposer_id));
+      if (data.proposal_type === 'member_removal' && data.target_member_id) {
+        recipientIds = recipientIds.filter(uid => uid !== data.target_member_id);
+      }
     }
 
     if (recipientIds.length) {
@@ -233,8 +287,11 @@ export const voteService = {
       await this._tallyAndMaybeClose(vote, true);
       throw new AppError('Voting deadline has passed.', 400);
     }
-    if (vote.target_member_id && memberId !== vote.target_member_id) {
+    if (vote.target_member_id && vote.proposal_type === 'payout_swap' && memberId !== vote.target_member_id) {
       throw new AppError('Only the invited member can respond to this vote.', 403);
+    }
+    if (vote.proposal_type === 'member_removal' && memberId === vote.target_member_id) {
+      throw new AppError('You cannot vote on your own removal.', 403);
     }
 
     const existing = await db.select().from(schema.voteResponses)
@@ -246,7 +303,7 @@ export const voteService = {
     });
     await createAuditLog({ userId: memberId, action: 'VOTE_SUBMITTED', entity: 'votes', entityId: voteId, ipAddress });
 
-    if (vote.target_member_id) {
+    if (vote.target_member_id && vote.proposal_type === 'payout_swap') {
       // Direct 1:1 matter — the target's single response decides it.
       await this._closeVote(vote, decision === 'approve' ? 'approved' : 'rejected');
     } else {
@@ -289,7 +346,7 @@ export const voteService = {
     const vote = voteRows[0];
     if (vote.status !== 'open') throw new AppError('Vote is already closed.', 400);
 
-    if (vote.target_member_id) {
+    if (vote.target_member_id && vote.proposal_type === 'payout_swap') {
       await this._closeVote(vote, 'expired');
       await createAuditLog({ userId, action: 'VOTE_FORCE_CLOSED', entity: 'votes', entityId: voteId, ipAddress, metadata: { result: 'expired' } });
       return { status: 'expired', approvals: 0, total: 1 };
@@ -297,9 +354,12 @@ export const voteService = {
 
     const members = await db.select().from(schema.memberships)
       .where(and(eq(schema.memberships.group_id, vote.group_id), eq(schema.memberships.status, 'active')));
+    const eligibleMembers = vote.proposal_type === 'member_removal' && vote.target_member_id
+      ? members.filter(m => m.user_id !== vote.target_member_id)
+      : members;
     const responses = await db.select().from(schema.voteResponses).where(eq(schema.voteResponses.vote_id, voteId));
     const approvals = responses.filter(r => r.decision === 'approve').length;
-    const total = members.length;
+    const total = eligibleMembers.length;
 
     let newStatus: 'approved' | 'rejected';
     if (vote.requires_unanimous) {
@@ -326,23 +386,28 @@ export const voteService = {
 
   /**
    * Central tally/close logic for group-wide votes (unanimous or the
-   * legacy percentage-threshold kind). 1:1 target_member_id votes are
-   * decided directly in castVote/forceClose and only reach here for
-   * deadline-expiry handling.
+   * legacy percentage-threshold kind). 1:1 target_member_id votes
+   * (payout_swap) are decided directly in castVote/forceClose and only
+   * reach here for deadline-expiry handling.
    */
   async _tallyAndMaybeClose(vote: VoteRow, deadlinePassedOverride?: boolean) {
     if (vote.status !== 'open') return;
     const deadlinePassed = deadlinePassedOverride ?? (new Date() > vote.voting_deadline);
 
-    if (vote.target_member_id) {
+    if (vote.target_member_id && vote.proposal_type === 'payout_swap') {
       if (deadlinePassed) await this._closeVote(vote, 'expired');
       return;
     }
 
     const members = await db.select().from(schema.memberships)
       .where(and(eq(schema.memberships.group_id, vote.group_id), eq(schema.memberships.status, 'active')));
+    // member_removal excludes the target from the eligible/voting body — they
+    // cannot vote on their own removal, so they don't count toward the total.
+    const eligibleMembers = vote.proposal_type === 'member_removal' && vote.target_member_id
+      ? members.filter(m => m.user_id !== vote.target_member_id)
+      : members;
     const responses = await db.select().from(schema.voteResponses).where(eq(schema.voteResponses.vote_id, vote.id));
-    const total = members.length;
+    const total = eligibleMembers.length;
     const approvals = responses.filter(r => r.decision === 'approve').length;
     const hasReject = responses.some(r => r.decision === 'reject');
 
@@ -383,6 +448,8 @@ export const voteService = {
         await this._resolveMemberAdmission(closedVote, newStatus);
       } else if (vote.proposal_type === 'contribution_claim') {
         await this._resolveContributionClaim(closedVote, newStatus);
+      } else if (vote.proposal_type === 'member_removal') {
+        await this._resolveMemberRemoval(closedVote, newStatus);
       } else {
         const members = await db.select().from(schema.memberships)
           .where(and(eq(schema.memberships.group_id, vote.group_id), eq(schema.memberships.status, 'active')));
@@ -466,6 +533,40 @@ export const voteService = {
         title: status === 'approved' ? 'Contribution Claim Approved' : 'Contribution Claim Not Approved',
         message,
       });
+    }
+  },
+
+  /**
+   * Section 15.D — a member-removal vote just closed. On approval, removes
+   * the target via the standard Compensated Compression flow (or, if they
+   * were the Owner, via the tenure-succession path) — that flow itself
+   * already sends the compression notice to remaining members and a
+   * distinct "removed via group vote" notice to the target. On
+   * rejection/expiry, nothing changes; let the target know they're safe.
+   */
+  async _resolveMemberRemoval(vote: VoteRow, status: 'approved' | 'rejected' | 'expired') {
+    if (!vote.target_member_id) return;
+    const targetMemberId = vote.target_member_id;
+
+    const groupRows = await db.select({ name: schema.savingsGroups.name }).from(schema.savingsGroups)
+      .where(eq(schema.savingsGroups.id, vote.group_id)).limit(1);
+    const groupName = groupRows.length ? groupRows[0].name : 'your group';
+
+    if (status === 'approved') {
+      // Dynamic import avoids a circular import at module-load time
+      // (membershipService also imports voteService to start admission votes).
+      const { membershipService } = await import('./membershipService.js');
+      await membershipService.removeMemberByVote(vote.group_id, targetMemberId);
+      return;
+    }
+
+    const targetRow = await db.select({ email: schema.users.email }).from(schema.users)
+      .where(eq(schema.users.id, targetMemberId)).limit(1);
+    if (targetRow.length) {
+      await sendVoteOutcomeEmail(
+        targetRow[0].email, groupName, 'Removal Vote Not Approved',
+        'A vote to remove you from the group was not approved by all other members (or it timed out) — you remain an active member.',
+      );
     }
   },
 

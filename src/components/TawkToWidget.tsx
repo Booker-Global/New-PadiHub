@@ -15,7 +15,11 @@ export default function TawkToWidget() {
     // Avoid double-injecting the script on remounts (e.g. React StrictMode).
     if (window.Tawk_API) return;
 
-    window.Tawk_API = {};
+    // PadiHub renders its own single floating chat launcher (StartChatButton,
+    // bottom-left) — hide Tawk.to's own default bubble once it loads so
+    // there are never two competing chat widgets on screen at once, while
+    // still leaving the actual chat window available via toggleTawkChat().
+    window.Tawk_API = { onLoad: () => window.Tawk_API?.hideWidget?.() };
     window.Tawk_LoadStart = new Date();
 
     // Mirrors Tawk.to's official embed snippet exactly (async script inserted

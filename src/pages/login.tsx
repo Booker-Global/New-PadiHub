@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { Eye, EyeOff, Mail, Lock, ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import AuthLayout from '@/components/AuthLayout';
 import { getApiErrorMessage } from '@/lib/api-error';
+import { storeSession } from '@/lib/session';
 
 /**
  * Only same-origin paths are honoured as a post-login destination, so a
@@ -24,9 +25,11 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const location = useLocation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const redirectTo = safeRedirect(searchParams.get('redirect') || searchParams.get('next'));
+  const successNotice = (location.state as { notice?: string } | null)?.notice ?? '';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,10 +57,7 @@ export default function LoginPage() {
         userId: user.id,
         role: user.role,
       };
-      try {
-        localStorage.setItem('padihub_user', JSON.stringify(sessionData));
-        sessionStorage.setItem('padihub_session', JSON.stringify(sessionData));
-      } catch { /* storage unavailable */ }
+      storeSession(sessionData);
       navigate(redirectTo);
     } catch {
       setError('Network error. Please check your connection and try again.');
@@ -84,6 +84,11 @@ export default function LoginPage() {
 
       <AuthLayout title="Welcome back 👋" subtitle="Log in to your PadiHub account and pick up where you left off.">
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {successNotice && (
+            <div style={{ borderRadius: 16, padding: 16, fontSize: 14, fontWeight: 500, background: '#F0FDF4', color: '#166534', border: '1px solid #BBF7D0' }}>
+              {successNotice}
+            </div>
+          )}
           {error && (
             <div style={{ borderRadius: 16, padding: 16, fontSize: 14, fontWeight: 500, background: '#FEF2F2', color: '#DC2626', border: '1px solid #FECACA' }}>
               {error}

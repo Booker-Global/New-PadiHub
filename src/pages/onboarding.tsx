@@ -253,7 +253,9 @@ function OnboardingShell({ children, step, totalSteps }: { children: ReactNode; 
         <div className="absolute top-0 right-0 w-96 h-96 rounded-full blur-3xl opacity-15" style={{ background: '#2EAF6F' }} />
         <div className="absolute bottom-0 left-0 w-64 h-64 rounded-full blur-3xl opacity-10" style={{ background: '#F59E0B' }} />
         <div className="relative">
-          <img src="/airo-assets/images/logo/horizontal" alt="PadiHub" className="r-logo" />
+          <Link to="/" aria-label="PadiHub home">
+            <img src="/airo-assets/images/logo/horizontal" alt="PadiHub" className="r-logo" />
+          </Link>
         </div>
         <div className="relative">
           <div className="flex flex-col gap-6 mb-12">
@@ -276,12 +278,6 @@ function OnboardingShell({ children, step, totalSteps }: { children: ReactNode; 
               </div>
             ))}
           </div>
-          <blockquote className="border-l-2 pl-4" style={{ borderColor: '#2EAF6F' }}>
-            <p className="text-gray-300 text-sm italic leading-relaxed">
-              "PadiHub transformed how our community saves together. The Trust Score™ keeps everyone accountable."
-            </p>
-            <footer className="mt-2 text-xs font-semibold" style={{ color: '#2EAF6F' }}>— Amara O., Lagos Savers Circle</footer>
-          </blockquote>
         </div>
         <p className="text-xs relative" style={{ color: 'rgba(255,255,255,0.3)' }}>
           © 2026 PadiHub · Trust · Transparency · Community · Progress
@@ -290,7 +286,9 @@ function OnboardingShell({ children, step, totalSteps }: { children: ReactNode; 
 
       <div className="flex-1 flex flex-col">
         <div className="lg:hidden flex items-center justify-center pt-8 pb-4">
-          <img src="/airo-assets/images/logo/horizontal" alt="PadiHub" className="r-logo" />
+          <Link to="/" aria-label="PadiHub home">
+            <img src="/airo-assets/images/logo/horizontal" alt="PadiHub" className="r-logo" />
+          </Link>
         </div>
 
         <div className="px-6 lg:px-12 pt-6 lg:pt-10">
@@ -1001,9 +999,6 @@ export default function OnboardingPage() {
                             <CheckCircle size={11} style={{ color: plan.accent, flexShrink: 0 }} /> {limit}
                           </div>
                         ))}
-                        <div className="flex items-center gap-1.5 text-xs text-gray-600">
-                          <CheckCircle size={11} style={{ color: plan.accent, flexShrink: 0 }} /> Monthly billing only
-                        </div>
                       </div>
                       {selectedPlan === plan.key && (
                         <div className="absolute top-4 right-4">

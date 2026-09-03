@@ -1,6 +1,6 @@
 import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
-import { eq, and, inArray, desc, count, ne } from 'drizzle-orm';
+import { eq, and, inArray, desc, count } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -9,6 +9,7 @@ import { BCRYPT_ROUNDS, TRUST_SCORE_MAX, TRUST_SCORE_MIN, SUBSCRIPTION_TIERS, is
 import { getPaymentProvider } from '../integrations/payments/PaymentProviderFactory.js';
 import { hashEmail } from '../lib/emailBlocklist.js';
 import { sendAccountDeletedEmail } from '../integrations/email/emailService.js';
+import { membershipService } from './membershipService.js';
 
 function getDeletedEmail(userId: string): string {
   return `deleted-${userId}@padihub.invalid`;
@@ -222,42 +223,27 @@ export const userService = {
     if (!userRows.length) throw new AppError('User not found.', 404);
     const user = userRows[0];
 
-    const ledGroups = await db.select({
-      id:     schema.savingsGroups.id,
-      name:   schema.savingsGroups.name,
-      status: schema.savingsGroups.status,
-    }).from(schema.savingsGroups).where(and(
-      eq(schema.savingsGroups.leader_id, userId),
-      eq(schema.savingsGroups.status, 'active'),
-    ));
+    // Section 15.B — account deletion triggers the same departure logic
+    // (Compensated Compression + tenure-based Owner succession, or draft
+    // cancellation) for EVERY active group the member is currently in —
+    // never require manually leaving each group first. Must run before the
+    // anonymization transaction below, since it still needs the member's
+    // real name/email for the departure notifications it sends.
+    const activeMemberships = await db.select({
+      group_id: schema.memberships.group_id,
+      leader_id: schema.savingsGroups.leader_id,
+    })
+      .from(schema.memberships)
+      .innerJoin(schema.savingsGroups, eq(schema.memberships.group_id, schema.savingsGroups.id))
+      .where(and(eq(schema.memberships.user_id, userId), eq(schema.memberships.status, 'active')));
 
-    const ledGroupIds = ledGroups.map(group => group.id);
-    const otherActiveMembers = ledGroupIds.length
-      ? await db.select({ group_id: schema.memberships.group_id })
-        .from(schema.memberships)
-        .where(and(
-          inArray(schema.memberships.group_id, ledGroupIds),
-          eq(schema.memberships.status, 'active'),
-          ne(schema.memberships.user_id, userId),
-        ))
-      : [];
-
-    const blockedGroupIds = new Set(otherActiveMembers.map(member => member.group_id));
-    const blockedGroups = ledGroups.filter(group => blockedGroupIds.has(group.id));
-    if (blockedGroups.length) {
-      const names = blockedGroups.map(group => group.name).join(', ');
-      throw new AppError(
-        names
-          ? `You must transfer leadership or close your group(s) before deleting your account. Active groups: ${names}.`
-          : 'You must transfer leadership or close your group(s) before deleting your account.',
-        409,
-        'ACCOUNT_DELETE_BLOCKED_BY_ACTIVE_GROUPS',
-      );
+    for (const membership of activeMemberships) {
+      if (membership.leader_id === userId) {
+        await membershipService.departGroupOwner(userId, membership.group_id, 'voluntary', ipAddress);
+      } else {
+        await membershipService.departMember(userId, membership.group_id, 'voluntary', ipAddress);
+      }
     }
-
-    const closableGroupIds = ledGroups
-      .filter(group => !blockedGroupIds.has(group.id))
-      .map(group => group.id);
 
     const subscriptionRows = await db.select({
       provider:                 schema.subscriptions.provider,
@@ -337,11 +323,9 @@ export const userService = {
         await tx.insert(schema.emailBlocklist).values({ id: uuidv4(), email_hash: emailHash, reason: 'account_deleted' });
       }
 
-      if (closableGroupIds.length) {
-        await tx.update(schema.savingsGroups)
-          .set({ status: 'closed' })
-          .where(inArray(schema.savingsGroups.id, closableGroupIds));
-      }
+      // Groups the member led/joined have already had their departure logic
+      // (Compensated Compression, Owner succession, or draft cancellation)
+      // applied above — nothing further to close here.
 
       await tx.update(schema.subscriptions)
         .set({
@@ -399,7 +383,7 @@ export const userService = {
       ipAddress,
       metadata: {
         accountDeletionOutcome: hardDeleted ? 'hard_deleted' : 'anonymized',
-        closedGroupIds: closableGroupIds,
+        groupsDeparted: activeMemberships.map(membership => membership.group_id),
         dependencyCounts,
         providerSubscriptionCancelled,
         previousCountry: user.country,

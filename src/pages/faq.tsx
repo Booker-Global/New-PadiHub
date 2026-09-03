@@ -69,7 +69,7 @@ export default function FAQPage() {
 
           <div style={{ textAlign: 'center', borderRadius: 24, padding: 32, background: 'rgba(46,175,111,0.05)', border: '1px solid rgba(46,175,111,0.15)' }}>
             <h3 style={{ fontWeight: 800, color: '#111827', marginBottom: 8, fontFamily: 'Nunito, sans-serif' }}>Still have questions?</h3>
-            <p style={{ color: '#6B7280', fontSize: 14, marginBottom: 16 }}>Our team is here to help. Get in touch and we&apos;ll respond within 24 hours.</p>
+            <p style={{ color: '#6B7280', fontSize: 14, marginBottom: 16 }}>Our team is here to help Mondays to Saturdays, 9am to 6pm.</p>
             <Button asChild style={{ borderRadius: 999, fontWeight: 700, background: '#2EAF6F', color: '#fff' }}>
               <Link to="/contact" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>Contact us <ArrowRight size={16} /></Link>
             </Button>

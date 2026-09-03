@@ -6,13 +6,14 @@
  * There is no free trial and no annual billing option.
  */
 import { v4 as uuidv4 } from 'uuid';
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { getPaymentProvider } from '../integrations/payments/PaymentProviderFactory.js';
 import { groupService } from './groupService.js';
+import { membershipService } from './membershipService.js';
 import {
   SUBSCRIPTION_TIERS,
   isSubscriptionTierKey,
@@ -74,6 +75,24 @@ export const subscriptionService = {
       userId, action: 'SUBSCRIPTION_PLAN_SELECTED', entity: 'users', entityId: userId,
       metadata: { tier, country: user.country },
     });
+
+    // If this member already completed the rest of onboarding (payment
+    // method + payout destination + identity) before ever picking a plan —
+    // e.g. they verified identity first, and this is the "select-plan"
+    // step onboardingSteps.ts sends them back to complete — activate their
+    // subscription immediately instead of leaving it stuck forever, since
+    // activateSubscription() is otherwise only ever triggered from the
+    // identity-verification flow.
+    if (user.identity_verified && user.payment_method_verified_at && user.payout_verified_at) {
+      try {
+        await this.activateSubscription(userId);
+      } catch (err) {
+        console.warn(
+          '[subscriptionService] Plan selected but subscription could not be activated yet:',
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
 
     return { tier, plan: planCode(user.country, tier), monthly_amount: getTierMonthlyPrice(tier, user.country) };
   },
@@ -316,6 +335,28 @@ export const subscriptionService = {
       .where(eq(schema.users.id, userId));
 
     await createAuditLog({ userId, action: 'SUBSCRIPTION_CANCELLED', entity: 'subscriptions' });
+
+    // Item 14 — cancelling leaves the member with no active subscription at
+    // all, so (per Section 15.B) they depart every active group they're
+    // currently in via the standard Compensated Compression / tenure-based
+    // Owner-succession path, exactly like an account deletion or a
+    // default-suspension — never left dangling as an unsubscribed "member"
+    // of a group they can no longer pay into.
+    const activeMemberships = await db.select({
+      group_id: schema.memberships.group_id,
+      leader_id: schema.savingsGroups.leader_id,
+    })
+      .from(schema.memberships)
+      .innerJoin(schema.savingsGroups, eq(schema.memberships.group_id, schema.savingsGroups.id))
+      .where(and(eq(schema.memberships.user_id, userId), eq(schema.memberships.status, 'active')));
+
+    for (const membership of activeMemberships) {
+      if (membership.leader_id === userId) {
+        await membershipService.departGroupOwner(userId, membership.group_id, 'voluntary');
+      } else {
+        await membershipService.departMember(userId, membership.group_id, 'voluntary');
+      }
+    }
 
     const userRows = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
     if (userRows.length) {

@@ -257,7 +257,7 @@ export default function SubmitTicketPage() {
               <div className="flex items-center gap-2 p-3 rounded-2xl" style={{ background: '#F0FDF4' }}>
                 <Clock size={14} style={{ color: '#2EAF6F', flexShrink: 0 }} />
                 <p className="text-xs" style={{ color: '#065F46' }}>
-                  Expected response: <strong>within 2 hours</strong> during business hours
+                  Expected response: <strong>within 2 hours</strong> during support hours (Mondays to Saturdays, 9am to 6pm)
                 </p>
               </div>
               <Link to="/help" className="py-3 rounded-2xl text-sm font-bold text-center border transition-all hover:bg-gray-50" style={{ borderColor: '#E5E7EB', color: '#374151' }}>
@@ -294,7 +294,7 @@ export default function SubmitTicketPage() {
           <Clock size={16} style={{ color: '#2EAF6F', flexShrink: 0 }} />
           <div>
             <p className="text-sm font-bold" style={{ color: '#065F46' }}>Fast response guaranteed</p>
-            <p className="text-xs" style={{ color: '#059669' }}>Mon–Fri 8am–8pm GMT · Sat 9am–5pm GMT · Avg response: 1.4 hours</p>
+            <p className="text-xs" style={{ color: '#059669' }}>Mondays to Saturdays, 9am to 6pm · Avg response: 1.4 hours</p>
           </div>
         </MotionDiv>
 

@@ -119,6 +119,7 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
     { column: 'identity_verified_at',        sqlType: 'TIMESTAMP NULL' },
     { column: 'stripe_identity_session_id',  sqlType: 'VARCHAR(255) NULL' },
     { column: 'bvn_verification_reference',  sqlType: 'VARCHAR(255) NULL' },
+    { column: 'password_changed_at',         sqlType: 'TIMESTAMP NULL' },
     { column: 'last_login_at',               sqlType: 'TIMESTAMP NULL' },
     { column: 'onboarding_completed_email_sent_at', sqlType: 'TIMESTAMP NULL' },
     { column: 'subscription_tier',           sqlType: "ENUM('basic','premium') NULL" },
@@ -133,6 +134,10 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
     { column: 'suspended_at',    sqlType: 'TIMESTAMP NULL' },
     { column: 'claim_active_amount',       sqlType: 'DECIMAL(12,2) NULL' },
     { column: 'claim_reverts_after_cycle', sqlType: 'INT NULL' },
+    { column: 'group_duration_type',      sqlType: "ENUM('fixed','indefinite') NOT NULL DEFAULT 'indefinite'" },
+    { column: 'group_duration_rotations', sqlType: 'INT NULL' },
+    { column: 'full_rotations_completed', sqlType: 'INT NOT NULL DEFAULT 0' },
+    { column: 'closure_scheduled',        sqlType: 'BOOLEAN NOT NULL DEFAULT false' },
   ],
   contributions: [
     { column: 'amount_paid',        sqlType: 'DECIMAL(12,2) NULL' },
@@ -181,7 +186,7 @@ const REQUIRED_ENUM_VALUES: Record<string, Record<string, string[]>> = {
     payment_status: ['scheduled', 'due', 'paid', 'failed', 'missed', 'pending_default', 'defaulted'],
   },
   votes: {
-    proposal_type: ['payout_swap', 'exceptional_request', 'member_admission', 'contribution_claim'],
+    proposal_type: ['payout_swap', 'exceptional_request', 'member_admission', 'contribution_claim', 'member_removal'],
   },
   subscriptions: {
     billing_status: ['active', 'past_due', 'cancelled', 'trialing', 'paused'],

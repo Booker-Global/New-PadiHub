@@ -18,7 +18,7 @@ interface SavingsGroup {
   contribution_frequency: 'daily' | 'weekly' | 'monthly';
   payout_day?: number | null;
   maximum_members: number;
-  rotation_method: 'manual' | 'random';
+  rotation_method: 'manual' | 'random' | 'trust_score';
   current_cycle: number;
   status: 'draft' | 'active' | 'suspended' | 'closed' | 'expired';
   created_at: string;
@@ -59,7 +59,9 @@ function getErrorMessage<T>(json: ApiResponse<T> | null, fallback: string) {
 
 function requiresIdentityVerification(message: string) {
   const normalized = message.toLowerCase();
-  return normalized.includes('/verify-identity') || normalized.includes('identity verification');
+  return normalized.includes('/verify-identity')
+    || normalized.includes('identity verification')
+    || normalized.includes('verify your identity');
 }
 
 function formatCurrency(amount: string | number, currency: 'GBP' | 'NGN') {
@@ -82,6 +84,12 @@ function formatDate(date: string) {
 
 function titleCase(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function describeRotationMethod(rotationMethod: SavingsGroup['rotation_method']) {
+  return rotationMethod === 'manual' || rotationMethod === 'trust_score'
+    ? 'Trust Score'
+    : titleCase(rotationMethod);
 }
 
 function getGroupColor(group: SavingsGroup) {
@@ -388,7 +396,7 @@ export default function JoinSavingsGroupPage() {
               { label: 'Members', value: `${memberCount}/${group.maximum_members} active`, icon: Users, color: '#8B5CF6' },
               { label: 'Available spots', value: availableSpots.toString(), icon: Shield, color: '#2EAF6F' },
               { label: 'Current cycle', value: group.current_cycle.toString(), icon: Calendar, color: '#F59E0B' },
-              { label: 'Rotation', value: titleCase(group.rotation_method), icon: ArrowRight, color: '#2eafaf' },
+              { label: 'Rotation', value: describeRotationMethod(group.rotation_method), icon: ArrowRight, color: '#2eafaf' },
               { label: 'Country', value: group.country === 'NG' ? 'Nigeria' : 'United Kingdom', icon: Shield, color: '#6B7280' },
             ].map(row => (
               <div key={row.label} className="rounded-xl p-3" style={{ background: '#F9FAFB' }}>

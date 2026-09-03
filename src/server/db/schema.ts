@@ -63,6 +63,7 @@ export const users = mysqlTable('users', {
   // Flutterwave Account Resolve bank-account-validation check — see
   // BankAccountValidationInterface.ts). Not implemented yet; always null.
   bvn_verification_reference:  varchar('bvn_verification_reference', { length: 255 }),
+  password_changed_at:         timestamp('password_changed_at'),
   last_login_at:               timestamp('last_login_at'),
   // Set the first time the member finishes every onboarding step (email +
   // identity + subscription plan + payment method + payout destination), so
@@ -156,6 +157,29 @@ export const savingsGroups = mysqlTable('savings_groups', {
   // cycle in which the last member of the current rotation receives their
   // payout at the claimed level. Null unless a claim is active.
   claim_reverts_after_cycle: int('claim_reverts_after_cycle'),
+  // ─── Group lifecycle length (chosen once, at creation) ──────────────────
+  // NOTE: distinct from `current_cycle` above, which numbers individual
+  // payout turns (one per rotation, i.e. one per member). A "full rotation"
+  // here means every currently-active member has received exactly one
+  // payout — i.e. `current_rotation_position` completing a full lap back to
+  // 1. 'fixed': the group auto-closes once `group_duration_rotations` full
+  // rotations have completed (rotationService.advance() checks this every
+  // time a lap completes). 'indefinite': runs forever unless the Owner
+  // schedules a closure (see `closure_scheduled`).
+  group_duration_type:      mysqlEnum('group_duration_type', ['fixed', 'indefinite']).notNull().default('indefinite'),
+  // Number of complete full rotations the group runs for — required (and
+  // only meaningful) when group_duration_type is 'fixed'.
+  group_duration_rotations: int('group_duration_rotations'),
+  // Count of full rotations completed so far — incremented each time
+  // current_rotation_position wraps back to 1. Also the trigger point for
+  // re-applying the "first 3 slots reserved for Organiser/highest Trust
+  // Score" rule at the start of every new rotation, not just the first.
+  full_rotations_completed: int('full_rotations_completed').notNull().default(0),
+  // Owner-triggered "Close Group" for an indefinite group — set true to
+  // schedule closure for the moment the in-progress rotation finishes (never
+  // mid-rotation, so nobody is denied a payout they've already contributed
+  // toward). rotationService.advance() checks this on every lap completion.
+  closure_scheduled:        boolean('closure_scheduled').notNull().default(false),
   created_at:               timestamp('created_at').notNull().defaultNow(),
   updated_at:               timestamp('updated_at').notNull().defaultNow().onUpdateNow(),
 }, (t) => ({
@@ -260,13 +284,18 @@ export const votes = mysqlTable('votes', {
   // vote_email_tokens) and a single reject or 48h timeout invalidates them —
   // see voteService.checkAndClose. 'payout_swap' is a direct 1:1
   // accept/decline with the target member (also email-based), not a
-  // group-wide vote.
-  proposal_type:  mysqlEnum('proposal_type', ['payout_swap', 'exceptional_request', 'member_admission', 'contribution_claim']).notNull(),
+  // group-wide vote. 'member_removal' is a unanimous group-wide vote (like
+  // member_admission/contribution_claim) EXCEPT the target_member_id is
+  // excluded from both the voting body and the eligible-voter tally — see
+  // voteService.proposeMemberRemoval.
+  proposal_type:  mysqlEnum('proposal_type', ['payout_swap', 'exceptional_request', 'member_admission', 'contribution_claim', 'member_removal']).notNull(),
   proposer_id:    varchar('proposer_id', { length: 36 }).notNull().references(() => users.id),
   proposal_text:  text('proposal_text').notNull(),
-  // The other party this vote concerns, when it's a 1:1 matter rather than a
-  // full-group one — the swap target for 'payout_swap', or left null for
-  // group-wide votes ('member_admission', 'contribution_claim').
+  // The other party this vote concerns — the swap target for 'payout_swap'
+  // (a direct 1:1 accept/decline), the member being voted out for
+  // 'member_removal' (a group-wide unanimous vote excluding this member),
+  // or left null for other group-wide votes ('member_admission',
+  // 'contribution_claim').
   target_member_id: varchar('target_member_id', { length: 36 }).references(() => users.id),
   // Structured payload for the vote (invitee email for member_admission,
   // claimed amount for contribution_claim) — kept separate from

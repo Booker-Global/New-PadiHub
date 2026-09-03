@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { eq, and, desc } from 'drizzle-orm';
+import { eq, and, desc, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -7,12 +7,14 @@ import { createAuditLog } from '../middleware/auditLogger.js';
 import { notificationService } from './notificationService.js';
 import { trustScoreService } from './trustScoreService.js';
 import { monitoringService } from './monitoringService.js';
+import { groupService } from './groupService.js';
 import { getStripeProvider } from '../integrations/payments/PaymentProviderFactory.js';
-import { TRUST_SCORE_DELTA_CYCLE_COMPLETED } from '../lib/constants.js';
+import { TRUST_SCORE_DELTA_CYCLE_COMPLETED, clampGroupMaximumMembers } from '../lib/constants.js';
 import { computeNextPayoutDate } from '../lib/payoutSchedule.js';
 import {
   sendUpcomingPayoutEmail,
   sendPayoutCompleteEmail,
+  sendGroupClosedEmail,
 } from '../integrations/email/emailService.js';
 
 type SavingsGroupRow = typeof schema.savingsGroups.$inferSelect;
@@ -171,7 +173,7 @@ export const rotationService = {
       .from(schema.savingsGroups).where(eq(schema.savingsGroups.id, groupId)).limit(1);
     if (userRow.length && groupRow.length) {
       const g = groupRow[0];
-      const potAmount = `${g.currency} ${(parseFloat(g.contribution_amount) * g.maximum_members).toFixed(2)}`;
+      const potAmount = `${g.currency} ${(parseFloat(g.contribution_amount) * clampGroupMaximumMembers(g.maximum_members)).toFixed(2)}`;
       await sendUpcomingPayoutEmail(userRow[0].email, g.name, potAmount, payoutDate.toLocaleDateString('en-GB'));
     }
     return id;
@@ -222,7 +224,7 @@ export const rotationService = {
         .from(schema.savingsGroups).where(eq(schema.savingsGroups.id, groupId)).limit(1);
       if (recipientRow.length && groupRow2.length) {
         const g2 = groupRow2[0];
-        const potAmount = `${g2.currency} ${(parseFloat(g2.contribution_amount) * g2.maximum_members).toFixed(2)}`;
+        const potAmount = `${g2.currency} ${(parseFloat(g2.contribution_amount) * clampGroupMaximumMembers(g2.maximum_members)).toFixed(2)}`;
         await sendPayoutCompleteEmail(recipientRow[0].email, g2.name, potAmount, transferReference ?? current.provider_transfer_reference ?? current.id);
       }
     }
@@ -234,6 +236,63 @@ export const rotationService = {
 
     const nextPosition = (group.current_rotation_position % members.length) + 1;
     const nextCycle = group.current_cycle + 1;
+
+    // nextPosition wrapping back to 1 means every currently-active member has
+    // now received exactly one payout this rotation — a full rotation just
+    // completed (Section 15.C). This is the trigger point for: (a) checking
+    // whether a fixed-length group has now run its full course, (b) an
+    // indefinite group's scheduled "Close Group" taking effect, and
+    // (c) re-applying the "first 3 slots reserved for Organiser/highest
+    // Trust Score" rule for the new rotation that's about to start.
+    if (nextPosition === 1) {
+      const fullRotationsCompleted = group.full_rotations_completed + 1;
+      const shouldCloseFixed = group.group_duration_type === 'fixed'
+        && group.group_duration_rotations !== null
+        && fullRotationsCompleted >= group.group_duration_rotations;
+      const shouldCloseScheduled = group.group_duration_type === 'indefinite' && group.closure_scheduled;
+
+      if (shouldCloseFixed || shouldCloseScheduled) {
+        await db.update(schema.savingsGroups).set({
+          status: 'closed',
+          full_rotations_completed: fullRotationsCompleted,
+          closure_scheduled: false,
+        }).where(eq(schema.savingsGroups.id, groupId));
+
+        await createAuditLog({
+          userId: actorId, action: 'GROUP_CLOSED_LIFECYCLE_COMPLETE', entity: 'savings_groups', entityId: groupId, ipAddress,
+          metadata: { fullRotationsCompleted, reason: shouldCloseFixed ? 'fixed_length_reached' : 'closure_scheduled' },
+        });
+
+        const memberUsers = await db.select({ id: schema.users.id, email: schema.users.email })
+          .from(schema.users).where(inArray(schema.users.id, members.map(m => m.user_id)));
+        for (const u of memberUsers) {
+          await notificationService.create({
+            userId: u.id, type: 'group_closed',
+            title: 'Group Closed',
+            message: shouldCloseFixed
+              ? `"${group.name}" has completed its planned ${group.group_duration_rotations} payout rotation(s) and is now closed.`
+              : `"${group.name}" has closed as scheduled, now that the current payout rotation has finished.`,
+          });
+          await sendGroupClosedEmail(u.email, group.name);
+        }
+
+        return { nextCycle: group.current_cycle, nextRecipient: null, groupClosed: true };
+      }
+
+      // Not closing — re-sort rotation_order for the rotation that's about
+      // to start, then re-read the (now reordered) active members.
+      await groupService.reorderRotationByTrustScore(groupId, group.leader_id);
+      const reordered = await db.select().from(schema.memberships)
+        .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')));
+      reordered.sort((a, b) => (a.rotation_order ?? 0) - (b.rotation_order ?? 0));
+      members.length = 0;
+      members.push(...reordered);
+
+      await db.update(schema.savingsGroups)
+        .set({ full_rotations_completed: fullRotationsCompleted })
+        .where(eq(schema.savingsGroups.id, groupId));
+    }
+
     const nextRecipient = members.find(m => m.rotation_order === nextPosition) ?? members[0];
 
     await db.update(schema.savingsGroups).set({

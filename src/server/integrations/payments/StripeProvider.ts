@@ -201,6 +201,10 @@ export class StripeProvider implements IPaymentProvider {
     accountNumber: string; country?: string; currency?: string;
   }): Promise<{ externalAccountId: string }> {
     const stripe = getStripe();
+    const existingAccounts = await stripe.accounts.listExternalAccounts(params.accountId, {
+      object: 'bank_account',
+      limit: 100,
+    });
     const externalAccount = await stripe.accounts.createExternalAccount(params.accountId, {
       external_account: {
         object:              'bank_account',
@@ -211,17 +215,21 @@ export class StripeProvider implements IPaymentProvider {
         routing_number:      params.sortCode,
       },
     });
+    for (const account of existingAccounts.data) {
+      if (account.id === externalAccount.id) continue;
+      await stripe.accounts.deleteExternalAccount(params.accountId, account.id);
+    }
     return { externalAccountId: externalAccount.id };
   }
 
   /** Create an Account Link for whatever onboarding requirements (e.g. identity
    * verification) are still outstanding on a connected account. */
-  async createOnboardingLink(accountId: string): Promise<{ onboardingUrl: string }> {
+  async createOnboardingLink(accountId: string, mode: 'add' | 'change' = 'add'): Promise<{ onboardingUrl: string }> {
     const stripe = getStripe();
     const accountLink = await stripe.accountLinks.create({
       account:     accountId,
-      refresh_url: `${process.env.APP_URL ?? 'https://padihub.com'}/payments/payout?stripe_refresh=1`,
-      return_url:  `${process.env.APP_URL ?? 'https://padihub.com'}/payments/payout?stripe_connected=1`,
+      refresh_url: `${process.env.APP_URL ?? 'https://padihub.com'}/payments/payout?stripe_refresh=1&payout_mode=${mode}`,
+      return_url:  `${process.env.APP_URL ?? 'https://padihub.com'}/payments/payout?stripe_connected=1&payout_mode=${mode}`,
       type:        'account_onboarding',
     });
     return { onboardingUrl: accountLink.url };

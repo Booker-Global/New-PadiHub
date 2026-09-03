@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { eq, and, inArray, gt } from 'drizzle-orm';
+import { eq, and, inArray, gt, ne, asc } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -8,7 +8,8 @@ import { notificationService } from './notificationService.js';
 import { trustScoreService } from './trustScoreService.js';
 import { groupService } from './groupService.js';
 import { assertPaymentSetupComplete } from './paymentEligibilityService.js';
-import { TRUST_SCORE_DELTA_MEMBER_SUSPENDED, SUBSCRIPTION_TIERS, isSubscriptionTierKey } from '../lib/constants.js';
+import { TRUST_SCORE_DELTA_MEMBER_SUSPENDED, SUBSCRIPTION_TIERS, isSubscriptionTierKey, countryDisplayName } from '../lib/constants.js';
+import { describeGroupDuration } from './groupService.js';
 import {
   sendMemberRemovedEmail,
   sendMemberExitCompressionEmail,
@@ -19,6 +20,8 @@ import {
   sendGroupJoinApprovedEmail,
   sendGroupJoinRejectedEmail,
   sendGroupNewMemberJoinedEmail,
+  sendGroupClosedEmail,
+  sendMemberJoinedGroupEmail,
 } from '../integrations/email/emailService.js';
 
 export const membershipService = {
@@ -47,7 +50,13 @@ export const membershipService = {
     // Check capacity (active members only — pending requests don't occupy a seat yet)
     const members = await this.getForGroup(groupId);
     const activeCount = members.filter(m => m.status === 'active').length;
-    if (activeCount >= group.maximum_members) throw new AppError('Group is full.', 400, 'GROUP_FULL');
+    if (activeCount >= group.maximum_members) {
+      throw new AppError(
+        `This group is already at its maximum of ${group.maximum_members} members.`,
+        400,
+        'GROUP_FULL',
+      );
+    }
 
     // Check not already a member or already pending
     const existing = members.find(m => m.user_id === userId && (m.status === 'active' || m.status === 'pending'));
@@ -58,20 +67,34 @@ export const membershipService = {
       );
     }
 
+    const userRows = await db.select({
+      country: schema.users.country,
+      trust_score: schema.users.trust_score,
+      subscription_tier: schema.users.subscription_tier,
+      first_name: schema.users.first_name,
+      last_name: schema.users.last_name,
+      email: schema.users.email,
+    }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
+    if (!userRows.length) throw new AppError('User not found.', 404);
+    const user = userRows[0];
+
+    // Groups are strictly single-country — a UK member can never join a
+    // Nigeria-based group and vice versa — because contribution charging and
+    // payouts run through a single payment provider per group (Stripe/GBP
+    // for GB, Flutterwave/NGN for NG) and can't be split per-member.
+    if (user.country !== group.country) {
+      throw new AppError(
+        `This group is based in ${countryDisplayName(group.country)} and only accepts members registered in ${countryDisplayName(group.country)}. Your account is registered in ${countryDisplayName(user.country)}.`,
+        403,
+        'GROUP_COUNTRY_MISMATCH',
+      );
+    }
+
     // Every member eventually contributes and receives a payout, so the full
     // onboarding gate (email + identity + subscription tier + payment method
     // + payout destination — all VERIFIED, not just started) applies before
     // joining any group. Only verified members may even request to join.
     await assertPaymentSetupComplete(userId);
-
-    const userRows = await db.select({
-      trust_score: schema.users.trust_score,
-      subscription_tier: schema.users.subscription_tier,
-      first_name: schema.users.first_name,
-      last_name: schema.users.last_name,
-    }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
-    if (!userRows.length) throw new AppError('User not found.', 404);
-    const user = userRows[0];
 
     // Enforce the member's subscription-tier group-join limit (counts both
     // active memberships and outstanding pending requests).
@@ -120,6 +143,9 @@ export const membershipService = {
         title: 'Joined Group',
         message: `You have successfully joined "${group.name}".`,
       });
+
+      const durationSummary = describeGroupDuration(group.group_duration_type, group.group_duration_rotations);
+      await sendMemberJoinedGroupEmail(user.email, group.name, durationSummary);
 
       const leaderRow = await db.select({ email: schema.users.email, first_name: schema.users.first_name, last_name: schema.users.last_name })
         .from(schema.users).where(eq(schema.users.id, group.leader_id)).limit(1);
@@ -203,7 +229,13 @@ export const membershipService = {
 
     const group = await groupService.getById(membership.group_id);
     const activeMembers = (await this.getForGroup(group.id)).filter(m => m.status === 'active');
-    if (activeMembers.length >= group.maximum_members) throw new AppError('Group is full.', 400, 'GROUP_FULL');
+    if (activeMembers.length >= group.maximum_members) {
+      throw new AppError(
+        `This group is already at its maximum of ${group.maximum_members} members.`,
+        400,
+        'GROUP_FULL',
+      );
+    }
 
     const nextRotationOrder = activeMembers.length + 1;
     await db.update(schema.memberships)
@@ -230,7 +262,10 @@ export const membershipService = {
       title: 'Join Request Approved',
       message: `Your request to join "${group.name}" has been approved.`,
     });
-    await sendGroupJoinApprovedEmail(newMemberRow[0].email, group.name);
+    await sendGroupJoinApprovedEmail(
+      newMemberRow[0].email, group.name,
+      describeGroupDuration(group.group_duration_type, group.group_duration_rotations),
+    );
 
     if (leaderRow.length) {
       await sendGroupNewMemberJoinedEmail(leaderRow[0].email, group.name, newMemberName);
@@ -323,7 +358,9 @@ export const membershipService = {
 
   async leave(userId: string, groupId: string, ipAddress?: string) {
     const group = await groupService.getById(groupId);
-    if (group.leader_id === userId) throw new AppError('Group leader cannot leave. Close the group instead.', 400);
+    if (group.leader_id === userId) {
+      return this.departGroupOwner(userId, groupId, 'voluntary', ipAddress);
+    }
 
     return this.departMember(userId, groupId, 'voluntary', ipAddress);
   },
@@ -336,20 +373,125 @@ export const membershipService = {
   },
 
   /**
+   * Section 15.D — executes a PASSED member-removal vote (voteService owns
+   * proposing/tallying the vote itself). Removes the target via the
+   * standard Compensated Compression path; if the target was the group's
+   * Owner, routes through departGroupOwner instead so tenure-based
+   * succession (Section 15.B) also applies.
+   */
+  async removeMemberByVote(groupId: string, targetUserId: string, ipAddress?: string) {
+    const group = await groupService.getById(groupId);
+    if (group.leader_id === targetUserId) {
+      return this.departGroupOwner(targetUserId, groupId, 'vote_removed', ipAddress);
+    }
+    return this.departMember(targetUserId, groupId, 'vote_removed', ipAddress);
+  },
+
+  /**
+   * Section 15.B — Owner departure (voluntary exit, default-suspension, or
+   * account deletion). If the group never reached the 3-member launch
+   * threshold (still Draft), there's no compression to do — nothing was
+   * ever collected, so the draft is simply cancelled and anyone who'd
+   * already joined is notified. Otherwise the Owner departs exactly like
+   * any other member via the standard Compensated Compression path
+   * (departMember), and the Organiser/Owner role transfers to whichever
+   * remaining active member has been in the group the LONGEST (earliest
+   * join_date — tenure, distinct from Trust Score). Tenure-based succession
+   * is never gated by subscription tier, and the inherited group counts
+   * toward the new Owner's JOINED total only — never their created total,
+   * and it grants no extra group-creation allowance.
+   */
+  async departGroupOwner(
+    userId: string, groupId: string,
+    reason: 'voluntary' | 'removed_by_leader' | 'defaulted' | 'vote_removed',
+    ipAddress?: string,
+  ) {
+    const group = await groupService.getById(groupId);
+    if (group.leader_id !== userId) {
+      // Ownership already changed hands (or never applied) — a normal departure suffices.
+      return this.departMember(userId, groupId, reason, ipAddress);
+    }
+
+    if (group.status === 'draft') {
+      await db.update(schema.savingsGroups).set({ status: 'closed' }).where(eq(schema.savingsGroups.id, groupId));
+
+      const joinedMembers = await db.select({ user_id: schema.memberships.user_id })
+        .from(schema.memberships)
+        .where(and(
+          eq(schema.memberships.group_id, groupId),
+          eq(schema.memberships.status, 'active'),
+          ne(schema.memberships.user_id, userId),
+        ));
+      if (joinedMembers.length) {
+        const emailRows = await db.select({ email: schema.users.email })
+          .from(schema.users)
+          .where(inArray(schema.users.id, joinedMembers.map(member => member.user_id)));
+        for (const row of emailRows) {
+          await sendGroupClosedEmail(row.email, group.name);
+        }
+      }
+
+      await createAuditLog({
+        userId, action: 'GROUP_DRAFT_CANCELLED_OWNER_DEPARTED', entity: 'savings_groups',
+        entityId: groupId, ipAddress, metadata: { reason },
+      });
+      return true;
+    }
+
+    // Longest-tenured remaining active member (earliest join_date) inherits
+    // Owner status — tenure, not Trust Score.
+    const successorRows = await db.select().from(schema.memberships)
+      .where(and(
+        eq(schema.memberships.group_id, groupId),
+        eq(schema.memberships.status, 'active'),
+        ne(schema.memberships.user_id, userId),
+      ))
+      .orderBy(asc(schema.memberships.join_date))
+      .limit(1);
+    const successor = successorRows[0];
+
+    let newOwnerName: string | undefined;
+    if (successor) {
+      await db.update(schema.savingsGroups).set({ leader_id: successor.user_id }).where(eq(schema.savingsGroups.id, groupId));
+      await db.update(schema.memberships).set({ role: 'leader' }).where(eq(schema.memberships.id, successor.id));
+
+      const successorUserRows = await db.select({ first_name: schema.users.first_name, last_name: schema.users.last_name })
+        .from(schema.users).where(eq(schema.users.id, successor.user_id)).limit(1);
+      if (successorUserRows.length) {
+        newOwnerName = `${successorUserRows[0].first_name} ${successorUserRows[0].last_name}`.trim();
+      }
+
+      await createAuditLog({
+        userId: successor.user_id, action: 'GROUP_OWNER_SUCCEEDED', entity: 'savings_groups',
+        entityId: groupId, ipAddress, metadata: { previousOwnerId: userId, reason },
+      });
+    } else {
+      // No other active member to inherit Owner status — nobody's left to
+      // run the group, so close it (mirrors the pre-existing behaviour for
+      // a solo-led group being deleted/departed).
+      await db.update(schema.savingsGroups).set({ status: 'closed' }).where(eq(schema.savingsGroups.id, groupId));
+    }
+
+    return this.departMember(userId, groupId, reason, ipAddress, newOwnerName ? { newOwnerName } : undefined);
+  },
+
+  /**
    * "Compensated Compression" (Section 5) — the single shared path for
    * EVERY member departure, whatever the reason (voluntary leave,
-   * leader-initiated removal, or default-triggered suspension via
-   * flagDefault below). Removes the member, deletes their own still-pending
-   * ("final") rotation slot from the group's timeline if one exists, keeps
-   * every remaining member's contribution amount unchanged, and moves
-   * everyone who was behind the departed member up one payout slot — so
-   * the future payout pool shrinks by exactly the departed member's share
-   * and nobody's position skips or collides.
+   * leader-initiated removal, default-triggered suspension via
+   * flagDefault below, or a passed removal vote — see voteService). Removes
+   * the member, deletes their own still-pending ("final") rotation slot
+   * from the group's timeline if one exists, keeps every remaining member's
+   * contribution amount unchanged, and moves everyone who was behind the
+   * departed member up one payout slot — so the future payout pool shrinks
+   * by exactly the departed member's share and nobody's position skips or
+   * collides.
    */
   async departMember(
     userId: string, groupId: string,
-    reason: 'voluntary' | 'removed_by_leader' | 'defaulted',
+    reason: 'voluntary' | 'removed_by_leader' | 'defaulted' | 'vote_removed',
     ipAddress?: string,
+    succession?: { newOwnerName: string },
   ) {
     const group = await groupService.getById(groupId);
 
@@ -362,7 +504,7 @@ export const membershipService = {
     const departedOrder = membership.rotation_order;
     // 'defaulted' keeps the existing distinct 'suspended' status (as the
     // strike-threshold flow already did) so history shows *why* someone
-    // left; voluntary leaves and leader removals use 'removed'.
+    // left; voluntary leaves, leader removals and vote removals use 'removed'.
     const newStatus = reason === 'defaulted' ? 'suspended' : 'removed';
 
     await db.update(schema.memberships).set({ status: newStatus }).where(eq(schema.memberships.id, membership.id));
@@ -398,14 +540,15 @@ export const membershipService = {
     });
 
     // Voluntary departures carry no penalty — leaving a group by choice
-    // isn't a trustworthiness signal. Both involuntary paths (kicked out by
-    // the leader, or suspended after breaching the group's default
-    // threshold) recalculate the member's Trust Score downward, per the
-    // Trust Score scale (constants.ts). Contribution defaults are already
-    // separately penalised per-attempt in contributionService.markFailed
-    // (TRUST_SCORE_DELTA_CONTRIBUTION_MISSED) before this suspension-level
-    // step runs — this is the additional "removed from the group" penalty.
-    if (reason === 'defaulted' || reason === 'removed_by_leader') {
+    // isn't a trustworthiness signal. Involuntary paths (kicked out by the
+    // leader, suspended after breaching the group's default threshold, or
+    // removed by a unanimous member vote) recalculate the member's Trust
+    // Score downward, per the Trust Score scale (constants.ts). Contribution
+    // defaults are already separately penalised per-attempt in
+    // contributionService.markFailed (TRUST_SCORE_DELTA_CONTRIBUTION_MISSED)
+    // before this suspension-level step runs — this is the additional
+    // "removed from the group" penalty.
+    if (reason === 'defaulted' || reason === 'removed_by_leader' || reason === 'vote_removed') {
       await trustScoreService.decrease(userId, TRUST_SCORE_DELTA_MEMBER_SUSPENDED, 'MEMBER_SUSPENDED');
     }
 
@@ -417,7 +560,9 @@ export const membershipService = {
       ? 'You left the group.'
       : reason === 'removed_by_leader'
         ? 'Removed by group leader.'
-        : 'Suspended after repeated contribution defaults.';
+        : reason === 'vote_removed'
+          ? 'Removed by a unanimous group member vote.'
+          : 'Suspended after repeated contribution defaults.';
 
     await notificationService.create({
       userId, type: reason === 'defaulted' ? 'membership_suspended' : 'removed_from_group',
@@ -432,7 +577,9 @@ export const membershipService = {
     }
 
     // Every remaining member's payout timing and pool size just changed —
-    // disclose both explicitly (Section 8's "member-exit notice").
+    // disclose both explicitly (Section 8's "member-exit notice"), folding
+    // in the new-Owner announcement here too when ownership just changed
+    // hands, rather than sending a second, separate email.
     const departedName = departedUserRow.length
       ? `${departedUserRow[0].first_name} ${departedUserRow[0].last_name}` : 'A member';
     const otherMembers = await db.select().from(schema.memberships)
@@ -447,12 +594,14 @@ export const membershipService = {
     for (const other of otherMembers) {
       const otherEmail = otherUserEmailsById.get(other.user_id);
       if (otherEmail) {
-        await sendMemberExitCompressionEmail(otherEmail, group.name, departedName, reason);
+        await sendMemberExitCompressionEmail(otherEmail, group.name, departedName, reason, succession?.newOwnerName);
       }
       await notificationService.create({
         userId: other.user_id, type: 'group_member_suspended',
         title: 'Payout Schedule Updated',
-        message: `${departedName} has left "${group.name}". The remaining payout pool and schedule have been recalculated — check the group page for your updated position.`,
+        message: succession?.newOwnerName
+          ? `${departedName} has left "${group.name}". ${succession.newOwnerName} is now the group's Organiser/Owner. The remaining payout pool and schedule have been recalculated — check the group page for your updated position.`
+          : `${departedName} has left "${group.name}". The remaining payout pool and schedule have been recalculated — check the group page for your updated position.`,
       });
     }
 
@@ -488,7 +637,7 @@ export const membershipService = {
     });
 
     if (newDefaultCount >= group.suspension_threshold) {
-      await this.departMember(userId, groupId, 'defaulted', ipAddress);
+      await this.departGroupOwner(userId, groupId, 'defaulted', ipAddress);
       return { action: 'compressed' as const, newDefaultCount };
     }
 
@@ -561,7 +710,7 @@ export const membershipService = {
 
     // Suspension threshold reached — depart via Compensated Compression
     if (newStrikeCount >= group.suspension_threshold) {
-      await this.departMember(userId, groupId, 'defaulted', ipAddress);
+      await this.departGroupOwner(userId, groupId, 'defaulted', ipAddress);
       return { action: 'suspended' as const, newStrikeCount };
     }
 

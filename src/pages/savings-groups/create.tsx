@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState, useEffect, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { AnimatePresence } from 'motion/react';
@@ -35,7 +35,8 @@ const TOTAL_STEPS = 7;
  * GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH and the API's `maximum_members` minimum.
  */
 const MIN_GROUP_MEMBERS = 3;
-const MAX_GROUP_MEMBERS = 50;
+const MAX_GROUP_MEMBERS = 10;
+const FIXED_GRACE_PERIOD_HOURS = 72;
 
 interface GroupData {
   name: string;
@@ -45,13 +46,14 @@ interface GroupData {
   frequency: 'monthly' | 'weekly' | 'daily';
   payoutDay: number | null;
   memberCount: number;
-  rotationOrder: 'random' | 'manual' | 'fcfs';
+  rotationOrder: 'random' | 'trust_score';
   maxMissed: number;
-  gracePeriod: number;
   votingRequired: boolean;
   allowSwaps: boolean;
   minTrustScore: number;
   inviteEmails: string;
+  durationType: 'fixed' | 'indefinite';
+  durationRotations: number;
 }
 
 interface SavingsGroup {
@@ -95,11 +97,12 @@ const defaultData: GroupData = {
   memberCount: 6,
   rotationOrder: 'random',
   maxMissed: 2,
-  gracePeriod: 48,
   votingRequired: false,
   allowSwaps: true,
   minTrustScore: 0,
   inviteEmails: '',
+  durationType: 'indefinite',
+  durationRotations: 6,
 };
 
 const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -143,6 +146,10 @@ function normalizeContributionAmount(value: string) {
     .toFixed(2)
     .replace(/\.00$/, '')
     .replace(/(\.\d)0$/, '$1');
+}
+
+function describeRotationOrder(rotationOrder: GroupData['rotationOrder']) {
+  return rotationOrder === 'trust_score' ? 'Trust Score priority' : 'Random';
 }
 
 function StepIndicator({ current, total }: { current: number; total: number }) {
@@ -193,7 +200,9 @@ async function fetchMissingOnboardingSteps(token: string): Promise<OnboardingSte
 
 function requiresIdentityVerification(message: string) {
   const normalized = message.toLowerCase();
-  return normalized.includes('/verify-identity') || normalized.includes('identity verification');
+  return normalized.includes('/verify-identity')
+    || normalized.includes('identity verification')
+    || normalized.includes('verify your identity');
 }
 
 export default function CreateGroupWizard() {
@@ -211,6 +220,28 @@ export default function CreateGroupWizard() {
   const [inviteSummary, setInviteSummary] = useState<{ sent: string[]; failed: { email: string; reason: string }[] } | null>(null);
   const [missingSteps, setMissingSteps] = useState<OnboardingStep[]>([]);
   const verificationReturnPath = `${location.pathname}${location.search}`;
+
+  // Groups are strictly single-country (Stripe/GBP for GB, Flutterwave/NGN
+  // for NG members) — a group's currency must always match its creator's own
+  // account country, so the currency choice below is locked to it rather
+  // than left as a free pick that would fail server-side on submit.
+  useEffect(() => {
+    const session = getValidSession();
+    if (!session?.token) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await window.fetch('/api/users/profile', {
+          headers: { Authorization: 'Bearer ' + session.token },
+        });
+        const json = await response.json().catch(() => null) as ApiResponse<{ country?: 'GB' | 'NG' }> | null;
+        if (!cancelled && response.ok && json?.data?.country) {
+          setData(current => ({ ...current, currency: json.data?.country === 'NG' ? 'NGN' : 'GBP' }));
+        }
+      } catch { /* keep the default currency if this fails */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const normalizedAmount = useMemo(() => normalizeContributionAmount(data.amount), [data.amount]);
   const amountError = data.amount.trim() && !normalizedAmount
@@ -339,10 +370,12 @@ export default function CreateGroupWizard() {
           contribution_frequency: data.frequency,
           payout_day: data.frequency === 'daily' ? undefined : (data.payoutDay ?? undefined),
           maximum_members: data.memberCount,
-          rotation_method: data.rotationOrder === 'random' ? 'random' : 'manual', // "fcfs" has no backend equivalent yet.
+          rotation_method: data.rotationOrder,
           strike_threshold: data.maxMissed,
           allow_payout_swaps: data.allowSwaps,
           min_trust_score: data.minTrustScore || undefined,
+          group_duration_type: data.durationType,
+          group_duration_rotations: data.durationType === 'fixed' ? data.durationRotations : undefined,
         }),
       });
 
@@ -595,14 +628,12 @@ export default function CreateGroupWizard() {
                       </div>
                       <div>
                         <label className="text-sm font-bold text-gray-700 block mb-1.5">Currency</label>
-                        <select
-                          value={data.currency}
-                          onChange={event => set('currency', event.target.value as GroupData['currency'])}
-                          className="w-full px-4 py-3 rounded-2xl border border-gray-200 text-sm focus:outline-none focus:border-green-400 transition-colors bg-white"
-                        >
-                          <option value="GBP">GBP (£)</option>
-                          <option value="NGN">NGN (₦)</option>
-                        </select>
+                        <div className="w-full px-4 py-3 rounded-2xl border border-gray-200 text-sm bg-gray-50 text-gray-700 font-bold">
+                          {data.currency === 'NGN' ? 'NGN (₦)' : 'GBP (£)'}
+                        </div>
+                        <p className="text-xs text-gray-400 mt-1">
+                          Matches your account&apos;s country — every group can only include members from that same country.
+                        </p>
                       </div>
                     </div>
                     <div>
@@ -701,15 +732,14 @@ export default function CreateGroupWizard() {
                 {step === 3 && (
                   <div className="space-y-3">
                     <p className="text-gray-500 text-sm mb-5">How should the payout order be determined?</p>
-                    {[
+                    {([
                       { value: 'random', label: 'Random Order', desc: 'Payout order is randomly assigned when the group starts' },
-                      { value: 'manual', label: 'Manual Order', desc: 'You as leader assign the payout order manually' },
-                      { value: 'fcfs', label: 'First Come, First Served', desc: 'Members who join first get earlier payout positions' },
-                    ].map(option => (
+                      { value: 'trust_score', label: 'Trust Score Priority', desc: 'Earlier payout slots go to the organiser and the members with the strongest Trust Scores when the group starts' },
+                    ] as const).map(option => (
                       <OptionCard
                         key={option.value}
-                        selected={data.rotationOrder === option.value as GroupData['rotationOrder']}
-                        onClick={() => set('rotationOrder', option.value as GroupData['rotationOrder'])}
+                        selected={data.rotationOrder === option.value}
+                        onClick={() => set('rotationOrder', option.value)}
                       >
                         <div className="flex items-start gap-3">
                           <RotateCcw size={16} style={{ color: '#2EAF6F', marginTop: 2 }} />
@@ -720,12 +750,6 @@ export default function CreateGroupWizard() {
                         </div>
                       </OptionCard>
                     ))}
-
-                    {data.rotationOrder === 'fcfs' && (
-                      <p className="text-xs px-3 py-2 rounded-xl" style={{ background: 'rgba(245,158,11,0.1)', color: '#B45309' }}>
-                        Note: "First come, first served" isn't tracked separately yet — this group will be created with manual payout ordering, so you'll assign positions as the leader.
-                      </p>
-                    )}
                   </div>
                 )}
 
@@ -744,12 +768,9 @@ export default function CreateGroupWizard() {
                     </div>
                     <div>
                       <label className="text-sm font-bold text-gray-700 block mb-2">Late payment grace period</label>
-                      <div className="grid grid-cols-3 gap-2">
-                        {[24, 48, 72].map(hours => (
-                          <OptionCard key={hours} selected={data.gracePeriod === hours} onClick={() => set('gracePeriod', hours)}>
-                            <p className="font-bold text-sm text-center text-gray-900">{hours}h</p>
-                          </OptionCard>
-                        ))}
+                      <div className="rounded-2xl p-4" style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
+                        <p className="text-sm font-bold text-gray-900">72 hours</p>
+                        <p className="text-xs text-gray-500 mt-1">Fixed platform rule — group creators can&apos;t change this.</p>
                       </div>
                     </div>
                     <div className="space-y-3">
@@ -783,6 +804,34 @@ export default function CreateGroupWizard() {
                         ))}
                       </div>
                       <p className="text-xs text-gray-400 mt-2">Currently: {minTrustTierLabel}</p>
+                    </div>
+                    <div>
+                      <label className="text-sm font-bold text-gray-700 block mb-2">How long will this group run?</label>
+                      <p className="text-xs text-gray-400 mb-3">A "complete payout rotation" is every currently-active member receiving exactly one payout.</p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
+                        <OptionCard selected={data.durationType === 'indefinite'} onClick={() => set('durationType', 'indefinite')}>
+                          <p className="font-bold text-sm text-gray-900">Indefinite</p>
+                          <p className="text-xs text-gray-400 mt-0.5">Keeps rotating until you choose to close it</p>
+                        </OptionCard>
+                        <OptionCard selected={data.durationType === 'fixed'} onClick={() => set('durationType', 'fixed')}>
+                          <p className="font-bold text-sm text-gray-900">Fixed number of rotations</p>
+                          <p className="text-xs text-gray-400 mt-0.5">Closes automatically once complete</p>
+                        </OptionCard>
+                      </div>
+                      {data.durationType === 'fixed' && (
+                        <div>
+                          <label className="text-xs font-bold text-gray-500 block mb-1.5">Number of complete rotations</label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={60}
+                            value={data.durationRotations}
+                            onChange={event => set('durationRotations', Math.max(1, Math.min(60, Number(event.target.value) || 1)))}
+                            className="w-full px-4 py-3 rounded-2xl border border-gray-200 text-sm focus:outline-none focus:border-green-400 transition-colors"
+                          />
+                          <p className="text-xs text-gray-400 mt-1">The group will automatically close after this many complete rotations. Every member is emailed this at join time.</p>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -824,10 +873,11 @@ export default function CreateGroupWizard() {
                       { icon: Users, label: 'Members', value: `${data.memberCount} members` },
                       { icon: Calendar, label: 'Rotation duration', value: rotationDuration },
                       { icon: Calendar, label: 'Payout schedule', value: describeCreatePayoutSchedule(data.frequency, data.payoutDay) },
-                      { icon: RotateCcw, label: 'Payout order', value: data.rotationOrder === 'random' ? 'Random' : data.rotationOrder === 'manual' ? 'Manual' : 'First come, first served' },
+                      { icon: RotateCcw, label: 'Payout order', value: describeRotationOrder(data.rotationOrder) },
                       { icon: Shield, label: 'Max missed payments', value: `${data.maxMissed} missed` },
-                      { icon: Eye, label: 'Grace period', value: `${data.gracePeriod} hours` },
+                      { icon: Eye, label: 'Grace period', value: `${FIXED_GRACE_PERIOD_HOURS} hours (fixed)` },
                       { icon: Shield, label: 'Minimum Trust Score™ to join', value: data.minTrustScore > 0 ? `${data.minTrustScore}+ (${minTrustTierLabel})` : 'None' },
+                      { icon: RotateCcw, label: 'Group lifecycle', value: data.durationType === 'fixed' ? `Closes after ${data.durationRotations} complete rotation(s)` : 'Indefinite (until you close it)' },
                     ].map(row => (
                       <div key={row.label} className="flex items-center justify-between py-2.5 border-b border-gray-50 last:border-0 gap-4">
                         <div className="flex items-center gap-2">

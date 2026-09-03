@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { Link } from 'react-router-dom';
-import { ArrowRight, CheckCircle, Shield, Users } from 'lucide-react';
+import { ArrowRight, CheckCircle, Users } from 'lucide-react';
 import { getValidSession } from '@/lib/session';
 
 const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/pricing#webpage\",\"name\":\"Membership Pricing — PadiHub\",\"url\":\"https://padihub.com/pricing\",\"description\":\"Region-aware monthly pricing for PadiHub's Basic and Premium subscriptions.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"}}";
@@ -60,27 +60,6 @@ const verificationNotesByRegion: Record<PricingRegion, { title: string; body: st
   },
 };
 
-const contributionFeeNotesByRegion: Record<PricingRegion, { title: string; body: string; bullets: string[] }> = {
-  UK: {
-    title: 'UK contribution fees are shown before you confirm',
-    body: 'Every contribution adds a visible surcharge on top of the contribution amount — never deducted from the pot.',
-    bullets: [
-      'A card fee plus your equal share of that cycle’s payout fee is added to every contribution',
-      'The surcharge is fully itemised on-screen before you confirm',
-      'See our FAQ for the exact fee percentages',
-    ],
-  },
-  NG: {
-    title: 'Nigeria contribution fees stay itemised',
-    body: 'Every contribution adds a visible surcharge on top of the contribution amount — never deducted from the pot.',
-    bullets: [
-      'A transaction fee plus your equal share of the cycle’s tiered payout fee is added to every contribution, with VAT shown separately',
-      'Subscription and verification charges are not surcharged this way',
-      'See our FAQ for the exact fee percentages',
-    ],
-  },
-};
-
 const plansByRegion: Record<PricingRegion, PlanCard[]> = {
   UK: [
     {
@@ -90,7 +69,7 @@ const plansByRegion: Record<PricingRegion, PlanCard[]> = {
       summary: 'For members who want to join savings circles without running their own.',
       createLimitLabel: 'Cannot create a savings group',
       joinLimitLabel: 'Join up to 3 groups',
-      highlights: ['Monthly billing only — no annual plan or free trial', 'Ideal for members who just want to contribute and save'],
+      highlights: ['Ideal for members who just want to contribute and save'],
     },
     {
       key: 'premium',
@@ -99,7 +78,7 @@ const plansByRegion: Record<PricingRegion, PlanCard[]> = {
       summary: 'For organisers leading circles and managing a larger savings network.',
       createLimitLabel: 'Create up to 3 savings groups',
       joinLimitLabel: 'Join up to 5 more groups (8 total)',
-      highlights: ['Monthly billing only — no annual plan or free trial', 'Best for organisers and admins'],
+      highlights: ['Best for organisers and admins'],
       recommended: true,
     },
   ],
@@ -111,7 +90,7 @@ const plansByRegion: Record<PricingRegion, PlanCard[]> = {
       summary: 'For members who want to join savings circles without running their own.',
       createLimitLabel: 'Cannot create a savings group',
       joinLimitLabel: 'Join up to 3 groups',
-      highlights: ['Monthly billing only — no annual plan or free trial', 'Ideal for members who just want to contribute and save'],
+      highlights: ['Ideal for members who just want to contribute and save'],
     },
     {
       key: 'premium',
@@ -120,7 +99,7 @@ const plansByRegion: Record<PricingRegion, PlanCard[]> = {
       summary: 'For organisers leading circles and managing a larger savings network.',
       createLimitLabel: 'Create up to 3 savings groups',
       joinLimitLabel: 'Join up to 5 more groups (8 total)',
-      highlights: ['Monthly billing only — no annual plan or free trial', 'Best for organisers and admins'],
+      highlights: ['Best for organisers and admins'],
       recommended: true,
     },
   ],
@@ -173,7 +152,6 @@ export default function PricingPage() {
   const regionLabel = region === 'NG' ? 'Nigeria' : 'United Kingdom';
   const currencyLabel = region === 'NG' ? 'NGN (₦)' : 'GBP (£)';
   const verificationNote = verificationNotesByRegion[region];
-  const contributionFeeNote = contributionFeeNotesByRegion[region];
 
   return (
     <>
@@ -225,8 +203,6 @@ export default function PricingPage() {
             <span>Showing {regionLabel} pricing</span>
             <span style={{ color: 'rgba(255,255,255,0.35)' }}>•</span>
             <span>{currencyLabel}</span>
-            <span style={{ color: 'rgba(255,255,255,0.35)' }}>•</span>
-            <span>Monthly billing only</span>
           </div>
         </div>
       </section>
@@ -335,12 +311,12 @@ export default function PricingPage() {
             Creating a group also counts as being a member of that group.
           </p>
           <p style={{ textAlign: 'center', color: '#6B7280', fontSize: 13, marginTop: 8, maxWidth: '40rem', marginLeft: 'auto', marginRight: 'auto' }}>
-            Your subscription is only charged after your identity/bank-account verification succeeds. Contributions carry a separate, itemised processing-fee surcharge — see our{' '}
+            Subscriptions are only charged after successful identity verification. Monthly contributions are subject to processing fees with final group payouts made in full. See our{' '}
             <Link to="/terms" style={{ color: '#2EAF6F', fontWeight: 700, textDecoration: 'underline' }}>Terms of Service</Link> for full details.
           </p>
 
           <div className="info-grid" style={{ marginTop: 40 }}>
-            {[verificationNote, contributionFeeNote].map((card) => (
+            {[verificationNote].map((card) => (
               <div key={card.title} style={{ borderRadius: 24, padding: 24, background: '#fff', border: '1px solid #E5E7EB', boxShadow: '0 2px 16px rgba(0,0,0,0.04)' }}>
                 <p style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#2EAF6F', marginBottom: 10 }}>{card.title}</p>
                 <p style={{ color: '#4B5563', fontSize: 14, lineHeight: 1.7, marginBottom: 16 }}>{card.body}</p>
@@ -379,7 +355,6 @@ export default function PricingPage() {
         <div style={{ maxWidth: '56rem', margin: '0 auto', padding: '0 1.5rem' }}>
           <div className="trust-grid">
             {[
-              { icon: Shield, title: 'Monthly only', desc: 'Just one clear monthly price per plan, with no billing surprises.', color: '#2EAF6F' },
               { icon: ArrowRight, title: 'Cancel anytime', desc: 'Stay flexible as your savings groups grow and your needs change.', color: '#8B5CF6' },
             ].map((item) => (
               <div key={item.title} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
@@ -418,7 +393,7 @@ export default function PricingPage() {
             </Link>
           </div>
           <p style={{ color: '#6B7280', fontSize: 13, marginTop: 24 }}>
-            {regionLabel} pricing shown · Monthly billing only · Cancel anytime
+            {regionLabel} pricing shown · Cancel anytime
           </p>
         </div>
       </section>

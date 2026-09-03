@@ -267,7 +267,9 @@ export const authService = {
     if (new Date() > row.expires_at) throw new AppError('Token expired.', 400, 'TOKEN_EXPIRED');
 
     const password_hash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
-    await db.update(schema.users).set({ password_hash }).where(eq(schema.users.id, row.user_id));
+    await db.update(schema.users)
+      .set({ password_hash, password_changed_at: new Date() })
+      .where(eq(schema.users.id, row.user_id));
     await db.update(schema.passwordResetTokens).set({ used: true }).where(eq(schema.passwordResetTokens.id, row.id));
 
     await createAuditLog({ userId: row.user_id, action: 'PASSWORD_RESET_COMPLETED', entity: 'users', entityId: row.user_id, ipAddress });
@@ -282,9 +284,14 @@ export const authService = {
 
     const valid = await bcrypt.compare(currentPassword, user.password_hash);
     if (!valid) throw new AppError('Current password is incorrect.', 400, 'WRONG_PASSWORD');
+    if (currentPassword === newPassword) {
+      throw new AppError('Your new password must be different from your current password.', 400, 'PASSWORD_UNCHANGED');
+    }
 
     const password_hash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
-    await db.update(schema.users).set({ password_hash }).where(eq(schema.users.id, userId));
+    await db.update(schema.users)
+      .set({ password_hash, password_changed_at: new Date() })
+      .where(eq(schema.users.id, userId));
     await createAuditLog({ userId, action: 'PASSWORD_CHANGED', entity: 'users', entityId: userId, ipAddress });
     const timestamp = new Date().toLocaleString('en-GB', { timeZone: 'UTC', dateStyle: 'medium', timeStyle: 'short' }) + ' UTC';
     await sendPasswordChangedEmail(user.email, timestamp);

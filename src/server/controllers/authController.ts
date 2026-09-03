@@ -25,7 +25,7 @@ const resendVerifySchema  = z.object({ email: z.string().email() });
 const resetSchema   = z.object({ token: z.string().uuid(), password: z.string().min(8) });
 const changePasswordSchema = z.object({
   current_password: z.string().min(1),
-  new_password:     z.string().min(8),
+  new_password:     z.string().min(8).regex(/[A-Z]/, 'Must contain uppercase').regex(/[0-9]/, 'Must contain number'),
 });
 
 export const authController = {

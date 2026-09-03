@@ -28,6 +28,12 @@ const proposeClaimSchema = z.object({
   amount: z.number().positive(),
 });
 
+const proposeRemovalSchema = z.object({
+  group_id: z.string().uuid(),
+  target_member_id: z.string().uuid(),
+  reason: z.string().max(500).optional(),
+});
+
 const respondSchema = z.object({
   token: z.string().min(10),
   decision: z.enum(['approve', 'reject']),
@@ -109,6 +115,20 @@ export const voteController = {
       try {
         const body = req.body as z.infer<typeof proposeClaimSchema>;
         const id = await voteService.proposeContributionClaim(body.group_id, req.user!.userId, body.amount, ip(req.ip));
+        res.status(201).json({ success: true, data: { id } });
+      } catch (e) { next(e); }
+    },
+  ],
+
+  /** POST /api/votes/member-removal — any member proposes a unanimous vote to remove another specific member */
+  proposeRemoval: [
+    validate(proposeRemovalSchema),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const body = req.body as z.infer<typeof proposeRemovalSchema>;
+        const id = await voteService.proposeMemberRemoval(
+          body.group_id, req.user!.userId, body.target_member_id, body.reason, ip(req.ip),
+        );
         res.status(201).json({ success: true, data: { id } });
       } catch (e) { next(e); }
     },

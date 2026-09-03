@@ -75,9 +75,11 @@ test.describe("Signup, logout, and login flow (UK / GBP)", () => {
     await page.goto("/get-started");
 
     // ─── Step 2: Fill out the signup form ────────────────────────────────
+    // Country is no longer user-selectable — it's auto-detected from IP via
+    // /api/geo (defaults to GB when no geo signal is present, matching
+    // TEST_USER.country here), so there's nothing to select.
     await page.getByTestId("signup-name").fill(TEST_USER.name);
     await page.getByTestId("signup-email").fill(TEST_USER.email);
-    await page.getByTestId("signup-country").selectOption(TEST_USER.country);
     await page.getByTestId("signup-password").fill(TEST_USER.password);
     await page.getByTestId("signup-agree").check();
 

@@ -3,15 +3,14 @@ import { AnimatePresence } from 'motion/react';
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  Bell, Camera, CheckCircle, ChevronLeft, ChevronRight,
-  Globe, Mail, Shield, Sparkles, User,
+  Bell, Camera, CheckCircle, ChevronLeft, ChevronRight, Globe, Mail, Shield, Sparkles, User,
 } from 'lucide-react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { MotionDiv } from '@/lib/motion-safe';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { SkeletonPage } from '@/components/ui/loading-skeleton';
 import { SuccessToast, useSuccessToast } from '@/components/ui/success-toast';
-import { getValidSession } from '@/lib/session';
+import { getValidSession, updateStoredSession } from '@/lib/session';
 
 const steps = [
   { id: 1, title: 'Profile Photo', icon: Camera, color: '#2EAF6F' },
@@ -29,13 +28,11 @@ const defaultNotifications = {
   invitations: true,
   voting: false,
   email: true,
-  sms: false,
 };
 
 const defaultPrivacy = {
   showTrust: true,
   publicProfile: true,
-  dataPreferences: false,
 };
 
 type NotificationSettings = typeof defaultNotifications;
@@ -70,13 +67,11 @@ const notificationItems: Array<{ key: keyof NotificationSettings; label: string;
   { key: 'invitations', label: 'Invitations', desc: 'When you are invited into new groups' },
   { key: 'voting', label: 'Governance votes', desc: 'New proposals and vote reminders' },
   { key: 'email', label: 'Email updates', desc: 'Receive updates in your inbox' },
-  { key: 'sms', label: 'SMS alerts', desc: 'Important text alerts when enabled' },
 ];
 
 const privacyItems: Array<{ key: keyof PrivacySettings; label: string; desc: string }> = [
   { key: 'publicProfile', label: 'Public profile', desc: 'Allow members to find your profile' },
   { key: 'showTrust', label: 'Show Trust Score™', desc: 'Visible to other group members' },
-  { key: 'dataPreferences', label: 'Data preferences', desc: 'Manage how your data is used' },
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -113,7 +108,6 @@ function getNotificationSettings(preferences: Record<string, unknown>): Notifica
     invitations: getBooleanValue(source.invitations, defaultNotifications.invitations),
     voting: getBooleanValue(source.voting, defaultNotifications.voting),
     email: getBooleanValue(source.email, defaultNotifications.email),
-    sms: getBooleanValue(source.sms, defaultNotifications.sms),
   };
 }
 
@@ -123,8 +117,24 @@ function getPrivacySettings(preferences: Record<string, unknown>): PrivacySettin
   return {
     showTrust: getBooleanValue(source.showTrust, defaultPrivacy.showTrust),
     publicProfile: getBooleanValue(source.publicProfile, defaultPrivacy.publicProfile),
-    dataPreferences: getBooleanValue(source.dataPreferences, defaultPrivacy.dataPreferences),
   };
+}
+
+function sanitizeProfilePreferences(preferences: Record<string, unknown>) {
+  const nextPreferences = { ...preferences };
+  delete nextPreferences.darkMode;
+  delete nextPreferences.twoFA;
+  if (isRecord(nextPreferences.privacy)) {
+    const nextPrivacy = { ...nextPreferences.privacy };
+    delete nextPrivacy.dataPreferences;
+    nextPreferences.privacy = nextPrivacy;
+  }
+  if (isRecord(nextPreferences.notifications)) {
+    const nextNotifications = { ...nextPreferences.notifications };
+    delete nextNotifications.sms;
+    nextPreferences.notifications = nextNotifications;
+  }
+  return nextPreferences;
 }
 
 function getDisplayName(profile: UserProfile) {
@@ -200,7 +210,6 @@ export default function EditProfilePage() {
   const [avatarDataUrl, setAvatarDataUrl] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<NotificationSettings>(defaultNotifications);
   const [privacy, setPrivacy] = useState<PrivacySettings>(defaultPrivacy);
-  const [twoFA, setTwoFA] = useState(false);
   const { toastState, show: showToast, hide: hideToast } = useSuccessToast();
 
   useEffect(() => {
@@ -236,7 +245,7 @@ export default function EditProfilePage() {
           ? profile.notification_preferences
           : {};
 
-        setExistingPreferences(preferences);
+        setExistingPreferences(sanitizeProfilePreferences(preferences));
         setDisplayName(getDisplayName(profile));
         setPhoneNumber(profile.phone_number ?? '');
         setEmail(profile.email ?? '');
@@ -250,7 +259,6 @@ export default function EditProfilePage() {
         setAvatarDataUrl(typeof preferences.avatarDataUrl === 'string' ? preferences.avatarDataUrl : null);
         setNotifications(getNotificationSettings(preferences));
         setPrivacy(getPrivacySettings(preferences));
-        setTwoFA(getBooleanValue(preferences.twoFA, false));
         setLoadError(null);
       } catch (error) {
         if (!active) return;
@@ -315,10 +323,9 @@ export default function EditProfilePage() {
     setSaving(true);
 
     const notificationPreferences: Record<string, unknown> = {
-      ...existingPreferences,
+      ...sanitizeProfilePreferences(existingPreferences),
       notifications,
       privacy,
-      twoFA,
     };
 
     if (avatarDataUrl) {
@@ -348,7 +355,7 @@ export default function EditProfilePage() {
 
       const savedProfile = payload.data;
       const savedPreferences = isRecord(savedProfile.notification_preferences)
-        ? savedProfile.notification_preferences
+        ? sanitizeProfilePreferences(savedProfile.notification_preferences)
         : notificationPreferences;
 
       setExistingPreferences(savedPreferences);
@@ -357,7 +364,10 @@ export default function EditProfilePage() {
       setAvatarDataUrl(typeof savedPreferences.avatarDataUrl === 'string' ? savedPreferences.avatarDataUrl : null);
       setNotifications(getNotificationSettings(savedPreferences));
       setPrivacy(getPrivacySettings(savedPreferences));
-      setTwoFA(getBooleanValue(savedPreferences.twoFA, twoFA));
+      updateStoredSession({
+        name: getDisplayName(savedProfile),
+        email: savedProfile.email ?? session.email,
+      });
       setCompleted(true);
     } catch (error) {
       const message = error instanceof Error && error.message
@@ -641,13 +651,6 @@ export default function EditProfilePage() {
                       <Toggle on={privacy[item.key]} onChange={(value) => setPrivacy((current) => ({ ...current, [item.key]: value }))} />
                     </div>
                   ))}
-                  <div className="flex items-center justify-between p-3 rounded-2xl" style={{ background: '#F9FAFB' }}>
-                    <div>
-                      <p className="text-sm font-bold text-gray-900">Two-Factor Authentication</p>
-                      <p className="text-xs text-gray-400">Store your preference in the same saved settings blob.</p>
-                    </div>
-                    <Toggle on={twoFA} onChange={setTwoFA} />
-                  </div>
                 </div>
               </div>
             )}
@@ -679,13 +682,13 @@ export default function EditProfilePage() {
           </MotionDiv>
         </AnimatePresence>
 
-        <div className="flex gap-3 mt-5">
+        <div className="flex flex-col-reverse sm:flex-row gap-3 mt-5">
           {step > 1 && (
-            <button onClick={() => setStep((current) => current - 1)} className="flex items-center gap-2 px-5 py-3.5 rounded-2xl font-bold text-gray-600 hover:bg-gray-50 transition-colors" style={{ border: '1px solid #E5E7EB' }} type="button">
+            <button onClick={() => setStep((current) => current - 1)} className="flex items-center justify-center gap-2 px-5 py-3.5 rounded-2xl font-bold text-gray-600 hover:bg-gray-50 transition-colors" style={{ border: '1px solid #E5E7EB' }} type="button">
               <ChevronLeft size={16} /> Back
             </button>
           )}
-          <button onClick={handleNext} disabled={saving} className="flex-1 flex items-center justify-center gap-2 py-3.5 rounded-2xl font-bold text-white transition-all hover:opacity-90 disabled:opacity-60" style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', boxShadow: '0 4px 16px rgba(46,175,111,0.3)' }} type="button">
+          <button onClick={handleNext} disabled={saving} className="w-full sm:flex-1 flex items-center justify-center gap-2 py-3.5 rounded-2xl font-bold text-white transition-all hover:opacity-90 disabled:opacity-60" style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', boxShadow: '0 4px 16px rgba(46,175,111,0.3)' }} type="button">
             {step === steps.length ? (saving ? 'Saving…' : 'Save Profile') : 'Continue'}
             {step < steps.length && <ChevronRight size={16} />}
           </button>

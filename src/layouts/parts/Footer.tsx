@@ -43,6 +43,8 @@ export default function Footer() {
     { icon: LinkedInIcon,  href: 'https://linkedin.com/company/padihub',     label: 'LinkedIn' },
     { icon: FacebookIcon,  href: 'https://facebook.com/padihub',             label: 'Facebook' },
   ];
+  // Keep these placeholders ready for future re-enablement without rendering them today.
+  const SHOW_SOCIAL_LINKS = false;
 
   return (
     <footer style={{ background: '#0A0F1A', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
@@ -155,14 +157,16 @@ export default function Footer() {
                 </div>
               ))}
             </div>
-            <div className="ftr-socials">
-              {socialLinks.map(({ icon: Icon, href, label }) => (
-                <a key={label} href={href} target="_blank" rel="noopener noreferrer"
-                  aria-label={label} className="ftr-social-btn">
-                  <Icon />
-                </a>
-              ))}
-            </div>
+            {SHOW_SOCIAL_LINKS && (
+              <div className="ftr-socials">
+                {socialLinks.map(({ icon: Icon, href, label }) => (
+                  <a key={label} href={href} target="_blank" rel="noopener noreferrer"
+                    aria-label={label} className="ftr-social-btn">
+                    <Icon />
+                  </a>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Product */}

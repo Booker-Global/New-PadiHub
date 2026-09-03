@@ -195,6 +195,24 @@ export async function sendPasswordChangedEmail(to: string, timestamp: string): P
   `));
 }
 
+export async function sendPaymentMethodUpdatedEmail(to: string, name: string): Promise<void> {
+  await send(to, 'Your PadiHub payment method was updated', wrap(`
+    ${h2('Payment method updated')}
+    ${p(`Hi ${escapeHtml(name)}, your saved payment card has been updated.`)}
+    ${p('This new payment method is now in effect immediately for future PadiHub contribution charges.')}
+    ${p('If you did not make this change, please <a href="mailto:hello@padihub.com" style="color:#2EAF6F;">contact support</a> straight away.')}
+  `));
+}
+
+export async function sendPayoutDestinationUpdatedEmail(to: string, name: string): Promise<void> {
+  await send(to, 'Your PadiHub payout destination was updated', wrap(`
+    ${h2('Payout destination updated')}
+    ${p(`Hi ${escapeHtml(name)}, your saved payout destination has been updated.`)}
+    ${p('This payout destination is now the one on file for your future PadiHub payouts with immediate effect.')}
+    ${p('If you did not make this change, please <a href="mailto:hello@padihub.com" style="color:#2EAF6F;">contact support</a> straight away.')}
+  `));
+}
+
 export async function sendAccountDeletedEmail(to: string, name: string): Promise<void> {
   await send(to, 'Your PadiHub account has been deleted', wrap(`
     ${h2('Account deleted')}
@@ -275,6 +293,26 @@ export async function sendGroupClosedEmail(to: string, groupName: string): Promi
   `));
 }
 
+/** Confirm to the Creator that their new group (and its lifecycle length) was created. */
+export async function sendGroupCreatedEmail(to: string, groupName: string, durationSummary: string): Promise<void> {
+  await send(to, `${groupName} has been created`, wrap(`
+    ${h2('Your savings group has been created')}
+    ${p(`<strong>${escapeHtml(groupName)}</strong> has been created as a draft.`)}
+    ${p(durationSummary)}
+    ${btn('View Group', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
+  `));
+}
+
+/** Confirm to a brand-new member (invite-token immediate join) that they've joined, including the group's lifecycle length. */
+export async function sendMemberJoinedGroupEmail(to: string, groupName: string, durationSummary: string): Promise<void> {
+  await send(to, `You've joined ${groupName}`, wrap(`
+    ${h2('You\'re in!')}
+    ${p(`You've successfully joined <strong>${escapeHtml(groupName)}</strong>.`)}
+    ${p(durationSummary)}
+    ${btn('View Group', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
+  `));
+}
+
 /** Notify a group leader that a verified member has requested to join their group. */
 export async function sendGroupJoinRequestEmail(
   to: string, groupName: string, requesterName: string, requesterTrustScore: number,
@@ -302,11 +340,12 @@ export async function sendGroupJoinRequestSubmittedEmail(to: string, groupName: 
 }
 
 /** Notify the requester their join request was approved. */
-export async function sendGroupJoinApprovedEmail(to: string, groupName: string): Promise<void> {
+export async function sendGroupJoinApprovedEmail(to: string, groupName: string, durationSummary?: string): Promise<void> {
   await send(to, `You've been accepted into ${groupName}`, wrap(`
     ${h2('Request approved')}
     ${p(`You've been accepted as a member of <strong>${groupName}</strong>.`)}
     ${p('The group\'s payout schedule has been updated to include you. Check the group page for your rotation position.')}
+    ${durationSummary ? p(durationSummary) : ''}
     ${btn('View Group', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
   `));
 }
@@ -388,16 +427,26 @@ export async function sendGroupExpiryReminderEmail(
  */
 export async function sendMemberExitCompressionEmail(
   to: string, groupName: string, departedName: string,
-  reason: 'voluntary' | 'removed_by_leader' | 'defaulted',
+  reason: 'voluntary' | 'removed_by_leader' | 'defaulted' | 'vote_removed',
+  /**
+   * Set only when the departing member was the group's Owner/Organiser —
+   * folds the tenure-based succession announcement into this SAME email
+   * rather than sending a separate one (Section 15.B: "Send one combined
+   * email to the group: compression details plus who the new
+   * Organiser/Owner is").
+   */
+  newOwnerName?: string,
 ): Promise<void> {
   const reasonText = reason === 'voluntary' ? 'left the group'
     : reason === 'defaulted' ? 'was suspended after repeated contribution defaults'
+    : reason === 'vote_removed' ? 'was removed by a group member vote'
     : 'was removed by the group leader';
   await send(to, `Payout schedule updated in ${groupName}`, wrap(`
     ${h2('Group membership and payout schedule updated')}
     ${p(`<strong>${departedName}</strong> ${reasonText} in <strong>${groupName}</strong>.`)}
     ${p('As a result: the final period has been removed from the group\'s timeline, everyone behind that slot has moved up one position in the payout order (your payout date may now be earlier), and the future payout pool is reduced by their share since they will no longer contribute.')}
     ${p('Your own contribution amount is unchanged. Check the group page for your updated position and next payout date.')}
+    ${newOwnerName ? p(`Because ${departedName} was the group's Organiser, the Organiser/Owner role has automatically transferred to <strong>${newOwnerName}</strong> — the remaining member who has been in the group the longest.`) : ''}
     ${btn('View Group', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
   `));
 }
@@ -748,13 +797,17 @@ export async function sendSupportTicketClosedEmail(
 
 // ─── Identity Verification emails ─────────────────────────────────────────────
 
-export async function sendIdentityVerifiedEmail(to: string, firstName: string): Promise<void> {
+export async function sendIdentityVerifiedEmail(to: string, firstName: string, subscriptionActivated: boolean): Promise<void> {
   await send(to, 'Your identity has been verified — PadiHub', wrap(`
     ${h2(`Identity verified, ${firstName}!`)}
-    ${p('Your identity has been successfully verified on PadiHub, and your subscription is now active.')}
+    ${subscriptionActivated
+      ? p('Your identity has been successfully verified on PadiHub, and your subscription is now active.')
+      : p('Your identity has been successfully verified on PadiHub.')}
     ${p('As a result, your Trust Score has increased slightly. Everyone starts from the bottom of the scale and builds their Trust Score up over time through real group activity — on-time contributions, completed cycles, and positive participation.')}
-    ${p('No further action is needed. You can now create and join savings groups per your plan\'s limits.')}
-    ${btn('Go to Dashboard', `${process.env.APP_URL ?? 'https://padihub.com'}/dashboard`)}
+    ${subscriptionActivated
+      ? p('No further action is needed. You can now create and join savings groups per your plan\'s limits.')
+      : p('Choose a subscription plan and add your payment card to activate your subscription and start creating or joining savings groups.')}
+    ${btn(subscriptionActivated ? 'Go to Dashboard' : 'Choose Your Plan', `${process.env.APP_URL ?? 'https://padihub.com'}/${subscriptionActivated ? 'dashboard' : 'subscription/manage'}`)}
   `));
 }
 

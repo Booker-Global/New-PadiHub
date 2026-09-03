@@ -3,8 +3,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MotionDiv } from '@/lib/motion-safe';
 import {
-  Bell, Shield, Globe, Moon, Smartphone, Lock, Eye, EyeOff,
-  ChevronRight, Check, Trash2, Download, LogOut,
+  Bell, Shield, Lock, Eye, EyeOff, ChevronRight, Check, Trash2, Download, LogOut,
 } from 'lucide-react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -22,13 +21,11 @@ const defaultNotifications = {
   invitations: true,
   voting: false,
   email: true,
-  sms: false,
 };
 
 const defaultPrivacy = {
   showTrust: true,
   publicProfile: true,
-  dataPreferences: false,
 };
 
 type NotificationSettings = typeof defaultNotifications;
@@ -119,7 +116,6 @@ function getNotificationSettings(preferences: Record<string, unknown>): Notifica
     invitations: getBooleanValue(source.invitations, defaultNotifications.invitations),
     voting: getBooleanValue(source.voting, defaultNotifications.voting),
     email: getBooleanValue(source.email, defaultNotifications.email),
-    sms: getBooleanValue(source.sms, defaultNotifications.sms),
   };
 }
 
@@ -129,16 +125,30 @@ function getPrivacySettings(preferences: Record<string, unknown>): PrivacySettin
   return {
     showTrust: getBooleanValue(source.showTrust, defaultPrivacy.showTrust),
     publicProfile: getBooleanValue(source.publicProfile, defaultPrivacy.publicProfile),
-    dataPreferences: getBooleanValue(source.dataPreferences, defaultPrivacy.dataPreferences),
   };
+}
+
+function sanitizeSettingsPreferences(preferences: Record<string, unknown>) {
+  const nextPreferences = { ...preferences };
+  delete nextPreferences.darkMode;
+  delete nextPreferences.twoFA;
+  if (isRecord(nextPreferences.privacy)) {
+    const nextPrivacy = { ...nextPreferences.privacy };
+    delete nextPrivacy.dataPreferences;
+    nextPreferences.privacy = nextPrivacy;
+  }
+  if (isRecord(nextPreferences.notifications)) {
+    const nextNotifications = { ...nextPreferences.notifications };
+    delete nextNotifications.sms;
+    nextPreferences.notifications = nextNotifications;
+  }
+  return nextPreferences;
 }
 
 export default function SettingsPage() {
   const navigate = useNavigate();
   const [notifs, setNotifs] = useState<NotificationSettings>(defaultNotifications);
   const [privacy, setPrivacy] = useState<PrivacySettings>(defaultPrivacy);
-  const [darkMode, setDarkMode] = useState(false);
-  const [twoFA, setTwoFA] = useState(false);
   const [existingPreferences, setExistingPreferences] = useState<Record<string, unknown>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -148,11 +158,14 @@ export default function SettingsPage() {
   const [showLogoutDialog, setShowLogoutDialog] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deletingAccount, setDeletingAccount] = useState(false);
+  const [passwordForm, setPasswordForm] = useState({
+    currentPassword: '',
+    newPassword: '',
+    confirmPassword: '',
+  });
+  const [passwordSaving, setPasswordSaving] = useState(false);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
   const { toastState, show: showToast, hide: hideToast } = useSuccessToast();
-
-  useEffect(() => {
-    document.documentElement.classList.toggle('dark', darkMode);
-  }, [darkMode]);
 
   useEffect(() => {
     let active = true;
@@ -186,11 +199,9 @@ export default function SettingsPage() {
           ? payload.data.notification_preferences
           : {};
 
-        setExistingPreferences(preferences);
+        setExistingPreferences(sanitizeSettingsPreferences(preferences));
         setNotifs(getNotificationSettings(preferences));
         setPrivacy(getPrivacySettings(preferences));
-        setDarkMode(getBooleanValue(preferences.darkMode, false));
-        setTwoFA(getBooleanValue(preferences.twoFA, false));
         setLoadError(null);
       } catch (error) {
         if (!active) return;
@@ -221,11 +232,9 @@ export default function SettingsPage() {
     setSaving(true);
 
     const preferences = {
-      ...existingPreferences,
+      ...sanitizeSettingsPreferences(existingPreferences),
       notifications: notifs,
       privacy,
-      darkMode,
-      twoFA,
     };
 
     try {
@@ -252,6 +261,67 @@ export default function SettingsPage() {
       showToast('Could not save settings', message, 'badge');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handlePasswordChange = async () => {
+    const session = getValidSession();
+    if (!session?.token) {
+      setPasswordError('Your session has expired. Please sign in again.');
+      return;
+    }
+
+    if (!passwordForm.currentPassword || !passwordForm.newPassword || !passwordForm.confirmPassword) {
+      setPasswordError('Please complete all password fields.');
+      return;
+    }
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      setPasswordError('New password and confirmation do not match.');
+      return;
+    }
+    if (passwordForm.currentPassword === passwordForm.newPassword) {
+      setPasswordError('Your new password must be different from your current password.');
+      return;
+    }
+    if (passwordForm.newPassword.length < 8 || !/[A-Z]/.test(passwordForm.newPassword) || !/[0-9]/.test(passwordForm.newPassword)) {
+      setPasswordError('Use at least 8 characters, including 1 uppercase letter and 1 number.');
+      return;
+    }
+
+    setPasswordSaving(true);
+    setPasswordError(null);
+
+    try {
+      const response = await globalThis.fetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer ' + session.token,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          current_password: passwordForm.currentPassword,
+          new_password: passwordForm.newPassword,
+        }),
+      });
+
+      const payload = await response.json().catch(() => null) as ApiResponse<null> | null;
+      if (!response.ok || !payload?.success) {
+        throw new Error(getApiErrorMessage(payload, 'Unable to change your password right now.'));
+      }
+
+      clearStoredSession();
+      navigate('/login', {
+        replace: true,
+        state: { notice: 'Password changed successfully. Please sign in again with your new password.' },
+      });
+    } catch (error) {
+      setPasswordError(
+        error instanceof Error && error.message
+          ? error.message
+          : 'Unable to change your password right now.',
+      );
+    } finally {
+      setPasswordSaving(false);
     }
   };
 
@@ -409,9 +479,6 @@ export default function SettingsPage() {
             <SettingRow icon={Bell} label="Email notifications" description="Receive reminders and updates by email" color="#EF4444">
               <Toggle value={notifs.email} onChange={(value) => setNotifs((current) => ({ ...current, email: value }))} />
             </SettingRow>
-            <SettingRow icon={Smartphone} label="SMS notifications" description="Critical alerts via text message (coming soon)" color="#6B7280">
-              <Toggle value={notifs.sms} onChange={(value) => setNotifs((current) => ({ ...current, sms: value }))} />
-            </SettingRow>
           </MotionDiv>
 
           <MotionDiv variants={fadeUp} className="rounded-3xl p-6 bg-white mb-4" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
@@ -423,40 +490,74 @@ export default function SettingsPage() {
             <SettingRow icon={EyeOff} label="Public profile" description="Allow others to find your profile" color="#8B5CF6">
               <Toggle value={privacy.publicProfile} onChange={(value) => setPrivacy((current) => ({ ...current, publicProfile: value }))} />
             </SettingRow>
-            <SettingRow icon={Globe} label="Data preferences" description="Manage how your data is used" color="#2eafaf">
-              <Toggle value={privacy.dataPreferences} onChange={(value) => setPrivacy((current) => ({ ...current, dataPreferences: value }))} />
-            </SettingRow>
-          </MotionDiv>
-
-          <MotionDiv variants={fadeUp} className="rounded-3xl p-6 bg-white mb-4" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
-            <h2 className="font-extrabold text-gray-900 mb-1" style={{ fontFamily: 'Nunito, sans-serif' }}>Appearance</h2>
-            <p className="text-xs text-gray-400 mb-4">Personalise your PadiHub experience</p>
-            <SettingRow icon={Moon} label="Dark mode" description="Switch to a darker interface" color="#1A1A2E">
-              <Toggle value={darkMode} onChange={setDarkMode} />
-            </SettingRow>
-            <SettingRow icon={Globe} label="Language" description="English (UK)" color="#2eafaf">
-              <button className="flex items-center gap-1 text-sm font-semibold text-gray-500 hover:text-gray-800 transition-colors" type="button">
-                Change <ChevronRight size={14} />
-              </button>
-            </SettingRow>
           </MotionDiv>
 
           <MotionDiv variants={fadeUp} className="rounded-3xl p-6 bg-white mb-4" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
             <h2 className="font-extrabold text-gray-900 mb-1" style={{ fontFamily: 'Nunito, sans-serif' }}>Security</h2>
             <p className="text-xs text-gray-400 mb-4">Keep your account safe</p>
-            <SettingRow icon={Lock} label="Two-factor authentication" description="Add an extra layer of security" color="#2EAF6F">
-              <Toggle value={twoFA} onChange={setTwoFA} />
-            </SettingRow>
             <SettingRow icon={Shield} label="Change password" color="#8B5CF6">
-              <button className="flex items-center gap-1 text-sm font-semibold text-gray-500 hover:text-gray-800 transition-colors" type="button">
-                Update <ChevronRight size={14} />
-              </button>
+              <span className="text-xs font-semibold text-gray-400">Requires current password</span>
             </SettingRow>
-            <SettingRow icon={Smartphone} label="Active sessions" description="2 devices" color="#2eafaf">
-              <button className="flex items-center gap-1 text-sm font-semibold text-gray-500 hover:text-gray-800 transition-colors" type="button">
-                Manage <ChevronRight size={14} />
+            <div className="grid gap-3 mt-2">
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1.5">Current password</label>
+                <input
+                  type="password"
+                  autoComplete="current-password"
+                  value={passwordForm.currentPassword}
+                  onChange={(event) => {
+                    setPasswordError(null);
+                    setPasswordForm((current) => ({ ...current, currentPassword: event.target.value }));
+                  }}
+                  className="w-full rounded-2xl px-4 py-3 text-sm"
+                  style={{ border: '1px solid #E5E7EB', background: '#F9FAFB' }}
+                />
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 mb-1.5">New password</label>
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    value={passwordForm.newPassword}
+                    onChange={(event) => {
+                      setPasswordError(null);
+                      setPasswordForm((current) => ({ ...current, newPassword: event.target.value }));
+                    }}
+                    className="w-full rounded-2xl px-4 py-3 text-sm"
+                    style={{ border: '1px solid #E5E7EB', background: '#F9FAFB' }}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 mb-1.5">Confirm new password</label>
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    value={passwordForm.confirmPassword}
+                    onChange={(event) => {
+                      setPasswordError(null);
+                      setPasswordForm((current) => ({ ...current, confirmPassword: event.target.value }));
+                    }}
+                    className="w-full rounded-2xl px-4 py-3 text-sm"
+                    style={{ border: '1px solid #E5E7EB', background: '#F9FAFB' }}
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-gray-400">Use at least 8 characters, including 1 uppercase letter and 1 number.</p>
+              {passwordError && (
+                <p className="text-sm" style={{ color: '#B91C1C' }}>{passwordError}</p>
+              )}
+              <button
+                onClick={() => { void handlePasswordChange(); }}
+                disabled={passwordSaving}
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-3 rounded-2xl font-bold text-white disabled:opacity-60"
+                style={{ background: 'linear-gradient(135deg, #8B5CF6, #7C3AED)' }}
+                type="button"
+              >
+                <Lock size={16} />
+                {passwordSaving ? 'Updating password…' : 'Change password'}
               </button>
-            </SettingRow>
+            </div>
           </MotionDiv>
 
           <MotionDiv variants={fadeUp} className="rounded-3xl p-6 bg-white mb-6" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>

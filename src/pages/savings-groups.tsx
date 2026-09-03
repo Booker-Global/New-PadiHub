@@ -179,15 +179,11 @@ export default function SavingsGroupsPage() {
 
   const summaryStats = useMemo(() => {
     const activeGroups = groups.filter(group => group.status === 'active').length;
-    const weeklyGroups = groups.filter(group => group.contribution_frequency === 'weekly').length;
     const monthlyGroups = groups.filter(group => group.contribution_frequency === 'monthly').length;
-    const totalCapacity = groups.reduce((sum, group) => sum + group.maximum_members, 0);
 
     return [
       { label: 'Total Groups', value: groups.length.toString(), color: '#2EAF6F', icon: PiggyBank },
       { label: 'Active Groups', value: activeGroups.toString(), color: '#2eafaf', icon: TrendingUp },
-      { label: 'Weekly Groups', value: weeklyGroups.toString(), color: '#F59E0B', icon: Calendar },
-      { label: 'Total Capacity', value: totalCapacity.toString(), color: '#8B5CF6', icon: CheckCircle },
       { label: 'Monthly Groups', value: monthlyGroups.toString(), color: '#2EAF6F', icon: Clock },
     ];
   }, [groups]);
@@ -249,7 +245,7 @@ export default function SavingsGroupsPage() {
           ) : (
             <>
               <MotionDiv variants={fadeUp} className="r-grid-stats" style={{ marginBottom: 24 }}>
-                {summaryStats.slice(0, 4).map(stat => (
+                {summaryStats.map(stat => (
                   <div key={stat.label} className="rounded-2xl p-4 bg-white flex items-center gap-3" style={{ border: '1px solid #F3F4F6' }}>
                     <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: `${stat.color}15` }}>
                       <stat.icon size={18} style={{ color: stat.color }} />
