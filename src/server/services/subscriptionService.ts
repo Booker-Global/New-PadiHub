@@ -642,19 +642,6 @@ export const subscriptionService = {
   },
 
   /**
-   * Section 3 — subscription billing is only ever "live" (billing_status
-   * 'active') while the user is a verified member of at least one 'active'
-   * (launched) group; it's inert/paused otherwise. Called once per user per
-   * day by scheduledJobs.dailyBillingActiveGroupReconciliation. This is
-   * DB-bookkeeping only: it does NOT call the provider's own
-   * pause_collection API, so Stripe subscriptions keep renewing on
-   * schedule at the provider — see monthlySubscriptionRenewalCharge's
-   * existing billing_status filter, which already skips 'paused' users for
-   * the Flutterwave path (Stripe self-bills via webhooks and isn't
-   * affected either way by this DB flag). This is a known, documented
-   * limitation given project scope, not a silent gap.
-   */
-  /**
    * Section D.2 — subscription billing is only ever "live" (billing_status
    * 'active', and genuinely being collected by the provider) while the user
    * is a verified member of at least one 'active' (launched) group; it's
@@ -662,10 +649,18 @@ export const subscriptionService = {
    * change a user's active-group-membership count (group activation,
    * reactivation, joining, leaving, removal — see call sites), and as a
    * daily safety-net sweep by scheduledJobs.dailyBillingActiveGroupReconciliation
-   * in case any individual call site is ever missed. Actually calls the
-   * provider's pauseBilling/resumeBilling (Stripe: pause_collection) so a
-   * Stripe subscription genuinely stops/starts being charged, not just our
-   * own DB flag — see StripeProvider.pauseBilling/resumeBilling.
+   * in case any individual call site is ever missed.
+   *
+   * Stripe (GB): actually calls provider.pauseBilling/resumeBilling, which
+   * sets/clears Stripe's own pause_collection, so the subscription
+   * genuinely stops/starts being charged at the provider — not just our DB
+   * flag. Flutterwave (NG) has no real recurring-billing engine to pause —
+   * pauseBilling/resumeBilling are no-ops there by design (see
+   * FlutterwaveProvider) — so enforcement is entirely via the
+   * billing_status DB flag written below, which
+   * monthlySubscriptionRenewalCharge (scheduledJobs.ts) already filters on
+   * (only ever charges rows where billing_status IN ('active','trialing')),
+   * so NG renewals are equally deferred/resumed by this same flag flip.
    */
   async reconcileBillingForActiveGroupMembership(userId: string) {
     const subRows = await db.select().from(schema.subscriptions)
