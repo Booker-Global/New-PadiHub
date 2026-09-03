@@ -53,7 +53,7 @@ type ApiResponse<T> = {
 };
 
 type SubscriptionStatus = {
-  billing_status?: 'active' | 'past_due' | 'cancelled' | 'trialing' | null;
+  billing_status?: 'active' | 'past_due' | 'cancelled' | 'trialing' | 'paused' | null;
   renewal_date?: string | null;
   plan?: string | null;
   provider?: 'stripe' | 'flutterwave' | null;
@@ -182,7 +182,13 @@ export default function ManageMembershipPage() {
       ? { label: 'Cancelled', color: '#EF4444', background: 'rgba(239,68,68,0.15)' }
       : status.billing_status === 'past_due'
         ? { label: 'Payment overdue', color: '#F59E0B', background: 'rgba(245,158,11,0.16)' }
-        : { label: 'Active', color: '#2EAF6F', background: 'rgba(46,175,111,0.2)' };
+        : status.billing_status === 'paused'
+          // Section D.2 — billing is intentionally on hold until the member
+          // is verified in an active (3+ member) group; a normal, expected
+          // state, not a failure, so it gets its own neutral badge rather
+          // than being folded into "Active".
+          ? { label: 'Billing on hold', color: '#2563EB', background: 'rgba(37,99,235,0.14)' }
+          : { label: 'Active', color: '#2EAF6F', background: 'rgba(46,175,111,0.2)' };
 
   // Only a real, billable provider subscription counts as "subscribed" — a
   // member who has merely picked a tier during onboarding (no card/billing
@@ -201,7 +207,7 @@ export default function ManageMembershipPage() {
     const direction = currentTier === 'basic' && switchTarget === 'premium' ? 'upgrade' : 'downgrade';
 
     if (!status?.provider_subscription_id || status.billing_status === 'cancelled') {
-      return `Your ${targetPlan.name} preference will update now. Billing will start when you reactivate or add a verified payment method.`;
+      return `Your ${targetPlan.name} preference will update now. Billing will start once you finish onboarding and are a verified member of an active group with at least 3 members.`;
     }
 
     if (direction === 'downgrade') {
@@ -256,7 +262,7 @@ export default function ManageMembershipPage() {
       } else if (payload?.data?.direction === 'upgrade') {
         setActionNotice(`Your plan has been upgraded to ${targetPlan.name}. Your monthly billing schedule continues with the next renewal on ${effectiveDate ?? renewalDate ?? 'your existing billing date'}. A confirmation email has been sent.`);
       } else {
-        setActionNotice(`${targetPlan.name} has been selected. Billing starts once a verified payment method is on file.`);
+        setActionNotice(`${targetPlan.name} has been selected. Billing starts once you finish onboarding and are a verified member of an active group with at least 3 members.`);
       }
 
       await refreshSubscription();

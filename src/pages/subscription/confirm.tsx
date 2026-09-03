@@ -72,8 +72,8 @@ export default function SubscriptionConfirmPage() {
               <MotionDiv variants={fadeUp} className="rounded-2xl p-4 flex items-center gap-3" style={{ background: 'rgba(46,175,111,0.08)', border: '1px solid rgba(46,175,111,0.2)' }}>
                 <CheckCircle size={20} style={{ color: '#2EAF6F', flexShrink: 0 }} />
                 <div>
-                  <p className="text-sm font-bold" style={{ color: '#2EAF6F' }}>Billing starts after setup</p>
-                  <p className="text-xs text-gray-500">Billing starts once you finish setup and add a verified payment method.</p>
+                  <p className="text-sm font-bold" style={{ color: '#2EAF6F' }}>Billing starts once you're active in a group</p>
+                  <p className="text-xs text-gray-500">You won't be charged during setup. Billing starts once you're a verified member of an active savings group with at least 3 members.</p>
                 </div>
               </MotionDiv>
 
@@ -131,7 +131,7 @@ export default function SubscriptionConfirmPage() {
                     </div>
                     <div className="flex justify-between text-sm">
                       <span style={{ color: 'rgba(255,255,255,0.5)' }}>Billing starts</span>
-                      <span className="font-bold text-white">After payment setup</span>
+                      <span className="font-bold text-white">Once you join an active group</span>
                     </div>
                   </div>
 

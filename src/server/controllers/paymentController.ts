@@ -18,6 +18,7 @@ import {
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { contributionService } from '../services/contributionService.js';
 import { getPaymentEligibility } from '../services/paymentEligibilityService.js';
+import { subscriptionService } from '../services/subscriptionService.js';
 import { calculateContributionFees } from '../lib/paymentFees.js';
 import { qs } from '../lib/reqHelpers.js';
 
@@ -322,12 +323,19 @@ export const paymentController = {
         await sendPaymentMethodUpdatedEmail(user.email, getUserDisplayName(user));
       }
 
-      // The platform subscription is intentionally NOT created/charged here.
-      // For UK members, the card is only ever saved (never charged) at this
-      // point — the subscription is only created once Stripe Identity
-      // verification succeeds, via identityVerificationService, so the
-      // member is never billed before their identity is confirmed. The
-      // frontend should trigger identity verification next.
+      // The platform subscription is intentionally NOT created/charged here
+      // for a member who hasn't verified their identity yet — for UK
+      // members, the card is only ever saved (never charged) at this point
+      // until Stripe Identity verification succeeds, via
+      // identityVerificationService. However, if identity verification
+      // already happened BEFORE this card was saved (e.g. payout
+      // confirmation is still pending elsewhere), this is now the last
+      // remaining onboarding step, so attempt activation immediately
+      // instead of leaving the subscription stuck forever — see
+      // activateSubscriptionIfEligible, a no-op unless every prerequisite
+      // (tier, payment method, payout, identity) is already in place.
+      await subscriptionService.activateSubscriptionIfEligible(userId);
+
       res.json({
         success: true,
         data: { payment_method_id, next_step: 'verify_identity' },
@@ -504,12 +512,16 @@ export const paymentController = {
         await sendPaymentMethodUpdatedEmail(user.email, getUserDisplayName(user));
       }
 
-      // The platform subscription is intentionally NOT created/charged here.
-      // For NG members, this only saves a reusable card token — the
-      // subscription is only created once Flutterwave Account Resolve
-      // succeeds, via identityVerificationService, mirroring the UK
-      // charge-gating pattern exactly. The frontend should trigger the
-      // Account Resolve bank-details step next.
+      // The platform subscription is intentionally NOT created/charged here
+      // for a member who hasn't verified their identity yet — for NG
+      // members, this normally only saves a reusable card token until
+      // Flutterwave Account Resolve succeeds, via identityVerificationService.
+      // If identity verification already happened before this card was
+      // saved, this is now the last remaining onboarding step, so attempt
+      // activation immediately — see activateSubscriptionIfEligible, a
+      // no-op unless every prerequisite is already in place.
+      await subscriptionService.activateSubscriptionIfEligible(userId);
+
       res.json({
         success: true,
         data: {
@@ -565,6 +577,11 @@ export const paymentController = {
         if (hadVerifiedPayoutDestination) {
           await sendPayoutDestinationUpdatedEmail(user.email, getUserDisplayName(user));
         }
+        // Flutterwave payout destinations verify synchronously (unlike
+        // Stripe Express, which waits on the account.updated webhook), so
+        // this may be the last onboarding prerequisite to complete — attempt
+        // activation immediately (no-op unless everything else is done).
+        await subscriptionService.activateSubscriptionIfEligible(userId);
         return res.json({ success: true, data: result });
       }
 

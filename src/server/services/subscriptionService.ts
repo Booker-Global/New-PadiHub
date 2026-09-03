@@ -6,7 +6,7 @@
  * There is no free trial and no annual billing option.
  */
 import { v4 as uuidv4 } from 'uuid';
-import { eq, and, inArray, desc } from 'drizzle-orm';
+import { eq, and, inArray, notInArray, isNotNull, desc } from 'drizzle-orm';
 import axios from 'axios';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
@@ -141,27 +141,9 @@ export const subscriptionService = {
     // e.g. they verified identity first, and this is the "select-plan"
     // step onboardingSteps.ts sends them back to complete — activate their
     // subscription immediately instead of leaving it stuck forever, since
-    // activateSubscription() is otherwise only ever triggered from the
-    // identity-verification flow.
-    if (user.identity_verified && user.payment_method_verified_at && user.payout_verified_at) {
-      try {
-        await this.activateSubscription(userId);
-      } catch (err) {
-        // Every prerequisite is already met here, so a failure is a genuine
-        // provider/charge problem, not "not ready yet" — surface the real
-        // reason instead of silently dropping it, so the member isn't left
-        // thinking they're subscribed when they aren't.
-        const message = err instanceof AppError ? err.message : 'Could not activate your subscription with the payment provider.';
-        console.warn('[subscriptionService] Plan selected but subscription could not be activated:', message);
-        await notificationService.create({
-          userId,
-          type: 'subscription_payment_failed',
-          title: 'Payment could not be completed',
-          message,
-        });
-        await sendSubscriptionPaymentFailedEmail(user.email, formatTierPrice(tier, user.country));
-      }
-    }
+    // whichever of the four onboarding prerequisites completes LAST is
+    // responsible for triggering activation (see activateSubscriptionIfEligible).
+    await this.activateSubscriptionIfEligible(userId);
 
     return { tier, plan: planCode(user.country, tier), monthly_amount: getTierMonthlyPrice(tier, user.country) };
   },
@@ -188,10 +170,67 @@ export const subscriptionService = {
     // just as much an already-created subscription as 'active' — re-running
     // createSubscription here would create a duplicate provider subscription.
     if (existing.length && (existing[0].billing_status === 'active' || existing[0].billing_status === 'paused')) {
+      // Self-heal: users.subscription_status is the functional eligibility
+      // gate (see paymentEligibilityService) and must stay in sync with a
+      // provider subscription that already exists and is billing-active or
+      // deferred/paused — both mean the charge itself was confirmed. A stale
+      // 'free'/'trial' value here (e.g. a legacy account activated before
+      // this column was consistently written, or a retroactive/self-heal
+      // call) would otherwise leave an already-subscribed member unable to
+      // join or create a group.
+      if (user.subscription_status !== 'active' && user.subscription_status !== 'trial') {
+        await db.update(schema.users).set({ subscription_status: 'active' as const }).where(eq(schema.users.id, userId));
+      }
       return existing[0];
     }
 
     return this.createSubscription(userId, user.country, user.subscription_tier);
+  },
+
+  /**
+   * Attempts to activate the platform subscription the moment ALL FOUR
+   * remaining onboarding prerequisites — tier selected, payment method
+   * verified, payout destination verified, identity verified — are in
+   * place, regardless of which one happens to complete last. Each of the
+   * write-paths for those four steps (selectPlan, payment-method-save,
+   * payout-save/webhook, identity verification) calls this after persisting
+   * its own change, so a member is never left permanently stuck just
+   * because they didn't finish onboarding in the "expected" plan → card →
+   * payout → identity order (e.g. a Stripe Connect payout only verifies
+   * once the `account.updated` webhook arrives, which can land after
+   * identity verification already succeeded).
+   *
+   * A no-op if any prerequisite is still missing. Best-effort: notifies +
+   * emails the member on a genuine provider/charge failure, but never
+   * throws — the calling request (saving a card, confirming a payout,
+   * etc.) must still succeed even if activation itself fails.
+   */
+  async activateSubscriptionIfEligible(userId: string): Promise<void> {
+    const userRows = await db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1);
+    if (!userRows.length) return;
+    const user = userRows[0];
+
+    if (!isSubscriptionTierKey(user.subscription_tier)) return;
+    if (!user.identity_verified || !user.payment_method_verified_at || !user.payout_verified_at) return;
+    if (user.subscription_status === 'active' || user.subscription_status === 'trial') return;
+
+    try {
+      await this.activateSubscription(userId);
+    } catch (err) {
+      // Every prerequisite is already met here, so a failure is a genuine
+      // provider/charge problem, not "not ready yet" — surface the real
+      // reason instead of silently dropping it, so the member isn't left
+      // thinking they're subscribed when they aren't.
+      const message = err instanceof AppError ? err.message : 'Could not activate your subscription with the payment provider.';
+      console.warn('[subscriptionService] Onboarding complete but subscription could not be activated:', message);
+      await notificationService.create({
+        userId,
+        type: 'subscription_payment_failed',
+        title: 'Payment could not be completed',
+        message,
+      });
+      await sendSubscriptionPaymentFailedEmail(user.email, formatTierPrice(user.subscription_tier, user.country));
+    }
   },
 
   /**
@@ -710,6 +749,47 @@ export const subscriptionService = {
         title: 'Billing has started',
         message: 'You\'re now an active member of a launched group — your PadiHub subscription billing has started.',
       });
+    }
+  },
+
+  /**
+   * Retroactive Section D.2 self-heal, run once at boot (see entry.ts), for
+   * accounts that finished every onboarding prerequisite (plan chosen,
+   * payment method verified, payout destination verified, identity
+   * verified) under an older code path that never triggered
+   * activateSubscription for whichever step happened to complete last —
+   * leaving `users.subscription_status` stuck at a non-active value even
+   * though the member is, in every real sense, already fully subscribed.
+   * Left in that state, paymentEligibilityService blocks them from ever
+   * joining or creating a group again. Idempotent and safe to re-run on
+   * every boot: activateSubscriptionIfEligible is itself a no-op for anyone
+   * already active, and never re-creates a provider subscription that
+   * already exists (see activateSubscription's early-return branch).
+   */
+  async activateRetroactiveEligibleSubscriptions(): Promise<void> {
+    try {
+      const candidates = await db.select({ id: schema.users.id })
+        .from(schema.users)
+        .where(and(
+          inArray(schema.users.subscription_tier, ['basic', 'premium']),
+          eq(schema.users.identity_verified, true),
+          isNotNull(schema.users.payment_method_verified_at),
+          isNotNull(schema.users.payout_verified_at),
+          notInArray(schema.users.subscription_status, ['active', 'trial']),
+        ));
+
+      if (!candidates.length) return;
+
+      console.log(`[PadiHub] Retroactive deferred-billing migration: found ${candidates.length} fully-verified account(s) not yet eligible — attempting activation now.`);
+      for (const candidate of candidates) {
+        try {
+          await this.activateSubscriptionIfEligible(candidate.id);
+        } catch (err) {
+          console.error(`[PadiHub] Retroactive subscription activation failed for user ${candidate.id}:`, err instanceof Error ? err.message : err);
+        }
+      }
+    } catch (err) {
+      console.error('[PadiHub] Retroactive subscription-eligibility migration failed:', err instanceof Error ? err.message : err);
     }
   },
 };

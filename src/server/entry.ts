@@ -651,6 +651,8 @@ if (import.meta.env.PROD) {
 				console.log('[PadiHub] ✓ Database connection verified.');
 				await ensureSchemaSync();
 				await normalizeLegacyTrustScores();
+				const { subscriptionService } = await import('./services/subscriptionService.js');
+				await subscriptionService.activateRetroactiveEligibleSubscriptions();
 			} else {
 				console.error(
 					`[PadiHub] ✗ Database connection FAILED after all retries. ` +

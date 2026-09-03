@@ -143,18 +143,25 @@ export const identityVerificationService = {
     }
 
     // Only claim the subscription is now active if activateSubscription
-    // actually succeeded AND the resulting charge is genuinely active —
+    // actually succeeded AND the resulting charge is genuinely confirmed —
     // createSubscription() uses Stripe's payment_behavior:'default_incomplete',
     // so it can resolve successfully (no thrown error) while the card was
     // declined or needs 3D-Secure, returning a subscription/result object
-    // whose status/billing_status is not active/trialing. Treating any
-    // non-thrown result as "activated" previously caused a member whose
+    // whose status/billing_status is not active/trialing/paused. Treating
+    // any non-thrown result as "activated" previously caused a member whose
     // card was declined to be told "your subscription is now active" while
     // simultaneously receiving a payment-failed email for the same charge.
+    // 'paused' (Section D.2 — deferred billing until the member is a
+    // verified member of an active 3+ member group) is a SUCCESSFUL outcome
+    // here, not a failure: the charge was deliberately never attempted, so
+    // it must count as "activated" too, or a member whose billing is
+    // correctly deferred was previously told their payment "could not be
+    // confirmed" even though nothing ever failed.
     const resultBillingStatus = subscriptionResult
       ? ('billing_status' in subscriptionResult ? subscriptionResult.billing_status : subscriptionResult.status)
       : null;
-    const subscriptionActivated = resultBillingStatus === 'active' || resultBillingStatus === 'trialing';
+    const billingDeferred = resultBillingStatus === 'paused';
+    const subscriptionActivated = resultBillingStatus === 'active' || resultBillingStatus === 'trialing' || billingDeferred;
     // subscriptionService.createSubscription() already notifies + emails the
     // member directly when the charge itself isn't confirmed — only treat
     // that case as a "failure reason" here for messaging purposes, and never
@@ -163,13 +170,15 @@ export const identityVerificationService = {
     await notificationService.create({
       userId, type: 'identity_verified',
       title: 'Identity Verified',
-      message: subscriptionActivated
-        ? 'Your identity has been verified. Your Trust Score has increased and your subscription is now active.'
-        : subscriptionActivationFailureReason
-          ? `Your identity has been verified and your Trust Score has increased, but your subscription could not be activated: ${subscriptionActivationFailureReason}`
-          : chargeNotConfirmed
-            ? 'Your identity has been verified and your Trust Score has increased, but we could not confirm payment for your subscription. Please check your card details or complete any additional verification your bank requires.'
-            : 'Your identity has been verified and your Trust Score has increased. Choose a subscription plan and add your payment card to activate your subscription.',
+      message: billingDeferred
+        ? 'Your identity has been verified. Your Trust Score has increased and your subscription is confirmed — billing will start once you join an active group with at least 3 members.'
+        : subscriptionActivated
+          ? 'Your identity has been verified. Your Trust Score has increased and your subscription is now active.'
+          : subscriptionActivationFailureReason
+            ? `Your identity has been verified and your Trust Score has increased, but your subscription could not be activated: ${subscriptionActivationFailureReason}`
+            : chargeNotConfirmed
+              ? 'Your identity has been verified and your Trust Score has increased, but we could not confirm payment for your subscription. Please check your card details or complete any additional verification your bank requires.'
+              : 'Your identity has been verified and your Trust Score has increased. Choose a subscription plan and add your payment card to activate your subscription.',
     });
 
     if (subscriptionActivationFailureReason) {
@@ -178,7 +187,7 @@ export const identityVerificationService = {
     }
 
     const tier = isSubscriptionTierKey(user.subscription_tier) ? user.subscription_tier : 'basic';
-    await sendIdentityVerifiedEmail(user.email, user.first_name, subscriptionActivated);
+    await sendIdentityVerifiedEmail(user.email, user.first_name, subscriptionActivated, billingDeferred);
     if (country === 'GB' && feePence > 0) {
       await sendVerificationFeeChargedEmail(
         user.email, user.first_name,
