@@ -18,7 +18,7 @@ import { getFlutterwaveProvider } from '../integrations/payments/PaymentProvider
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { computeNextPayoutDate } from '../lib/payoutSchedule.js';
 import {
-  SUBSCRIPTION_TIERS, isSubscriptionTierKey, getTierMonthlyPrice,
+  SUBSCRIPTION_TIERS, isSubscriptionTierKey, getTierMonthlyPrice, formatTierPrice,
   GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH, GROUP_STUCK_BELOW_MIN_EXPIRY_DAYS, GROUP_STUCK_EXPIRY_REMINDER_DAYS_BEFORE,
 } from '../lib/constants.js';
 import { planCode, subscriptionService } from './subscriptionService.js';
@@ -515,7 +515,12 @@ export async function monthlySubscriptionRenewalCharge(): Promise<void> {
 
         await createAuditLog({
           userId: user.id, action: 'FLW_SUBSCRIPTION_RENEWAL_CHARGED', entity: 'subscriptions',
-          entityId: sub.id, metadata: result as unknown as Record<string, unknown>,
+          entityId: sub.id,
+          metadata: {
+            ...(result as unknown as Record<string, unknown>),
+            tier: isSubscriptionTierKey(user.subscription_tier) ? user.subscription_tier : null,
+            amount_display: isSubscriptionTierKey(user.subscription_tier) ? formatTierPrice(user.subscription_tier, user.country) : null,
+          },
         });
       } catch (err) {
         await db.update(schema.subscriptions).set({ billing_status: 'past_due' }).where(eq(schema.subscriptions.id, sub.id));

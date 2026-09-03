@@ -267,6 +267,7 @@ app.post('/api/subscriptions/select-plan', authenticate, ...subscriptionControll
 app.post('/api/subscriptions/switch-plan', authenticate, ...subscriptionController.switchPlan);
 app.post('/api/subscriptions/cancel',     authenticate, subscriptionController.cancel);
 app.post('/api/subscriptions/reactivate', authenticate, subscriptionController.reactivate);
+app.get( '/api/subscriptions/billing-history', authenticate, subscriptionController.getBillingHistory);
 
 // ── Payments ──────────────────────────────────────────────────────────��[...]
 app.post('/api/payments/setup-intent',       authenticate, paymentController.setupIntent);

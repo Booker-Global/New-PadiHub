@@ -68,6 +68,7 @@ export default function AddPaymentMethodPage() {
   const [setupLoading, setSetupLoading] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [changingPaymentMethod, setChangingPaymentMethod] = useState(false);
+  const [billingAddress, setBillingAddress] = useState({ line1: '', city: '', postalCode: '' });
   const cardMountRef = useRef<HTMLDivElement | null>(null);
   const stripeRef = useRef<Stripe | null>(null);
   const cardElementRef = useRef<StripeCardElement | null>(null);
@@ -250,6 +251,14 @@ export default function AddPaymentMethodPage() {
       return;
     }
 
+    const billingLine1 = billingAddress.line1.trim();
+    const billingCity = billingAddress.city.trim();
+    const billingPostalCode = billingAddress.postalCode.trim();
+    if (!billingLine1 || !billingCity || !billingPostalCode) {
+      setActionError('Please enter your billing address before saving your card — Stripe requires it to confirm your payment method.');
+      return;
+    }
+
     const session = getValidSession();
     if (!session?.token) {
       setActionError('Please log in again before saving your payment method.');
@@ -291,6 +300,12 @@ export default function AddPaymentMethodPage() {
           card: cardElement,
           billing_details: {
             name: profile ? `${profile.first_name} ${profile.last_name}` : undefined,
+            address: {
+              line1:       billingLine1,
+              city:        billingCity,
+              postal_code: billingPostalCode,
+              country:     profile?.country ?? undefined,
+            },
           },
         },
       });
@@ -320,6 +335,7 @@ export default function AddPaymentMethodPage() {
 
       setChangingPaymentMethod(false);
       setTermsAccepted(false);
+      setBillingAddress({ line1: '', city: '', postalCode: '' });
       setActionNotice(
         isUpdatingExistingPaymentMethod
           ? 'Payment method updated. It is now in effect immediately for future contribution charges.'
@@ -424,7 +440,7 @@ export default function AddPaymentMethodPage() {
               </div>
 
               <div className="rounded-3xl p-5 mb-5 bg-white" style={{ border: '1px solid #E5E7EB' }}>
-                <h2 className="font-bold text-gray-900 mb-3">Payment setup overview</h2>
+                <h2 className="text-lg font-bold text-gray-900 mb-3">Payment setup overview</h2>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div className="rounded-2xl p-4" style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
                     <p className="text-xs text-gray-500 mb-1">Contribution card</p>
@@ -565,12 +581,47 @@ export default function AddPaymentMethodPage() {
                       </div>
                     ) : (
                       <div className="space-y-4">
+                        <div>
+                          <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Billing address</p>
+                          <div className="space-y-3">
+                            <input
+                              type="text"
+                              value={billingAddress.line1}
+                              onChange={(event) => setBillingAddress((current) => ({ ...current, line1: event.target.value }))}
+                              placeholder="Address line"
+                              autoComplete="address-line1"
+                              className="w-full px-4 py-3 rounded-2xl border border-gray-200 text-sm focus:outline-none focus:border-green-400 transition-colors"
+                            />
+                            <div className="grid grid-cols-2 gap-3">
+                              <input
+                                type="text"
+                                value={billingAddress.city}
+                                onChange={(event) => setBillingAddress((current) => ({ ...current, city: event.target.value }))}
+                                placeholder="City"
+                                autoComplete="address-level2"
+                                className="w-full px-4 py-3 rounded-2xl border border-gray-200 text-sm focus:outline-none focus:border-green-400 transition-colors"
+                              />
+                              <input
+                                type="text"
+                                value={billingAddress.postalCode}
+                                onChange={(event) => setBillingAddress((current) => ({ ...current, postalCode: event.target.value }))}
+                                placeholder="Postcode"
+                                autoComplete="postal-code"
+                                className="w-full px-4 py-3 rounded-2xl border border-gray-200 text-sm focus:outline-none focus:border-green-400 transition-colors"
+                              />
+                            </div>
+                          </div>
+                          <p className="text-xs text-gray-400 mt-2">Stripe requires a billing address to verify and finalise your payment card.</p>
+                        </div>
                         <div className="rounded-2xl bg-white px-4 py-3" style={{ border: '1px solid #E5E7EB' }}>
                           <div ref={cardMountRef} />
                         </div>
                         <button
                           onClick={() => void handleStripeSetup()}
-                          disabled={setupLoading || !STRIPE_PUBLISHABLE_KEY || !termsAccepted}
+                          disabled={
+                            setupLoading || !STRIPE_PUBLISHABLE_KEY || !termsAccepted
+                            || !billingAddress.line1.trim() || !billingAddress.city.trim() || !billingAddress.postalCode.trim()
+                          }
                           className="w-full py-3 rounded-2xl font-bold text-white inline-flex items-center justify-center gap-2 transition-all disabled:cursor-not-allowed disabled:opacity-60"
                           style={{ background: 'linear-gradient(135deg, #2eafaf, #1f8f8f)' }}
                         >

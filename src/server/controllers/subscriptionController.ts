@@ -50,4 +50,12 @@ export const subscriptionController = {
       res.json({ success: true, data: result });
     } catch (e) { next(e); }
   },
+
+  /** GET /api/subscriptions/billing-history — real invoice/renewal-charge events only, never mock data */
+  getBillingHistory: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await subscriptionService.getBillingHistory(req.user!.userId);
+      res.json({ success: true, data });
+    } catch (e) { next(e); }
+  },
 };
