@@ -999,9 +999,6 @@ export default function OnboardingPage() {
                             <CheckCircle size={11} style={{ color: plan.accent, flexShrink: 0 }} /> {limit}
                           </div>
                         ))}
-                        <div className="flex items-center gap-1.5 text-xs text-gray-600">
-                          <CheckCircle size={11} style={{ color: plan.accent, flexShrink: 0 }} /> Monthly billing only
-                        </div>
                       </div>
                       {selectedPlan === plan.key && (
                         <div className="absolute top-4 right-4">

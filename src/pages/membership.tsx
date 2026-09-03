@@ -136,7 +136,7 @@ export default function MembershipPage() {
             <p style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#2EAF6F', marginBottom: 12 }}>Plan limits</p>
             <h2 style={{ fontSize: 'clamp(1.5rem, 4vw, 2.25rem)', fontWeight: 800, color: '#111827', marginBottom: 16, fontFamily: 'Nunito, sans-serif' }}>Know the difference between Basic and Premium</h2>
             <p style={{ color: '#6B7280', maxWidth: '42rem', margin: '0 auto' }}>
-              Both memberships bill monthly only — no annual option and no free trial. Region-specific prices live on our pricing page.
+              Region-specific prices live on our pricing page.
             </p>
           </div>
 

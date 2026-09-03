@@ -52,6 +52,8 @@ interface GroupData {
   allowSwaps: boolean;
   minTrustScore: number;
   inviteEmails: string;
+  durationType: 'fixed' | 'indefinite';
+  durationRotations: number;
 }
 
 interface SavingsGroup {
@@ -99,6 +101,8 @@ const defaultData: GroupData = {
   allowSwaps: true,
   minTrustScore: 0,
   inviteEmails: '',
+  durationType: 'indefinite',
+  durationRotations: 6,
 };
 
 const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -370,6 +374,8 @@ export default function CreateGroupWizard() {
           strike_threshold: data.maxMissed,
           allow_payout_swaps: data.allowSwaps,
           min_trust_score: data.minTrustScore || undefined,
+          group_duration_type: data.durationType,
+          group_duration_rotations: data.durationType === 'fixed' ? data.durationRotations : undefined,
         }),
       });
 
@@ -799,6 +805,34 @@ export default function CreateGroupWizard() {
                       </div>
                       <p className="text-xs text-gray-400 mt-2">Currently: {minTrustTierLabel}</p>
                     </div>
+                    <div>
+                      <label className="text-sm font-bold text-gray-700 block mb-2">How long will this group run?</label>
+                      <p className="text-xs text-gray-400 mb-3">A "complete payout rotation" is every currently-active member receiving exactly one payout.</p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
+                        <OptionCard selected={data.durationType === 'indefinite'} onClick={() => set('durationType', 'indefinite')}>
+                          <p className="font-bold text-sm text-gray-900">Indefinite</p>
+                          <p className="text-xs text-gray-400 mt-0.5">Keeps rotating until you choose to close it</p>
+                        </OptionCard>
+                        <OptionCard selected={data.durationType === 'fixed'} onClick={() => set('durationType', 'fixed')}>
+                          <p className="font-bold text-sm text-gray-900">Fixed number of rotations</p>
+                          <p className="text-xs text-gray-400 mt-0.5">Closes automatically once complete</p>
+                        </OptionCard>
+                      </div>
+                      {data.durationType === 'fixed' && (
+                        <div>
+                          <label className="text-xs font-bold text-gray-500 block mb-1.5">Number of complete rotations</label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={60}
+                            value={data.durationRotations}
+                            onChange={event => set('durationRotations', Math.max(1, Math.min(60, Number(event.target.value) || 1)))}
+                            className="w-full px-4 py-3 rounded-2xl border border-gray-200 text-sm focus:outline-none focus:border-green-400 transition-colors"
+                          />
+                          <p className="text-xs text-gray-400 mt-1">The group will automatically close after this many complete rotations. Every member is emailed this at join time.</p>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
 
@@ -843,6 +877,7 @@ export default function CreateGroupWizard() {
                       { icon: Shield, label: 'Max missed payments', value: `${data.maxMissed} missed` },
                       { icon: Eye, label: 'Grace period', value: `${FIXED_GRACE_PERIOD_HOURS} hours (fixed)` },
                       { icon: Shield, label: 'Minimum Trust Score™ to join', value: data.minTrustScore > 0 ? `${data.minTrustScore}+ (${minTrustTierLabel})` : 'None' },
+                      { icon: RotateCcw, label: 'Group lifecycle', value: data.durationType === 'fixed' ? `Closes after ${data.durationRotations} complete rotation(s)` : 'Indefinite (until you close it)' },
                     ].map(row => (
                       <div key={row.label} className="flex items-center justify-between py-2.5 border-b border-gray-50 last:border-0 gap-4">
                         <div className="flex items-center gap-2">

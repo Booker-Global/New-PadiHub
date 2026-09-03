@@ -32,7 +32,7 @@ function assignProvider(country: string) {
  * member is told up front whether the group is fixed-length or indefinite
  * (Section 15.C).
  */
-function describeGroupDuration(durationType: 'fixed' | 'indefinite', rotations: number | null): string {
+export function describeGroupDuration(durationType: 'fixed' | 'indefinite', rotations: number | null): string {
   return durationType === 'fixed' && rotations
     ? `This group is fixed-length — it will automatically close after ${rotations} complete payout rotation${rotations === 1 ? '' : 's'}.`
     : 'This group runs indefinitely — there is no fixed end date unless the Owner later chooses to close it.';

@@ -19,7 +19,6 @@ const features = [
   'Trust Score™ tracking',
   'Governance & voting tools',
   'Priority support',
-  'Monthly billing only',
 ];
 
 export default function SubscriptionPage() {

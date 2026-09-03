@@ -9,6 +9,7 @@ import { trustScoreService } from './trustScoreService.js';
 import { groupService } from './groupService.js';
 import { assertPaymentSetupComplete } from './paymentEligibilityService.js';
 import { TRUST_SCORE_DELTA_MEMBER_SUSPENDED, SUBSCRIPTION_TIERS, isSubscriptionTierKey, countryDisplayName } from '../lib/constants.js';
+import { describeGroupDuration } from './groupService.js';
 import {
   sendMemberRemovedEmail,
   sendMemberExitCompressionEmail,
@@ -20,6 +21,7 @@ import {
   sendGroupJoinRejectedEmail,
   sendGroupNewMemberJoinedEmail,
   sendGroupClosedEmail,
+  sendMemberJoinedGroupEmail,
 } from '../integrations/email/emailService.js';
 
 export const membershipService = {
@@ -71,6 +73,7 @@ export const membershipService = {
       subscription_tier: schema.users.subscription_tier,
       first_name: schema.users.first_name,
       last_name: schema.users.last_name,
+      email: schema.users.email,
     }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
     if (!userRows.length) throw new AppError('User not found.', 404);
     const user = userRows[0];
@@ -140,6 +143,9 @@ export const membershipService = {
         title: 'Joined Group',
         message: `You have successfully joined "${group.name}".`,
       });
+
+      const durationSummary = describeGroupDuration(group.group_duration_type, group.group_duration_rotations);
+      await sendMemberJoinedGroupEmail(user.email, group.name, durationSummary);
 
       const leaderRow = await db.select({ email: schema.users.email, first_name: schema.users.first_name, last_name: schema.users.last_name })
         .from(schema.users).where(eq(schema.users.id, group.leader_id)).limit(1);
@@ -256,7 +262,10 @@ export const membershipService = {
       title: 'Join Request Approved',
       message: `Your request to join "${group.name}" has been approved.`,
     });
-    await sendGroupJoinApprovedEmail(newMemberRow[0].email, group.name);
+    await sendGroupJoinApprovedEmail(
+      newMemberRow[0].email, group.name,
+      describeGroupDuration(group.group_duration_type, group.group_duration_rotations),
+    );
 
     if (leaderRow.length) {
       await sendGroupNewMemberJoinedEmail(leaderRow[0].email, group.name, newMemberName);

@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Helmet } from '@dr.pogodin/react-helmet';
-import { Eye, EyeOff, Mail, Lock, User, ArrowRight, CheckCircle } from 'lucide-react';
+import { Eye, EyeOff, Mail, Lock, User, ArrowRight, CheckCircle, Globe } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import AuthLayout from '@/components/AuthLayout';
 import { getApiErrorMessage } from '@/lib/api-error';
@@ -29,6 +29,24 @@ export default function GetStartedPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [agreed, setAgreed] = useState(false);
+
+  // Members must never choose their own country — a group's currency and
+  // payment provider (Stripe/GBP vs Flutterwave/NGN) are locked to it, so it
+  // is always auto-detected from the visitor's IP address, exactly like the
+  // country-scoped group search on the homepage/dashboard (see
+  // useSearchCountry in GroupSearch.tsx).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await window.fetch('/api/geo');
+        const json = await response.json().catch(() => null) as { region?: 'UK' | 'NG' | 'BOTH' } | null;
+        if (!cancelled && json?.region === 'NG') setForm(f => ({ ...f, country: 'NG' }));
+        else if (!cancelled) setForm(f => ({ ...f, country: 'GB' }));
+      } catch { /* keep the GB default if IP lookup fails */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm(f => ({ ...f, [k]: e.target.value }));
@@ -147,12 +165,16 @@ export default function GetStartedPage() {
 
           <div>
             <label style={{ display: 'block', fontSize: 14, fontWeight: 600, color: '#374151', marginBottom: 8 }}>Country</label>
-            <select value={form.country} onChange={set('country')}
+            <div
               data-testid="signup-country"
-              style={{ width: '100%', padding: '14px 16px', borderRadius: 16, border: '1px solid #E5E7EB', fontSize: 14, outline: 'none', background: '#fff', boxSizing: 'border-box', fontFamily: 'inherit', appearance: 'auto' }}>
-              <option value="GB">🇬🇧 United Kingdom</option>
-              <option value="NG">🇳🇬 Nigeria</option>
-            </select>
+              style={{ width: '100%', padding: '14px 16px', borderRadius: 16, border: '1px solid #E5E7EB', fontSize: 14, background: '#F9FAFB', boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: 10, color: '#374151' }}
+            >
+              <Globe size={16} style={{ color: '#9CA3AF', flexShrink: 0 }} />
+              <span>{form.country === 'NG' ? '🇳🇬 Nigeria' : '🇬🇧 United Kingdom'}</span>
+            </div>
+            <p style={{ fontSize: 12, color: '#9CA3AF', marginTop: 6 }}>
+              Detected automatically from your location — this sets your pricing, currency and identity verification flow.
+            </p>
           </div>
 
           <div>

@@ -72,7 +72,7 @@ export default function SubscriptionConfirmPage() {
               <MotionDiv variants={fadeUp} className="rounded-2xl p-4 flex items-center gap-3" style={{ background: 'rgba(46,175,111,0.08)', border: '1px solid rgba(46,175,111,0.2)' }}>
                 <CheckCircle size={20} style={{ color: '#2EAF6F', flexShrink: 0 }} />
                 <div>
-                  <p className="text-sm font-bold" style={{ color: '#2EAF6F' }}>Monthly billing only</p>
+                  <p className="text-sm font-bold" style={{ color: '#2EAF6F' }}>Billing starts after setup</p>
                   <p className="text-xs text-gray-500">Billing starts once you finish setup and add a verified payment method.</p>
                 </div>
               </MotionDiv>

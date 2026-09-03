@@ -62,6 +62,13 @@ interface SavingsGroup {
   status: 'draft' | 'active' | 'suspended' | 'closed' | 'expired';
   created_at: string;
   updated_at: string;
+  // See src/server/db/schema.ts doc comments — a "rotation" here means one
+  // full lap through every currently-active member (distinct from
+  // current_cycle, which is a single member's payout turn).
+  group_duration_type: 'fixed' | 'indefinite';
+  group_duration_rotations: number | null;
+  full_rotations_completed: number;
+  closure_scheduled: boolean;
 }
 
 interface Membership {
@@ -229,6 +236,9 @@ export default function SavingsGroupDetailPage() {
   const [claimSubmitting, setClaimSubmitting] = useState(false);
   const [claimError, setClaimError] = useState('');
   const [claimNotice, setClaimNotice] = useState('');
+  const [closureSubmitting, setClosureSubmitting] = useState(false);
+  const [closureError, setClosureError] = useState('');
+  const [closureNotice, setClosureNotice] = useState('');
   const [votes, setVotes] = useState<Vote[]>([]);
   const [swapTarget, setSwapTarget] = useState('');
   const [swapNote, setSwapNote] = useState('');
@@ -619,6 +629,40 @@ export default function SavingsGroupDetailPage() {
     }
   };
 
+  const handleScheduleClosure = async () => {
+    if (!id) return;
+    const activeSession = getValidSession();
+    if (!activeSession?.token) {
+      setClosureError('Please log in to close this group.');
+      return;
+    }
+    if (!window.confirm('Close this group once the current payout rotation finishes? This cannot be undone.')) return;
+
+    setClosureSubmitting(true);
+    setClosureError('');
+    setClosureNotice('');
+
+    try {
+      const response = await window.fetch(`/api/groups/${id}/schedule-closure`, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + activeSession.token },
+      });
+      const json = await response.json() as ApiResponse<{ already_scheduled?: boolean }>;
+      if (!response.ok) {
+        setClosureError(getErrorMessage(json, 'Could not schedule this group to close.'));
+        return;
+      }
+      setClosureNotice(json.data?.already_scheduled
+        ? 'Closure was already scheduled — this group will close once the current rotation completes.'
+        : 'Closure scheduled. This group will close automatically once the current payout rotation completes, and every member will be emailed.');
+      await loadData();
+    } catch {
+      setClosureError('Network error. Please check your connection and try again.');
+    } finally {
+      setClosureSubmitting(false);
+    }
+  };
+
   const handleProposeSwap = async () => {
     if (!id || !swapTarget) {
       setSwapError('Please choose a member to swap payout positions with.');
@@ -846,6 +890,30 @@ export default function SavingsGroupDetailPage() {
               {group.status === 'draft' && activateError && (
                 <div className="rounded-xl p-2.5 text-xs font-semibold flex items-center gap-2 mb-3" style={{ background: 'rgba(239,68,68,0.12)', color: '#FCA5A5' }}>
                   <AlertTriangle size={13} /> {activateError}
+                </div>
+              )}
+
+              {(group.status === 'active' || group.status === 'suspended') && (
+                <div className="rounded-xl p-3 mb-3" style={{ background: 'rgba(255,255,255,0.06)' }}>
+                  <p className="text-xs" style={{ color: 'rgba(255,255,255,0.6)' }}>
+                    {group.group_duration_type === 'fixed'
+                      ? `Runs for ${group.group_duration_rotations} complete payout rotation(s) — ${group.full_rotations_completed} done so far, then closes automatically.`
+                      : group.closure_scheduled
+                        ? 'Closure scheduled — this group will close once the current payout rotation completes.'
+                        : 'Indefinite — keeps rotating until the Owner closes it.'}
+                  </p>
+                  {group.leader_id === currentUserId && group.group_duration_type === 'indefinite' && !group.closure_scheduled && (
+                    <button
+                      onClick={() => void handleScheduleClosure()}
+                      disabled={closureSubmitting}
+                      className="mt-2 flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold"
+                      style={{ background: 'rgba(239,68,68,0.15)', color: '#FCA5A5', cursor: closureSubmitting ? 'not-allowed' : 'pointer' }}
+                    >
+                      {closureSubmitting ? 'Scheduling…' : 'Close Group'}
+                    </button>
+                  )}
+                  {closureError && <p className="text-xs font-semibold mt-2" style={{ color: '#FCA5A5' }}>{closureError}</p>}
+                  {closureNotice && <p className="text-xs font-semibold mt-2" style={{ color: '#86EFAC' }}>{closureNotice}</p>}
                 </div>
               )}
 

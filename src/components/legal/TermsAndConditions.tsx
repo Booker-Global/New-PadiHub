@@ -343,6 +343,14 @@ export const TERMS_SECTIONS: TermsSection[] = [
         subtitle: 'Notification to the Group',
         text: 'All remaining group members are notified by email whenever Compensated Compression recalculates the group\'s timeline, including their updated payout date and, where applicable, updated payout amount.',
       },
+      {
+        subtitle: 'Owner Departure & Succession',
+        text: 'If the Group Owner departs a group that is still in Draft (fewer than 3 verified members and no contributions yet collected), the draft is cancelled and any members who had already joined are notified by email. If the group is already Active, the Owner departs through the standard Compensated Compression process above, and Owner status automatically transfers to whichever remaining active member has been in the group the longest (earliest join date — tenure, not Trust Score™). If no other active member remains, the group is closed.',
+      },
+      {
+        subtitle: 'Group Lifecycle Length',
+        text: 'When creating a group, the Owner chooses whether it runs indefinitely, with no fixed end date until the Owner chooses to close it, or for a fixed number of complete payout rotations (every active member receiving one payout counts as one rotation). A fixed-length group closes automatically once its set number of rotations has completed. An indefinite group\'s Owner may close it at any time from the group page, other than while a payout cycle is mid-progress.',
+      },
     ],
   },
   {
@@ -362,6 +370,10 @@ export const TERMS_SECTIONS: TermsSection[] = [
       {
         subtitle: 'Payout Swap Votes',
         text: 'Two members may propose to swap their assigned payout slots. This requires mutual 1:1 acceptance between just the two members involved — not the whole group — also within a 48-hour response deadline.',
+      },
+      {
+        subtitle: 'Member Removal Votes',
+        text: 'Any active member may propose a unanimous vote to remove another active member, for example after repeated missed payments. Every other active member must accept within a 48-hour deadline, or the target member remains in the group. A member who is currently the designated recipient of the in-progress payout cycle cannot be targeted by a removal vote until after they have received that cycle\'s payout, to prevent the vote mechanism being used to strip a payout from a member in good standing.',
       },
       {
         subtitle: 'Missed Deadlines',

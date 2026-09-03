@@ -22,13 +22,11 @@ const planDetailsByRegion: Record<'UK' | 'NG', string[]> = {
 
 const verificationDetailsByRegion: Record<'UK' | 'NG', string[]> = {
   UK: [
-    'Monthly only — no annual plan or free trial',
     'Complete identity verification via our secure 3rd party channel',
     'Once your identity is verified, you will be notified by email and can start accessing the full benefits of your subscription tier straightaway',
     'See our Terms & Conditions for full identity verification details',
   ],
   NG: [
-    'Monthly only — no annual plan or free trial',
     'Save your bank details first, then complete Flutterwave Account Resolve — a free preliminary bank-account name match, not full KYC',
     'Your status stays Pending until Account Resolve succeeds; failed checks are not charged and trigger a try-again email',
     'There is no fee for Account Resolve',
