@@ -33,7 +33,6 @@ const defaultNotifications = {
 const defaultPrivacy = {
   showTrust: true,
   publicProfile: true,
-  dataPreferences: false,
 };
 
 type NotificationSettings = typeof defaultNotifications;
@@ -73,7 +72,6 @@ const notificationItems: Array<{ key: keyof NotificationSettings; label: string;
 const privacyItems: Array<{ key: keyof PrivacySettings; label: string; desc: string }> = [
   { key: 'publicProfile', label: 'Public profile', desc: 'Allow members to find your profile' },
   { key: 'showTrust', label: 'Show Trust Score™', desc: 'Visible to other group members' },
-  { key: 'dataPreferences', label: 'Data preferences', desc: 'Manage how your data is used' },
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -119,7 +117,6 @@ function getPrivacySettings(preferences: Record<string, unknown>): PrivacySettin
   return {
     showTrust: getBooleanValue(source.showTrust, defaultPrivacy.showTrust),
     publicProfile: getBooleanValue(source.publicProfile, defaultPrivacy.publicProfile),
-    dataPreferences: getBooleanValue(source.dataPreferences, defaultPrivacy.dataPreferences),
   };
 }
 
@@ -127,6 +124,16 @@ function sanitizeProfilePreferences(preferences: Record<string, unknown>) {
   const nextPreferences = { ...preferences };
   delete nextPreferences.darkMode;
   delete nextPreferences.twoFA;
+  if (isRecord(nextPreferences.privacy)) {
+    const nextPrivacy = { ...nextPreferences.privacy };
+    delete nextPrivacy.dataPreferences;
+    nextPreferences.privacy = nextPrivacy;
+  }
+  if (isRecord(nextPreferences.notifications)) {
+    const nextNotifications = { ...nextPreferences.notifications };
+    delete nextNotifications.sms;
+    nextPreferences.notifications = nextNotifications;
+  }
   return nextPreferences;
 }
 

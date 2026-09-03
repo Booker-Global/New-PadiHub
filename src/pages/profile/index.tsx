@@ -31,13 +31,11 @@ const defaultNotifications = {
   invitations: true,
   voting: false,
   email: true,
-  sms: false,
 };
 
 const defaultPrivacy = {
   showTrust: true,
   publicProfile: true,
-  dataPreferences: false,
 };
 
 type NotificationSettings = typeof defaultNotifications;
@@ -114,7 +112,6 @@ function getNotificationSettings(preferences: Record<string, unknown>): Notifica
     invitations: getBooleanValue(source.invitations, defaultNotifications.invitations),
     voting: getBooleanValue(source.voting, defaultNotifications.voting),
     email: getBooleanValue(source.email, defaultNotifications.email),
-    sms: getBooleanValue(source.sms, defaultNotifications.sms),
   };
 }
 
@@ -124,7 +121,6 @@ function getPrivacySettings(preferences: Record<string, unknown>): PrivacySettin
   return {
     showTrust: getBooleanValue(source.showTrust, defaultPrivacy.showTrust),
     publicProfile: getBooleanValue(source.publicProfile, defaultPrivacy.publicProfile),
-    dataPreferences: getBooleanValue(source.dataPreferences, defaultPrivacy.dataPreferences),
   };
 }
 
@@ -182,7 +178,7 @@ export default function ProfilePage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [profile, setProfile] = useState<UserProfile>(getFallbackProfile());
   const [preferences, setPreferences] = useState<Record<string, unknown>>({});
-  const [savingToggle, setSavingToggle] = useState<'publicProfile' | 'twoFA' | null>(null);
+  const [savingToggle, setSavingToggle] = useState<'publicProfile' | null>(null);
   const [signingOut, setSigningOut] = useState(false);
   const { toastState, show: showToast, hide: hideToast } = useSuccessToast();
 
@@ -242,8 +238,6 @@ export default function ProfilePage() {
 
   const notifications = useMemo(() => getNotificationSettings(preferences), [preferences]);
   const privacy = useMemo(() => getPrivacySettings(preferences), [preferences]);
-  const darkMode = getBooleanValue(preferences.darkMode, false);
-  const twoFactor = getBooleanValue(preferences.twoFA, false);
   const avatarDataUrl = typeof preferences.avatarDataUrl === 'string' ? preferences.avatarDataUrl : null;
   const profileName = getDisplayName(profile);
   const initials = getInitials(profileName);
@@ -251,6 +245,7 @@ export default function ProfilePage() {
   const currency = profile.currency || 'Not set';
   const accountStatus = humanizeStatus(profile.account_status);
   const subscriptionStatus = humanizeStatus(profile.subscription_status);
+  const isActivelySubscribed = profile.subscription_status === 'active';
 
   const achievements = [
     {
@@ -293,7 +288,6 @@ export default function ProfilePage() {
       items: [
         { label: 'Public Profile', value: privacy.publicProfile ? 'On' : 'Off', link: '/settings' },
         { label: 'Show Trust Score™', value: privacy.showTrust ? 'On' : 'Off', link: '/settings' },
-        { label: 'Data Preferences', value: privacy.dataPreferences ? 'On' : 'Off', link: '/settings' },
       ],
     },
     {
@@ -302,16 +296,14 @@ export default function ProfilePage() {
       color: '#F59E0B',
       items: [
         { label: 'Email Notifications', value: notifications.email ? 'On' : 'Off', link: '/settings' },
-        { label: 'SMS Notifications', value: notifications.sms ? 'On' : 'Off', link: '/settings' },
         { label: 'Group Activity', value: notifications.groupActivity ? 'On' : 'Off', link: '/settings' },
       ],
     },
     {
-      title: 'Appearance & Region',
+      title: 'Region',
       icon: Palette,
       color: '#2eafaf',
       items: [
-        { label: 'Theme', value: darkMode ? 'Dark' : 'Light', link: '/settings' },
         { label: 'Country', value: country, link: '/profile/edit' },
         { label: 'Currency', value: currency, link: '/profile/edit' },
       ],
@@ -321,9 +313,8 @@ export default function ProfilePage() {
       icon: Lock,
       color: '#EF4444',
       items: [
-        { label: 'Two-Factor Auth', value: twoFactor ? 'Enabled' : 'Disabled', link: '/settings' },
         { label: 'Account Status', value: accountStatus, link: '/profile/edit' },
-        { label: 'Subscription', value: subscriptionStatus, link: '/profile/edit' },
+        { label: 'Subscription', value: subscriptionStatus, link: '/subscription/manage' },
       ],
     },
   ];
@@ -354,27 +345,22 @@ export default function ProfilePage() {
     }
   };
 
-  const handleQuickToggle = (key: 'publicProfile' | 'twoFA', nextValue: boolean) => {
+  const handleQuickToggle = (key: 'publicProfile', nextValue: boolean) => {
     const previousPreferences = preferences;
-    const nextPreferences: Record<string, unknown> = key === 'publicProfile'
-      ? {
-        ...preferences,
-        privacy: {
-          ...privacy,
-          publicProfile: nextValue,
-        },
-      }
-      : {
-        ...preferences,
-        twoFA: nextValue,
-      };
+    const nextPreferences: Record<string, unknown> = {
+      ...preferences,
+      privacy: {
+        ...privacy,
+        publicProfile: nextValue,
+      },
+    };
 
     setPreferences(nextPreferences);
     setSavingToggle(key);
 
     void persistPreferences(
       nextPreferences,
-      key === 'publicProfile' ? 'Your public profile preference was saved.' : 'Your two-factor preference was saved.',
+      'Your public profile preference was saved.',
     ).catch((error: unknown) => {
       setPreferences(previousPreferences);
       const message = error instanceof Error && error.message
@@ -565,13 +551,6 @@ export default function ProfilePage() {
                 </div>
                 <Toggle on={privacy.publicProfile} onChange={(value) => handleQuickToggle('publicProfile', value)} disabled={savingToggle === 'publicProfile'} />
               </div>
-              <div className="flex items-center justify-between p-3 rounded-2xl" style={{ background: '#F9FAFB' }}>
-                <div>
-                  <p className="text-sm font-bold text-gray-900">Two-Factor Authentication</p>
-                  <p className="text-xs text-gray-400">Extra security for your account</p>
-                </div>
-                <Toggle on={twoFactor} onChange={(value) => handleQuickToggle('twoFA', value)} disabled={savingToggle === 'twoFA'} />
-              </div>
             </div>
           </MotionDiv>
 
@@ -596,6 +575,34 @@ export default function ProfilePage() {
               </div>
             </MotionDiv>
           ))}
+
+          <MotionDiv variants={fadeUp} className="rounded-3xl p-5 mb-5 bg-white" style={{ border: '1px solid #F3F4F6' }}>
+            <h2 className="font-extrabold text-gray-900 mb-4" style={{ fontFamily: 'Nunito, sans-serif' }}>Subscription</h2>
+            <div className="flex flex-col gap-2">
+              <Link to="/subscription/manage" className="flex items-center gap-3 p-3 rounded-2xl text-left hover:bg-gray-50 transition-colors">
+                <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: 'rgba(46,175,111,0.1)' }}>
+                  <TrendingUp size={15} style={{ color: '#2EAF6F' }} />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-gray-700">{isActivelySubscribed ? 'Change Subscription Plan' : 'Choose Your Subscription Plan'}</p>
+                  <p className="text-xs text-gray-400">
+                    {isActivelySubscribed ? 'Switch between Basic and Premium — takes effect per our Terms & Conditions.' : 'Pick a plan to unlock creating and joining savings groups.'}
+                  </p>
+                </div>
+              </Link>
+              {isActivelySubscribed && (
+                <Link to="/subscription/cancel" className="flex items-center gap-3 p-3 rounded-2xl text-left hover:bg-red-50 transition-colors">
+                  <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: 'rgba(239,68,68,0.1)' }}>
+                    <Trash2 size={15} style={{ color: '#EF4444' }} />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold" style={{ color: '#EF4444' }}>Cancel Subscription</p>
+                    <p className="text-xs text-gray-400">If you become fully unsubscribed, you'll be removed from your groups with email notice.</p>
+                  </div>
+                </Link>
+              )}
+            </div>
+          </MotionDiv>
 
           <MotionDiv variants={fadeUp} className="rounded-3xl p-5 mb-6 bg-white" style={{ border: '1px solid rgba(239,68,68,0.15)' }}>
             <h2 className="font-extrabold text-gray-900 mb-4" style={{ fontFamily: 'Nunito, sans-serif' }}>Account Actions</h2>

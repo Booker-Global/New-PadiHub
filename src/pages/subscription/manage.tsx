@@ -241,6 +241,43 @@ export default function ManageMembershipPage() {
     }
   };
 
+  const handleSelectPlan = async (tier: TierKey) => {
+    const session = getValidSession();
+    if (!session?.token) {
+      setActionError('Your session has expired. Please sign in again.');
+      return;
+    }
+
+    setSubmitting(true);
+    setActionError(null);
+    setActionNotice(null);
+
+    try {
+      const response = await window.fetch('/api/subscriptions/select-plan', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer ' + session.token,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ tier }),
+      });
+
+      const payload = await response.json().catch(() => null) as ApiResponse<unknown> | null;
+      if (!response.ok || !payload?.success) {
+        throw new Error(getApiErrorMessage(payload, 'Unable to select that plan right now.'));
+      }
+
+      await refreshSubscription();
+      setActionNotice(
+        `${tierConfig[tier].name} selected. Next, add your payment card and payout details, then verify your identity to activate billing — see the steps below.`,
+      );
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Unable to select that plan right now.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const handleCancelMembership = async () => {
     const session = getValidSession();
     if (!session?.token) {
@@ -370,8 +407,14 @@ export default function ManageMembershipPage() {
           <MotionDiv variants={fadeUp} className="rounded-3xl p-6 bg-white mb-5" style={{ border: '1px solid #E5E7EB', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
             <div className="flex items-start justify-between gap-4 mb-4">
               <div>
-                <h2 className="font-extrabold text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>Switch plan</h2>
-                <p className="text-sm text-gray-500 mt-1">Monthly plans only. Changes send a confirmation email automatically.</p>
+                <h2 className="font-extrabold text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>
+                  {currentTier ? 'Switch plan' : 'Choose your subscription plan'}
+                </h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  {currentTier
+                    ? 'Monthly plans only. Changes send a confirmation email automatically.'
+                    : 'Pick Basic or Premium to get started. Your subscription is only charged once your payment method, payout details and identity verification are all in place.'}
+                </p>
               </div>
               <div className="w-11 h-11 rounded-2xl flex items-center justify-center" style={{ background: 'rgba(46,175,111,0.08)' }}>
                 <RefreshCw size={18} style={{ color: '#2EAF6F' }} />
@@ -406,8 +449,29 @@ export default function ManageMembershipPage() {
                 </p>
               </div>
             ) : (
-              <div className="rounded-2xl p-4 text-sm text-gray-500" style={{ background: '#F9FAFB' }}>
-                Select a plan first, then you can switch between Basic and Premium here.
+              <div className="grid gap-3 sm:grid-cols-2">
+                {(Object.keys(tierConfig) as TierKey[]).map((tierKey) => {
+                  const tierData = tierConfig[tierKey];
+                  return (
+                    <div key={tierKey} className="rounded-2xl p-4 flex flex-col gap-3" style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
+                      <div>
+                        <p className="font-bold text-gray-900 text-sm">{tierData.name}</p>
+                        <p className="text-xs text-gray-500 mt-1">
+                          {tierData.price[currentCountry]} per month · {tierData.createLimit === 0 ? 'Cannot create groups' : `Create up to ${tierData.createLimit} groups`} · Join up to {tierData.joinLimit} groups
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={submitting}
+                        onClick={() => { void handleSelectPlan(tierKey); }}
+                        className="inline-flex items-center justify-center gap-1.5 text-sm font-bold px-4 py-2 rounded-xl transition-all hover:opacity-90 disabled:opacity-60"
+                        style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', color: '#fff' }}
+                      >
+                        Choose {tierData.name} <ArrowRight size={14} />
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </MotionDiv>

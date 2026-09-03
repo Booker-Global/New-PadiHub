@@ -132,6 +132,16 @@ function sanitizeSettingsPreferences(preferences: Record<string, unknown>) {
   const nextPreferences = { ...preferences };
   delete nextPreferences.darkMode;
   delete nextPreferences.twoFA;
+  if (isRecord(nextPreferences.privacy)) {
+    const nextPrivacy = { ...nextPreferences.privacy };
+    delete nextPrivacy.dataPreferences;
+    nextPreferences.privacy = nextPrivacy;
+  }
+  if (isRecord(nextPreferences.notifications)) {
+    const nextNotifications = { ...nextPreferences.notifications };
+    delete nextNotifications.sms;
+    nextPreferences.notifications = nextNotifications;
+  }
   return nextPreferences;
 }
 
