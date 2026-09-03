@@ -219,6 +219,7 @@ app.post(  '/api/groups',                    authenticate, ...groupController.cr
 app.put(   '/api/groups/:id',                authenticate, ...groupController.update);
 app.delete('/api/groups/:id',                authenticate, groupController.close);
 app.post(  '/api/groups/:id/activate',       authenticate, groupController.activate);
+app.post(  '/api/groups/:id/schedule-closure', authenticate, groupController.scheduleClosure);
 app.post(  '/api/groups/:id/invitations',    authenticate, ...groupController.createInvitation);
 
 // ── Memberships ─────────────────────────────────────────────────────────��[...]

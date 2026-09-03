@@ -157,6 +157,29 @@ export const savingsGroups = mysqlTable('savings_groups', {
   // cycle in which the last member of the current rotation receives their
   // payout at the claimed level. Null unless a claim is active.
   claim_reverts_after_cycle: int('claim_reverts_after_cycle'),
+  // ─── Group lifecycle length (chosen once, at creation) ──────────────────
+  // NOTE: distinct from `current_cycle` above, which numbers individual
+  // payout turns (one per rotation, i.e. one per member). A "full rotation"
+  // here means every currently-active member has received exactly one
+  // payout — i.e. `current_rotation_position` completing a full lap back to
+  // 1. 'fixed': the group auto-closes once `group_duration_rotations` full
+  // rotations have completed (rotationService.advance() checks this every
+  // time a lap completes). 'indefinite': runs forever unless the Owner
+  // schedules a closure (see `closure_scheduled`).
+  group_duration_type:      mysqlEnum('group_duration_type', ['fixed', 'indefinite']).notNull().default('indefinite'),
+  // Number of complete full rotations the group runs for — required (and
+  // only meaningful) when group_duration_type is 'fixed'.
+  group_duration_rotations: int('group_duration_rotations'),
+  // Count of full rotations completed so far — incremented each time
+  // current_rotation_position wraps back to 1. Also the trigger point for
+  // re-applying the "first 3 slots reserved for Organiser/highest Trust
+  // Score" rule at the start of every new rotation, not just the first.
+  full_rotations_completed: int('full_rotations_completed').notNull().default(0),
+  // Owner-triggered "Close Group" for an indefinite group — set true to
+  // schedule closure for the moment the in-progress rotation finishes (never
+  // mid-rotation, so nobody is denied a payout they've already contributed
+  // toward). rotationService.advance() checks this on every lap completion.
+  closure_scheduled:        boolean('closure_scheduled').notNull().default(false),
   created_at:               timestamp('created_at').notNull().defaultNow(),
   updated_at:               timestamp('updated_at').notNull().defaultNow().onUpdateNow(),
 }, (t) => ({

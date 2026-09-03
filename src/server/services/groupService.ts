@@ -19,10 +19,23 @@ import {
   sendGroupActivatedEmail,
   sendGroupSuspendedLowMembersEmail,
   sendGroupReactivatedEmail,
+  sendGroupCreatedEmail,
 } from '../integrations/email/emailService.js';
 
 function assignProvider(country: string) {
   return country === 'NG' ? 'flutterwave' : 'stripe';
+}
+
+/**
+ * Human-readable summary of a group's lifecycle length, used in the
+ * creation notification/email and again whenever anyone joins later — every
+ * member is told up front whether the group is fixed-length or indefinite
+ * (Section 15.C).
+ */
+function describeGroupDuration(durationType: 'fixed' | 'indefinite', rotations: number | null): string {
+  return durationType === 'fixed' && rotations
+    ? `This group is fixed-length — it will automatically close after ${rotations} complete payout rotation${rotations === 1 ? '' : 's'}.`
+    : 'This group runs indefinitely — there is no fixed end date unless the Owner later chooses to close it.';
 }
 
 function normalizeRotationMethod(rotationMethod: 'manual' | 'random') {
@@ -211,6 +224,7 @@ export const groupService = {
     strike_threshold?: number; suspension_threshold?: number;
     voting_threshold?: number; allow_payout_swaps?: boolean;
     min_trust_score?: number;
+    group_duration_type?: 'fixed' | 'indefinite'; group_duration_rotations?: number;
   }, ipAddress?: string) {
     // Production payment frequency is Weekly/Monthly only — Daily exists
     // solely to speed up manual/QA testing of rotation logic.
@@ -291,6 +305,10 @@ export const groupService = {
 
     const id = uuidv4();
     const payment_provider = assignProvider(data.country);
+    const durationType = data.group_duration_type ?? 'indefinite';
+    if (durationType === 'fixed' && (!data.group_duration_rotations || data.group_duration_rotations < 1)) {
+      throw new AppError('Choose how many payout rotations this group should run for (1 or more).', 400, 'GROUP_DURATION_REQUIRED');
+    }
 
     await db.insert(schema.savingsGroups).values({
       id,
@@ -313,6 +331,8 @@ export const groupService = {
       allow_payout_swaps:       data.allow_payout_swaps ?? true,
       payment_provider:         payment_provider as 'stripe' | 'flutterwave',
       status:                   'draft',
+      group_duration_type:      durationType,
+      group_duration_rotations: durationType === 'fixed' ? data.group_duration_rotations : null,
     });
 
     // Auto-add leader as member
@@ -327,11 +347,14 @@ export const groupService = {
     });
 
     await createAuditLog({ userId: data.leader_id, action: 'GROUP_CREATED', entity: 'savings_groups', entityId: id, ipAddress });
+    const durationSummary = describeGroupDuration(durationType, durationType === 'fixed' ? (data.group_duration_rotations ?? null) : null);
     await notificationService.create({
       userId: data.leader_id, type: 'group_created',
       title: 'Group Created',
-      message: `Your savings group "${data.name}" has been created as a draft. Invite at least ${GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH} members, then use "Start Group" to launch it.`,
+      message: `Your savings group "${data.name}" has been created as a draft. Invite at least ${GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH} members, then use "Start Group" to launch it. ${durationSummary}`,
     });
+    const leaderEmailRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, data.leader_id)).limit(1);
+    if (leaderEmailRow.length) await sendGroupCreatedEmail(leaderEmailRow[0].email, data.name, durationSummary);
 
     return this.getById(id);
   },
@@ -360,6 +383,38 @@ export const groupService = {
    * highest-Trust-Score members, exactly as required, while giving every
    * later slot a principled, non-arbitrary order too.
    */
+  /**
+   * Re-sort every active member's rotation_order — leader always slot 1,
+   * everyone else by Trust Score (highest first, ties by earliest join
+   * date). Shared by activateGroup (applied once, at launch) and
+   * rotationService.advance() (re-applied at the start of every subsequent
+   * full rotation — Section 15.C: "the first 3 payout slots reserved for
+   * Organiser/highest Trust Score re-applies at the start of each new
+   * cycle, not just once").
+   */
+  async reorderRotationByTrustScore(groupId: string, leaderId: string): Promise<number> {
+    const activeMembers = await db.select().from(schema.memberships)
+      .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')));
+    if (!activeMembers.length) return 0;
+
+    const memberUserIds = activeMembers.map(m => m.user_id);
+    const userRows = await db.select({ id: schema.users.id, trust_score: schema.users.trust_score })
+      .from(schema.users).where(inArray(schema.users.id, memberUserIds));
+    const trustById = new Map(userRows.map(u => [u.id, u.trust_score]));
+
+    const leaderMembership = activeMembers.find(m => m.user_id === leaderId);
+    const others = activeMembers
+      .filter(m => m.user_id !== leaderId)
+      .sort((a, b) => (trustById.get(b.user_id) ?? 0) - (trustById.get(a.user_id) ?? 0)
+        || new Date(a.join_date).getTime() - new Date(b.join_date).getTime());
+    const ordered = leaderMembership ? [leaderMembership, ...others] : others;
+
+    for (let i = 0; i < ordered.length; i++) {
+      await db.update(schema.memberships).set({ rotation_order: i + 1 }).where(eq(schema.memberships.id, ordered[i].id));
+    }
+    return ordered.length;
+  },
+
   async activateGroup(groupId: string, leaderId: string, ipAddress?: string) {
     const group = await this.getById(groupId);
     if (group.leader_id !== leaderId) throw new AppError('Only the group leader can start this group.', 403);
@@ -381,27 +436,14 @@ export const groupService = {
     }
 
     const memberUserIds = activeMembers.map(m => m.user_id);
-    const userRows = await db.select({ id: schema.users.id, trust_score: schema.users.trust_score })
-      .from(schema.users).where(inArray(schema.users.id, memberUserIds));
-    const trustById = new Map(userRows.map(u => [u.id, u.trust_score]));
-
-    const leaderMembership = activeMembers.find(m => m.user_id === group.leader_id);
-    const others = activeMembers
-      .filter(m => m.user_id !== group.leader_id)
-      .sort((a, b) => (trustById.get(b.user_id) ?? 0) - (trustById.get(a.user_id) ?? 0)
-        || new Date(a.join_date).getTime() - new Date(b.join_date).getTime());
-    const ordered = leaderMembership ? [leaderMembership, ...others] : others;
-
-    for (let i = 0; i < ordered.length; i++) {
-      await db.update(schema.memberships).set({ rotation_order: i + 1 }).where(eq(schema.memberships.id, ordered[i].id));
-    }
+    await this.reorderRotationByTrustScore(groupId, leaderId);
 
     await db.update(schema.savingsGroups).set({
       status: 'active', activated_at: new Date(),
       current_rotation_position: 1, current_cycle: 1,
     }).where(eq(schema.savingsGroups.id, groupId));
 
-    await createAuditLog({ userId: leaderId, action: 'GROUP_ACTIVATED', entity: 'savings_groups', entityId: groupId, ipAddress, metadata: { memberCount: ordered.length } });
+    await createAuditLog({ userId: leaderId, action: 'GROUP_ACTIVATED', entity: 'savings_groups', entityId: groupId, ipAddress, metadata: { memberCount: activeMembers.length } });
 
     const memberUsers = await db.select({ id: schema.users.id, email: schema.users.email })
       .from(schema.users).where(inArray(schema.users.id, memberUserIds));
@@ -415,6 +457,36 @@ export const groupService = {
     }
 
     return this.getById(groupId);
+  },
+
+  /**
+   * Owner-triggered "Close Group" for an *indefinite* group — schedules
+   * closure for the moment the in-progress rotation finishes (never mid-
+   * rotation). rotationService.advance() performs the actual close once
+   * every active member has received this rotation's payout.
+   */
+  async scheduleClosure(groupId: string, leaderId: string, ipAddress?: string) {
+    const group = await this.getById(groupId);
+    if (group.leader_id !== leaderId) throw new AppError('Only the group leader can close this group.', 403);
+    if (group.status !== 'active' && group.status !== 'suspended') {
+      throw new AppError(`This group can't be closed from its current status (${group.status}).`, 400);
+    }
+    if (group.group_duration_type !== 'indefinite') {
+      throw new AppError('This group already has a fixed lifecycle length and will close automatically — there\'s nothing to schedule.', 400);
+    }
+    if (group.closure_scheduled) {
+      return { ...await this.getById(groupId), already_scheduled: true };
+    }
+
+    await db.update(schema.savingsGroups).set({ closure_scheduled: true }).where(eq(schema.savingsGroups.id, groupId));
+    await createAuditLog({ userId: leaderId, action: 'GROUP_CLOSURE_SCHEDULED', entity: 'savings_groups', entityId: groupId, ipAddress });
+    await notificationService.create({
+      userId: leaderId, type: 'group_closure_scheduled',
+      title: 'Closure Scheduled',
+      message: `"${group.name}" will close automatically once the current payout rotation finishes — every member will be notified by email at that point.`,
+    });
+
+    return { ...await this.getById(groupId), already_scheduled: false };
   },
 
   async close(groupId: string, leaderId: string, ipAddress?: string) {

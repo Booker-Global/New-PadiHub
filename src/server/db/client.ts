@@ -134,6 +134,10 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
     { column: 'suspended_at',    sqlType: 'TIMESTAMP NULL' },
     { column: 'claim_active_amount',       sqlType: 'DECIMAL(12,2) NULL' },
     { column: 'claim_reverts_after_cycle', sqlType: 'INT NULL' },
+    { column: 'group_duration_type',      sqlType: "ENUM('fixed','indefinite') NOT NULL DEFAULT 'indefinite'" },
+    { column: 'group_duration_rotations', sqlType: 'INT NULL' },
+    { column: 'full_rotations_completed', sqlType: 'INT NOT NULL DEFAULT 0' },
+    { column: 'closure_scheduled',        sqlType: 'BOOLEAN NOT NULL DEFAULT false' },
   ],
   contributions: [
     { column: 'amount_paid',        sqlType: 'DECIMAL(12,2) NULL' },

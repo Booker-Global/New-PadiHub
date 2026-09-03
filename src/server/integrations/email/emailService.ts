@@ -293,6 +293,26 @@ export async function sendGroupClosedEmail(to: string, groupName: string): Promi
   `));
 }
 
+/** Confirm to the Creator that their new group (and its lifecycle length) was created. */
+export async function sendGroupCreatedEmail(to: string, groupName: string, durationSummary: string): Promise<void> {
+  await send(to, `${groupName} has been created`, wrap(`
+    ${h2('Your savings group has been created')}
+    ${p(`<strong>${escapeHtml(groupName)}</strong> has been created as a draft.`)}
+    ${p(durationSummary)}
+    ${btn('View Group', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
+  `));
+}
+
+/** Confirm to a brand-new member (invite-token immediate join) that they've joined, including the group's lifecycle length. */
+export async function sendMemberJoinedGroupEmail(to: string, groupName: string, durationSummary: string): Promise<void> {
+  await send(to, `You've joined ${groupName}`, wrap(`
+    ${h2('You\'re in!')}
+    ${p(`You've successfully joined <strong>${escapeHtml(groupName)}</strong>.`)}
+    ${p(durationSummary)}
+    ${btn('View Group', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
+  `));
+}
+
 /** Notify a group leader that a verified member has requested to join their group. */
 export async function sendGroupJoinRequestEmail(
   to: string, groupName: string, requesterName: string, requesterTrustScore: number,
@@ -320,11 +340,12 @@ export async function sendGroupJoinRequestSubmittedEmail(to: string, groupName: 
 }
 
 /** Notify the requester their join request was approved. */
-export async function sendGroupJoinApprovedEmail(to: string, groupName: string): Promise<void> {
+export async function sendGroupJoinApprovedEmail(to: string, groupName: string, durationSummary?: string): Promise<void> {
   await send(to, `You've been accepted into ${groupName}`, wrap(`
     ${h2('Request approved')}
     ${p(`You've been accepted as a member of <strong>${groupName}</strong>.`)}
     ${p('The group\'s payout schedule has been updated to include you. Check the group page for your rotation position.')}
+    ${durationSummary ? p(durationSummary) : ''}
     ${btn('View Group', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
   `));
 }

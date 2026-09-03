@@ -23,6 +23,10 @@ const baseGroupSchema = z.object({
   suspension_threshold:   z.number().int().min(1).optional(),
   voting_threshold:       z.number().int().min(51).max(100).optional(),
   allow_payout_swaps:     z.boolean().optional(),
+  // Group lifecycle length, chosen once at creation (see schema.ts
+  // savingsGroups.group_duration_type doc comment).
+  group_duration_type:      z.enum(['fixed', 'indefinite']).optional().default('indefinite'),
+  group_duration_rotations: z.number().int().min(1).max(60).optional(),
 });
 
 function refinePayoutDay(data: { contribution_frequency: 'daily' | 'weekly' | 'monthly'; payout_day?: number }, ctx: z.RefinementCtx) {
@@ -46,11 +50,25 @@ function refinePayoutDay(data: { contribution_frequency: 'daily' | 'weekly' | 'm
   }
 }
 
-const createSchema = baseGroupSchema.superRefine(refinePayoutDay);
+function refineGroupDuration(data: { group_duration_type?: 'fixed' | 'indefinite'; group_duration_rotations?: number }, ctx: z.RefinementCtx) {
+  if (data.group_duration_type === 'fixed' && !data.group_duration_rotations) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['group_duration_rotations'],
+      message: 'group_duration_rotations is required (1-60) when group_duration_type is "fixed".',
+    });
+  }
+}
+
+const createSchema = baseGroupSchema.superRefine(refinePayoutDay).superRefine(refineGroupDuration);
 
 const updateSchema = baseGroupSchema.partial().omit({
   country: true, currency: true,
   contribution_amount: true, contribution_frequency: true,
+  // Lifecycle length is a one-time choice made at creation — never editable
+  // afterwards (see groupService.scheduleClosure for the one allowed
+  // post-creation change: an indefinite group's Owner scheduling closure).
+  group_duration_type: true, group_duration_rotations: true,
 });
 
 // A single invite (`email`) or a batch of them (`emails`) — the create-group
@@ -145,6 +163,20 @@ export const groupController = {
     try {
       await groupService.close(pp(req.params.id), req.user!.userId, ip(req.ip));
       res.json({ success: true, message: 'Group closed.' });
+    } catch (e) { next(e); }
+  },
+
+  /**
+   * POST /api/groups/:id/schedule-closure — Owner's "Close Group" button for
+   * an *indefinite* group only (fixed-length groups already have a defined
+   * end and can't be closed early). Never ends the in-progress rotation
+   * early — rotationService.advance() performs the actual close once the
+   * current rotation finishes.
+   */
+  scheduleClosure: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await groupService.scheduleClosure(pp(req.params.id), req.user!.userId, ip(req.ip));
+      res.json({ success: true, data });
     } catch (e) { next(e); }
   },
 
