@@ -110,6 +110,15 @@ interface NextRotationInfo {
   rotation_order: number;
 }
 
+interface RotationHistoryEntry {
+  id: string;
+  cycle_number: number;
+  recipient_id: string;
+  scheduled_payout_date: string;
+  payout_status: 'pending' | 'processing' | 'completed' | 'failed';
+  completed_date?: string | null;
+}
+
 interface InvitationResult {
   token?: string;
   inviteLink?: string;
@@ -198,6 +207,19 @@ function getContributionMeta(status: Contribution['payment_status']) {
   }
 }
 
+function getPayoutStatusMeta(status: RotationHistoryEntry['payout_status']) {
+  switch (status) {
+    case 'completed':
+      return { color: '#2EAF6F', bg: 'rgba(46,175,111,0.1)', icon: CheckCircle, label: 'Completed' };
+    case 'processing':
+      return { color: '#F59E0B', bg: 'rgba(245,158,11,0.1)', icon: Clock, label: 'Processing' };
+    case 'failed':
+      return { color: '#EF4444', bg: 'rgba(239,68,68,0.1)', icon: AlertTriangle, label: 'Failed' };
+    default:
+      return { color: '#2eafaf', bg: 'rgba(46,175,175,0.1)', icon: Calendar, label: 'Pending' };
+  }
+}
+
 function getMembershipBadge(status: Membership['status']) {
   switch (status) {
     case 'active':
@@ -219,6 +241,7 @@ export default function SavingsGroupDetailPage() {
   const [contributions, setContributions] = useState<Contribution[]>([]);
   const [currentRotation, setCurrentRotation] = useState<RotationInfo | null>(null);
   const [nextRotation, setNextRotation] = useState<NextRotationInfo | null>(null);
+  const [rotationHistory, setRotationHistory] = useState<RotationHistoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notFound, setNotFound] = useState(false);
@@ -289,6 +312,7 @@ export default function SavingsGroupDetailPage() {
           setContributions([]);
           setCurrentRotation(null);
           setNextRotation(null);
+          setRotationHistory([]);
           return;
         }
         throw new Error(message);
@@ -297,11 +321,12 @@ export default function SavingsGroupDetailPage() {
       const groupData = groupJson.data ?? null;
       setGroup(groupData);
 
-      const [membershipsResult, contributionsResult, currentRotationResult, nextRotationResult, votesResult] = await Promise.allSettled([
+      const [membershipsResult, contributionsResult, currentRotationResult, nextRotationResult, rotationHistoryResult, votesResult] = await Promise.allSettled([
         window.fetch(`/api/memberships?group_id=${id}`, { headers }),
         window.fetch(`/api/contributions?group_id=${id}`, { headers }),
         window.fetch(`/api/rotations/${id}/current`, { headers }),
         window.fetch(`/api/rotations/${id}/next`, { headers }),
+        window.fetch(`/api/rotations?group_id=${id}`, { headers }),
         window.fetch(`/api/votes?group_id=${id}`, { headers }),
       ]);
 
@@ -340,6 +365,13 @@ export default function SavingsGroupDetailPage() {
         setNextRotation(null);
       }
 
+      if (rotationHistoryResult.status === 'fulfilled' && rotationHistoryResult.value.ok) {
+        const rotationHistoryJson = await rotationHistoryResult.value.json() as ApiResponse<RotationHistoryEntry[]>;
+        setRotationHistory(Array.isArray(rotationHistoryJson.data) ? rotationHistoryJson.data : []);
+      } else {
+        setRotationHistory([]);
+      }
+
       if (votesResult.status === 'fulfilled' && votesResult.value.ok) {
         const votesJson = await votesResult.value.json() as ApiResponse<Vote[]>;
         setVotes(Array.isArray(votesJson.data) ? votesJson.data : []);
@@ -352,6 +384,7 @@ export default function SavingsGroupDetailPage() {
       setContributions([]);
       setCurrentRotation(null);
       setNextRotation(null);
+      setRotationHistory([]);
       setVotes([]);
       setError(loadError instanceof Error ? loadError.message : 'Could not load this group.');
     } finally {
@@ -420,6 +453,61 @@ export default function SavingsGroupDetailPage() {
   const currentMembership = useMemo(
     () => memberships.find(member => member.user_id === currentUserId),
     [memberships, currentUserId],
+  );
+
+  const pendingMemberships = useMemo(
+    () => orderedMembers.filter(member => member.status === 'pending'),
+    [orderedMembers],
+  );
+
+  // Mirrors rotationService's potAmount calc (contribution_amount ×
+  // maximum_members — the group's target size, not just currently-active
+  // members) so the pot shown here always matches the amount actually
+  // transferred to the recipient when a rotation completes.
+  const payoutPotAmount = useMemo(() => {
+    if (!group) return 0;
+    const numericContribution = typeof group.contribution_amount === 'number'
+      ? group.contribution_amount
+      : Number.parseFloat(group.contribution_amount);
+    return (Number.isFinite(numericContribution) ? numericContribution : 0) * group.maximum_members;
+  }, [group]);
+
+  const myContributionsTotal = useMemo(
+    () => contributions
+      .filter(entry => entry.member_id === currentUserId && entry.payment_status === 'paid')
+      .reduce((sum, entry) => {
+        const paid = entry.amount_paid ?? entry.amount_due;
+        const numericPaid = typeof paid === 'number' ? paid : Number.parseFloat(paid);
+        return sum + (Number.isFinite(numericPaid) ? numericPaid : 0);
+      }, 0),
+    [contributions, currentUserId],
+  );
+
+  const myNextDueContribution = useMemo(
+    () => contributions
+      .filter(entry => entry.member_id === currentUserId && (entry.payment_status === 'due' || entry.payment_status === 'scheduled' || entry.payment_status === 'pending_default'))
+      .sort((left, right) => new Date(left.due_date).getTime() - new Date(right.due_date).getTime())[0],
+    [contributions, currentUserId],
+  );
+
+  const myCompletedPayouts = useMemo(
+    () => rotationHistory.filter(entry => entry.recipient_id === currentUserId && entry.payout_status === 'completed'),
+    [rotationHistory, currentUserId],
+  );
+
+  const myPayoutsTotal = useMemo(
+    () => myCompletedPayouts.length * payoutPotAmount,
+    [myCompletedPayouts, payoutPotAmount],
+  );
+
+  const myUpcomingPayout = useMemo(
+    () => rotationHistory.find(entry => entry.recipient_id === currentUserId && (entry.payout_status === 'pending' || entry.payout_status === 'processing')),
+    [rotationHistory, currentUserId],
+  );
+
+  const orderedRotationHistory = useMemo(
+    () => [...rotationHistory].sort((left, right) => right.cycle_number - left.cycle_number),
+    [rotationHistory],
   );
 
   const swapCandidates = useMemo(
@@ -929,6 +1017,29 @@ export default function SavingsGroupDetailPage() {
                 </div>
               )}
 
+              {currentMembership?.status === 'pending' && (
+                <div className="rounded-xl p-3 mb-3 flex items-center gap-2" style={{ background: 'rgba(245,158,11,0.12)' }}>
+                  <Clock size={14} style={{ color: '#FCD34D' }} />
+                  <p className="text-xs font-semibold" style={{ color: '#FCD34D' }}>
+                    Your request to join is awaiting the group leader&apos;s approval — you&apos;re not yet an active member and won&apos;t be counted in the member totals until approved.
+                  </p>
+                </div>
+              )}
+
+              {group.leader_id === currentUserId && pendingMemberships.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setTab('members')}
+                  className="w-full text-left rounded-xl p-3 mb-3 flex items-center gap-2 transition-all hover:bg-white/10"
+                  style={{ background: 'rgba(139,92,246,0.15)' }}
+                >
+                  <Users size={14} style={{ color: '#C4B5FD' }} />
+                  <p className="text-xs font-semibold" style={{ color: '#C4B5FD' }}>
+                    {pendingMemberships.length} join request{pendingMemberships.length === 1 ? '' : 's'} waiting for your approval — review in the Members tab.
+                  </p>
+                </button>
+              )}
+
               {(group.status === 'active' || group.status === 'suspended') && (
                 <div className="rounded-xl p-3 mb-3" style={{ background: 'rgba(255,255,255,0.06)' }}>
                   <p className="text-xs" style={{ color: 'rgba(255,255,255,0.6)' }}>
@@ -1091,8 +1202,42 @@ export default function SavingsGroupDetailPage() {
                       </div>
                     </div>
                   </div>
+
+                  <div className="rounded-3xl p-5 bg-white" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
+                    <h2 className="font-extrabold text-gray-900 mb-4" style={{ fontFamily: 'Nunito, sans-serif' }}>Your Contributions &amp; Payouts</h2>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+                      <div className="rounded-2xl p-4" style={{ background: 'rgba(46,175,111,0.06)', border: '1px solid rgba(46,175,111,0.15)' }}>
+                        <p className="text-xs text-gray-400 mb-1">Total you&apos;ve contributed</p>
+                        <p className="text-lg font-black text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>{formatCurrency(myContributionsTotal, group.currency)}</p>
+                      </div>
+                      <div className="rounded-2xl p-4" style={{ background: 'rgba(139,92,246,0.06)', border: '1px solid rgba(139,92,246,0.15)' }}>
+                        <p className="text-xs text-gray-400 mb-1">Total you&apos;ve received</p>
+                        <p className="text-lg font-black text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>{formatCurrency(myPayoutsTotal, group.currency)}</p>
+                        <p className="text-xs text-gray-400 mt-1">{myCompletedPayouts.length} completed payout{myCompletedPayouts.length === 1 ? '' : 's'}</p>
+                      </div>
+                      <div className="rounded-2xl p-4" style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.15)' }}>
+                        <p className="text-xs text-gray-400 mb-1">Next payment due</p>
+                        {myNextDueContribution ? (
+                          <>
+                            <p className="text-lg font-black text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>{formatCurrency(myNextDueContribution.amount_due, group.currency)}</p>
+                            <p className="text-xs text-gray-400 mt-1">Due {formatDate(myNextDueContribution.due_date)}</p>
+                          </>
+                        ) : (
+                          <p className="text-sm text-gray-500">Nothing due right now.</p>
+                        )}
+                      </div>
+                    </div>
+                    {myUpcomingPayout && (
+                      <div className="rounded-2xl p-4" style={{ background: 'rgba(46,175,111,0.06)', border: '1px solid rgba(46,175,111,0.15)' }}>
+                        <p className="text-xs text-gray-400 mb-1">Your upcoming payout — cycle {myUpcomingPayout.cycle_number}</p>
+                        <p className="text-sm font-bold text-gray-900">{formatCurrency(payoutPotAmount, group.currency)} · {titleCase(myUpcomingPayout.payout_status)}</p>
+                        <p className="text-xs text-gray-400 mt-0.5">Scheduled {formatDate(myUpcomingPayout.scheduled_payout_date)}</p>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
+
 
               {tab === 'members' && (
                 <div className="flex flex-col gap-3">
@@ -1412,51 +1557,92 @@ export default function SavingsGroupDetailPage() {
               )}
 
               {tab === 'activity' && (
-                contributions.length === 0 ? (
-                  <div className="rounded-3xl p-6 bg-white text-center" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
-                    <TrendingUp size={24} className="mx-auto mb-3" style={{ color: '#9CA3AF' }} />
-                    <h2 className="text-lg font-extrabold text-gray-900 mb-2" style={{ fontFamily: 'Nunito, sans-serif' }}>No contribution activity yet</h2>
-                    <p className="text-sm text-gray-500">Once contribution schedules or payments exist for this group, they&apos;ll appear here.</p>
-                  </div>
-                ) : (
+                <div className="flex flex-col gap-5">
                   <div className="rounded-3xl p-5 bg-white" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
-                    <h2 className="font-extrabold text-gray-900 mb-5" style={{ fontFamily: 'Nunito, sans-serif' }}>Contribution Activity</h2>
-                    <div className="flex flex-col">
-                      {contributions.map((entry, index) => {
-                        const meta = getContributionMeta(entry.payment_status);
-                        const Icon = meta.icon;
-                        const activityDate = entry.paid_date || entry.due_date;
-                        const amount = entry.payment_status === 'paid' && entry.amount_paid ? entry.amount_paid : entry.amount_due;
+                    <h2 className="font-extrabold text-gray-900 mb-5" style={{ fontFamily: 'Nunito, sans-serif' }}>Payout History</h2>
+                    {orderedRotationHistory.length === 0 ? (
+                      <div className="text-center py-4">
+                        <TrendingUp size={20} className="mx-auto mb-2" style={{ color: '#9CA3AF' }} />
+                        <p className="text-sm text-gray-500">Payouts are scheduled once the group is active — none yet for this group.</p>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col">
+                        {orderedRotationHistory.map((entry, index) => {
+                          const meta = getPayoutStatusMeta(entry.payout_status);
+                          const Icon = meta.icon;
+                          const activityDate = entry.completed_date || entry.scheduled_payout_date;
 
-                        return (
-                          <div key={entry.id} className="flex items-start gap-4 relative">
-                            {index < contributions.length - 1 && <div className="absolute left-5 top-10 bottom-0 w-0.5" style={{ background: '#F3F4F6' }} />}
-                            <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 z-10 bg-white" style={{ border: `2px solid ${meta.color}30` }}>
-                              <Icon size={15} style={{ color: meta.color }} />
-                            </div>
-                            <div className="flex-1 pb-5">
-                              <div className="flex items-center justify-between gap-4">
-                                <div>
-                                  <p className="text-sm font-semibold text-gray-800">Cycle {entry.cycle_number} · {meta.label}</p>
-                                  <p className="text-xs text-gray-400 break-all">{getMemberDisplayName(entry.member_id)}</p>
-                                  {entry.payment_status === 'pending_default' && entry.grace_period_ends_at && (
-                                    <p className="text-xs font-semibold mt-0.5" style={{ color: '#F59E0B' }}>
-                                      One automatic retry on {formatDate(entry.grace_period_ends_at)} before this is marked in default
-                                    </p>
-                                  )}
-                                </div>
-                                <div className="text-right">
-                                  <p className="text-sm font-bold" style={{ color: meta.color }}>{formatCurrency(amount, group.currency)}</p>
-                                  <span className="text-xs text-gray-400">{formatDate(activityDate)}</span>
+                          return (
+                            <div key={entry.id} className="flex items-start gap-4 relative">
+                              {index < orderedRotationHistory.length - 1 && <div className="absolute left-5 top-10 bottom-0 w-0.5" style={{ background: '#F3F4F6' }} />}
+                              <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 z-10 bg-white" style={{ border: `2px solid ${meta.color}30` }}>
+                                <Icon size={15} style={{ color: meta.color }} />
+                              </div>
+                              <div className="flex-1 pb-5">
+                                <div className="flex items-center justify-between gap-4">
+                                  <div>
+                                    <p className="text-sm font-semibold text-gray-800">Cycle {entry.cycle_number} · {meta.label}</p>
+                                    <p className="text-xs text-gray-400 break-all">{getMemberDisplayName(entry.recipient_id)}</p>
+                                  </div>
+                                  <div className="text-right">
+                                    <p className="text-sm font-bold" style={{ color: meta.color }}>{formatCurrency(payoutPotAmount, group.currency)}</p>
+                                    <span className="text-xs text-gray-400">{formatDate(activityDate)}</span>
+                                  </div>
                                 </div>
                               </div>
                             </div>
-                          </div>
-                        );
-                      })}
-                    </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
-                )
+
+                  {contributions.length === 0 ? (
+                    <div className="rounded-3xl p-6 bg-white text-center" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
+                      <TrendingUp size={24} className="mx-auto mb-3" style={{ color: '#9CA3AF' }} />
+                      <h2 className="text-lg font-extrabold text-gray-900 mb-2" style={{ fontFamily: 'Nunito, sans-serif' }}>No contribution activity yet</h2>
+                      <p className="text-sm text-gray-500">Once contribution schedules or payments exist for this group, they&apos;ll appear here.</p>
+                    </div>
+                  ) : (
+                    <div className="rounded-3xl p-5 bg-white" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
+                      <h2 className="font-extrabold text-gray-900 mb-5" style={{ fontFamily: 'Nunito, sans-serif' }}>Contribution Activity</h2>
+                      <div className="flex flex-col">
+                        {contributions.map((entry, index) => {
+                          const meta = getContributionMeta(entry.payment_status);
+                          const Icon = meta.icon;
+                          const activityDate = entry.paid_date || entry.due_date;
+                          const amount = entry.payment_status === 'paid' && entry.amount_paid ? entry.amount_paid : entry.amount_due;
+
+                          return (
+                            <div key={entry.id} className="flex items-start gap-4 relative">
+                              {index < contributions.length - 1 && <div className="absolute left-5 top-10 bottom-0 w-0.5" style={{ background: '#F3F4F6' }} />}
+                              <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 z-10 bg-white" style={{ border: `2px solid ${meta.color}30` }}>
+                                <Icon size={15} style={{ color: meta.color }} />
+                              </div>
+                              <div className="flex-1 pb-5">
+                                <div className="flex items-center justify-between gap-4">
+                                  <div>
+                                    <p className="text-sm font-semibold text-gray-800">Cycle {entry.cycle_number} · {meta.label}</p>
+                                    <p className="text-xs text-gray-400 break-all">{getMemberDisplayName(entry.member_id)}</p>
+                                    {entry.payment_status === 'pending_default' && entry.grace_period_ends_at && (
+                                      <p className="text-xs font-semibold mt-0.5" style={{ color: '#F59E0B' }}>
+                                        One automatic retry on {formatDate(entry.grace_period_ends_at)} before this is marked in default
+                                      </p>
+                                    )}
+                                  </div>
+                                  <div className="text-right">
+                                    <p className="text-sm font-bold" style={{ color: meta.color }}>{formatCurrency(amount, group.currency)}</p>
+                                    <span className="text-xs text-gray-400">{formatDate(activityDate)}</span>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
 
               {tab === 'rules' && (
