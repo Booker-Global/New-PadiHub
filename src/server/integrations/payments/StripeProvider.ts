@@ -223,13 +223,17 @@ export class StripeProvider implements IPaymentProvider {
   }
 
   /** Create an Account Link for whatever onboarding requirements (e.g. identity
-   * verification) are still outstanding on a connected account. */
-  async createOnboardingLink(accountId: string, mode: 'add' | 'change' = 'add'): Promise<{ onboardingUrl: string }> {
+   * verification) are still outstanding on a connected account. `nextPath` is
+   * an optional, already-sanitized return path (e.g. back to an invite's join
+   * page) appended to both URLs so the member isn't stranded on /payments/payout
+   * after Stripe's hosted flow — see sanitizeReturnPath() in paymentController. */
+  async createOnboardingLink(accountId: string, mode: 'add' | 'change' = 'add', nextPath?: string): Promise<{ onboardingUrl: string }> {
     const stripe = getStripe();
+    const nextParam = nextPath ? `&next=${encodeURIComponent(nextPath)}` : '';
     const accountLink = await stripe.accountLinks.create({
       account:     accountId,
-      refresh_url: `${process.env.APP_URL ?? 'https://padihub.com'}/payments/payout?stripe_refresh=1&payout_mode=${mode}`,
-      return_url:  `${process.env.APP_URL ?? 'https://padihub.com'}/payments/payout?stripe_connected=1&payout_mode=${mode}`,
+      refresh_url: `${process.env.APP_URL ?? 'https://padihub.com'}/payments/payout?stripe_refresh=1&payout_mode=${mode}${nextParam}`,
+      return_url:  `${process.env.APP_URL ?? 'https://padihub.com'}/payments/payout?stripe_connected=1&payout_mode=${mode}${nextParam}`,
       type:        'account_onboarding',
     });
     return { onboardingUrl: accountLink.url };

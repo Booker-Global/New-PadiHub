@@ -11,6 +11,8 @@ import {
   Clock,
   ChevronRight,
   AlertTriangle,
+  Wallet,
+  HandCoins,
 } from 'lucide-react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { SkeletonPage } from '@/components/ui/loading-skeleton';
@@ -43,6 +45,15 @@ interface Contribution {
   due_date: string;
   paid_date?: string | null;
   payment_status: 'scheduled' | 'due' | 'paid' | 'failed' | 'missed' | 'pending_default' | 'defaulted';
+}
+
+interface Rotation {
+  id: string;
+  group_id: string;
+  cycle_number: number;
+  recipient_id: string;
+  payout_status: 'pending' | 'processing' | 'completed' | 'failed';
+  completed_date?: string | null;
 }
 
 interface ApiResponse<T> {
@@ -120,6 +131,7 @@ export default function SavingsGroupsPage() {
   const [tab, setTab] = useState<'groups' | 'timeline'>('groups');
   const [groups, setGroups] = useState<SavingsGroup[]>([]);
   const [timeline, setTimeline] = useState<Contribution[]>([]);
+  const [rotations, setRotations] = useState<Rotation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -128,6 +140,7 @@ export default function SavingsGroupsPage() {
     if (!session?.token) {
       setGroups([]);
       setTimeline([]);
+      setRotations([]);
       setError('Please log in to view your savings groups.');
       setLoading(false);
       return;
@@ -138,9 +151,10 @@ export default function SavingsGroupsPage() {
 
     try {
       const headers = { Authorization: 'Bearer ' + session.token };
-      const [groupsResponse, contributionsResponse] = await Promise.all([
+      const [groupsResponse, contributionsResponse, rotationsResponse] = await Promise.all([
         window.fetch('/api/groups', { headers }),
         window.fetch('/api/contributions', { headers }),
+        window.fetch('/api/rotations', { headers }),
       ]);
 
       const groupsJson = await groupsResponse.json() as ApiResponse<SavingsGroup[]>;
@@ -164,9 +178,17 @@ export default function SavingsGroupsPage() {
       } else {
         setTimeline([]);
       }
+
+      if (rotationsResponse.ok) {
+        const rotationsJson = await rotationsResponse.json() as ApiResponse<Rotation[]>;
+        setRotations(Array.isArray(rotationsJson.data) ? rotationsJson.data : []);
+      } else {
+        setRotations([]);
+      }
     } catch (loadError) {
       setGroups([]);
       setTimeline([]);
+      setRotations([]);
       setError(loadError instanceof Error ? loadError.message : 'Could not load savings groups.');
     } finally {
       setLoading(false);
@@ -176,6 +198,49 @@ export default function SavingsGroupsPage() {
   useEffect(() => {
     void loadData();
   }, [loadData]);
+
+  // Members always live in exactly one country (groups strictly match their
+  // own account's country — see membershipService.join()), so every group a
+  // user belongs to shares one currency; safe to pick it from any group.
+  const primaryCurrency: SavingsGroup['currency'] = groups[0]?.currency ?? 'GBP';
+
+  const groupById = useMemo(
+    () => Object.fromEntries(groups.map(group => [group.id, group])),
+    [groups],
+  );
+
+  // Mirrors the per-group payoutPotAmount calc in savings-groups/[id].tsx
+  // (contribution_amount × maximum_members) so the totals shown here always
+  // match the amount actually transferred when a rotation completes.
+  const potAmountForGroup = useCallback((groupId: string) => {
+    const group = groupById[groupId];
+    if (!group) return 0;
+    const numericContribution = typeof group.contribution_amount === 'number'
+      ? group.contribution_amount
+      : Number.parseFloat(group.contribution_amount);
+    return (Number.isFinite(numericContribution) ? numericContribution : 0) * group.maximum_members;
+  }, [groupById]);
+
+  const totalContributed = useMemo(
+    () => timeline
+      .filter(entry => entry.payment_status === 'paid')
+      .reduce((sum, entry) => {
+        const paid = entry.amount_paid ?? entry.amount_due;
+        const numericPaid = typeof paid === 'number' ? paid : Number.parseFloat(paid);
+        return sum + (Number.isFinite(numericPaid) ? numericPaid : 0);
+      }, 0),
+    [timeline],
+  );
+
+  const completedPayouts = useMemo(
+    () => rotations.filter(entry => entry.payout_status === 'completed'),
+    [rotations],
+  );
+
+  const totalReceived = useMemo(
+    () => completedPayouts.reduce((sum, entry) => sum + potAmountForGroup(entry.group_id), 0),
+    [completedPayouts, potAmountForGroup],
+  );
 
   const summaryStats = useMemo(() => {
     const activeGroups = groups.filter(group => group.status === 'active').length;
@@ -257,6 +322,47 @@ export default function SavingsGroupsPage() {
                   </div>
                 ))}
               </MotionDiv>
+
+              {groups.length > 0 && (
+                <MotionDiv
+                  variants={fadeUp}
+                  className="rounded-3xl p-6 mb-6 relative overflow-hidden"
+                  style={{ background: 'linear-gradient(135deg, #0F172A, #1A1A2E)' }}
+                >
+                  <div className="absolute top-0 right-0 w-40 h-40 rounded-full blur-3xl opacity-20" style={{ background: '#2EAF6F' }} />
+                  <div className="relative">
+                    <h2 className="text-sm font-bold mb-4" style={{ color: 'rgba(255,255,255,0.6)' }}>Your Contributions & Payouts at a glance</h2>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="rounded-2xl p-4 flex items-center gap-3" style={{ background: 'rgba(255,255,255,0.06)' }}>
+                        <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: 'rgba(46,175,111,0.2)' }}>
+                          <Wallet size={18} style={{ color: '#2EAF6F' }} />
+                        </div>
+                        <div>
+                          <p className="text-xl font-black text-white" style={{ fontFamily: 'Nunito, sans-serif' }}>
+                            {formatCurrency(totalContributed, primaryCurrency)}
+                          </p>
+                          <p className="text-xs" style={{ color: 'rgba(255,255,255,0.5)' }}>
+                            Total contributed across all groups
+                          </p>
+                        </div>
+                      </div>
+                      <div className="rounded-2xl p-4 flex items-center gap-3" style={{ background: 'rgba(255,255,255,0.06)' }}>
+                        <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: 'rgba(139,92,246,0.2)' }}>
+                          <HandCoins size={18} style={{ color: '#8B5CF6' }} />
+                        </div>
+                        <div>
+                          <p className="text-xl font-black text-white" style={{ fontFamily: 'Nunito, sans-serif' }}>
+                            {formatCurrency(totalReceived, primaryCurrency)}
+                          </p>
+                          <p className="text-xs" style={{ color: 'rgba(255,255,255,0.5)' }}>
+                            Total received in payouts · {completedPayouts.length} completed
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </MotionDiv>
+              )}
 
               <MotionDiv variants={fadeUp} className="flex items-center gap-1 p-1 rounded-2xl bg-gray-100 w-fit mb-6">
                 {(['groups', 'timeline'] as const).map(currentTab => (

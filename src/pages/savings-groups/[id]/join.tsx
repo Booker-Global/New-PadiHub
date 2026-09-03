@@ -99,6 +99,18 @@ function getGroupColor(group: SavingsGroup) {
   return group.currency === 'NGN' ? '#2EAF6F' : '#2eafaf';
 }
 
+/**
+ * Appends a `next=` return path onto an onboarding step's href so that, once
+ * the member finishes that step (subscription, payment method, payout —
+ * identity already does this), whichever page they land on can bring them
+ * straight back here to finish joining, instead of stranding them on their
+ * own dashboard having never actually clicked "Join".
+ */
+function withReturnParam(href: string, returnPath: string) {
+  const separator = href.includes('?') ? '&' : '?';
+  return `${href}${separator}next=${encodeURIComponent(returnPath)}`;
+}
+
 /** Mirrors src/server/lib/payoutSchedule.ts describePayoutSchedule() for client-side display. */
 function describePayoutSchedule(frequency: SavingsGroup['contribution_frequency'], payoutDay: number | null | undefined) {
   if (frequency === 'daily') return 'Every day';
@@ -425,7 +437,7 @@ export default function JoinSavingsGroupPage() {
               {missingSteps.map(step => (
                 <Link
                   key={step.key}
-                  to={step.key === 'identity' ? `/verify-identity?next=${encodeURIComponent(verificationReturnPath)}` : step.href}
+                  to={withReturnParam(step.key === 'identity' ? '/verify-identity' : step.href, verificationReturnPath)}
                   className="text-xs font-bold underline"
                   style={{ color: '#92400E' }}
                 >
@@ -461,7 +473,7 @@ export default function JoinSavingsGroupPage() {
               {missingSteps.length ? missingSteps.map(step => (
                 <Link
                   key={step.key}
-                  to={step.key === 'identity' ? `/verify-identity?next=${encodeURIComponent(verificationReturnPath)}` : step.href}
+                  to={withReturnParam(step.key === 'identity' ? '/verify-identity' : step.href, verificationReturnPath)}
                   className="text-xs font-bold underline"
                   style={{ color: '#92400E' }}
                 >
@@ -470,10 +482,10 @@ export default function JoinSavingsGroupPage() {
               )) : (
                 <div className="flex gap-3 flex-wrap">
                   {needsIdentityVerification && (
-                    <Link to={`/verify-identity?next=${encodeURIComponent(verificationReturnPath)}`} className="text-xs font-bold underline" style={{ color: '#92400E' }}>Verify your identity</Link>
+                    <Link to={withReturnParam('/verify-identity', verificationReturnPath)} className="text-xs font-bold underline" style={{ color: '#92400E' }}>Verify your identity</Link>
                   )}
-                  <Link to="/payments/methods" className="text-xs font-bold underline" style={{ color: '#92400E' }}>Add payment method</Link>
-                  <Link to="/payments/payout" className="text-xs font-bold underline" style={{ color: '#92400E' }}>Connect payout destination</Link>
+                  <Link to={withReturnParam('/payments/methods', verificationReturnPath)} className="text-xs font-bold underline" style={{ color: '#92400E' }}>Add payment method</Link>
+                  <Link to={withReturnParam('/payments/payout', verificationReturnPath)} className="text-xs font-bold underline" style={{ color: '#92400E' }}>Connect payout destination</Link>
                 </div>
               )}
             </div>

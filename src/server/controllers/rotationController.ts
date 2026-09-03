@@ -1,12 +1,17 @@
 import type { Request, Response, NextFunction } from 'express';
 import { rotationService } from '../services/rotationService.js';
-import { qs, pp, ip } from '../lib/reqHelpers.js';
+import { qsOpt, pp, ip } from '../lib/reqHelpers.js';
 
 export const rotationController = {
   list: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const groupId = qs(req.query.group_id);
-      const data = await rotationService.getHistory(groupId);
+      const groupId = qsOpt(req.query.group_id);
+      // Mirrors contributionController.list's getForGroup/getForMember split —
+      // no group_id means "every rotation payout across all of my groups",
+      // used by the cross-group Contributions & Payouts summary.
+      const data = groupId
+        ? await rotationService.getHistory(groupId)
+        : await rotationService.getForUser(req.user!.userId);
       res.json({ success: true, data });
     } catch (e) { next(e); }
   },

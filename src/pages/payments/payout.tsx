@@ -55,8 +55,26 @@ function getErrorMessage<T>(json: ApiResponse<T> | null, fallback: string) {
   return firstFieldError || json?.message || fallback;
 }
 
+/** Mirrors src/pages/verify-identity.tsx's getReturnPath/getReturnLabel — lets
+ * a member who arrived here from an invite's onboarding checklist (join.tsx)
+ * get back there once their payout destination is connected, including after
+ * an external Stripe Connect hosted-onboarding round trip (see the `next`
+ * param forwarded to /api/payments/connect-onboard below). */
+function getReturnPath(searchParams: { get(name: string): string | null }) {
+  const candidate = searchParams.get('redirect') || searchParams.get('next');
+  if (!candidate || !candidate.startsWith('/') || candidate.startsWith('//')) return null;
+  return candidate;
+}
+
+function getReturnLabel(path: string) {
+  if (path.includes('/join')) return 'Continue joining the group';
+  if (path === '/savings-groups/create') return 'Continue creating your group';
+  return 'Continue';
+}
+
 export default function ConnectPayoutPage() {
   const [searchParams] = useSearchParams();
+  const returnPath = getReturnPath(searchParams);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -239,7 +257,10 @@ export default function ConnectPayoutPage() {
         body: JSON.stringify(
           profile?.country === 'NG'
             ? { business_name: businessName, bank_code: bankCode, account_number: accountNumber }
-            : { account_holder_name: businessName, sort_code: sortCode, account_number: accountNumber },
+            : {
+              account_holder_name: businessName, sort_code: sortCode, account_number: accountNumber,
+              ...(returnPath ? { next: returnPath } : {}),
+            },
         ),
       });
       const json = await response.json().catch(() => null) as ApiResponse<ConnectOnboardResponse> | null;
@@ -312,10 +333,20 @@ export default function ConnectPayoutPage() {
                 </p>
               </div>
 
+              {returnPath && (
+                <Link
+                  to={returnPath}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-bold text-white mb-5"
+                  style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}
+                >
+                  {getReturnLabel(returnPath)}
+                </Link>
+              )}
+
               <div className="rounded-3xl p-5 mb-5 bg-white" style={{ border: '1px solid #E5E7EB' }}>
                 <h2 className="font-bold text-gray-900 mb-3">Payment setup overview</h2>
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <Link to="/payments/methods" className="rounded-2xl p-4 transition-all hover:opacity-90" style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
+                  <Link to={returnPath ? `/payments/methods?next=${encodeURIComponent(returnPath)}` : '/payments/methods'} className="rounded-2xl p-4 transition-all hover:opacity-90" style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
                     <p className="text-xs text-gray-500 mb-1">Contribution charges</p>
                     <div className="flex items-center justify-between gap-3">
                       <p className="text-sm font-bold text-gray-900">Payment method</p>
