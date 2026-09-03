@@ -29,6 +29,19 @@ interface Membership {
   status: 'pending' | 'active' | 'suspended' | 'removed';
 }
 
+interface OnboardingStep {
+  key: string;
+  label: string;
+  description: string;
+  href: string;
+  complete: boolean;
+}
+
+interface OnboardingProgress {
+  steps: OnboardingStep[];
+  complete: boolean;
+}
+
 interface ApiResponse<T> {
   success?: boolean;
   data?: T;
@@ -107,6 +120,8 @@ export default function JoinSavingsGroupPage() {
   const [needsPaymentSetup, setNeedsPaymentSetup] = useState(false);
   const [needsIdentityVerification, setNeedsIdentityVerification] = useState(false);
   const [notFound, setNotFound] = useState(false);
+  const [missingSteps, setMissingSteps] = useState<OnboardingStep[]>([]);
+  const [loggedOut, setLoggedOut] = useState(false);
   const verificationReturnPath = `${location.pathname}${location.search}`;
 
   const inviteToken = useMemo(
@@ -123,7 +138,10 @@ export default function JoinSavingsGroupPage() {
 
     const session = getValidSession();
     if (!session?.token) {
-      setError('Please log in to join this savings group.');
+      // An invitee arriving from an invitation email may not have an account
+      // yet (or may just be logged out), so send them to log in or sign up
+      // and bring them straight back to this invitation afterwards.
+      setLoggedOut(true);
       setLoading(false);
       return;
     }
@@ -148,6 +166,12 @@ export default function JoinSavingsGroupPage() {
       }
 
       setGroup(groupJson.data ?? null);
+
+      const onboardingResponse = await window.fetch('/api/users/onboarding-status', { headers });
+      if (onboardingResponse.ok) {
+        const onboardingJson = await onboardingResponse.json() as ApiResponse<OnboardingProgress>;
+        setMissingSteps((onboardingJson.data?.steps ?? []).filter(step => !step.complete));
+      }
 
       const membershipsResponse = await window.fetch(`/api/memberships?group_id=${id}`, { headers });
       if (membershipsResponse.ok) {
@@ -202,6 +226,15 @@ export default function JoinSavingsGroupPage() {
         setError(message);
         setNeedsPaymentSetup(json.code === 'PAYMENT_SETUP_REQUIRED');
         setNeedsIdentityVerification(json.code === 'PAYMENT_SETUP_REQUIRED' && requiresIdentityVerification(message));
+        if (json.code === 'PAYMENT_SETUP_REQUIRED') {
+          const onboardingResponse = await window.fetch('/api/users/onboarding-status', {
+            headers: { Authorization: 'Bearer ' + session.token },
+          });
+          if (onboardingResponse.ok) {
+            const onboardingJson = await onboardingResponse.json() as ApiResponse<OnboardingProgress>;
+            setMissingSteps((onboardingJson.data?.steps ?? []).filter(step => !step.complete));
+          }
+        }
         return;
       }
 
@@ -215,6 +248,39 @@ export default function JoinSavingsGroupPage() {
 
   if (loading) {
     return <DashboardLayout><SkeletonPage /></DashboardLayout>;
+  }
+
+  if (loggedOut) {
+    const returnTo = `${location.pathname}${location.search}`;
+    return (
+      <DashboardLayout>
+        <div className="p-4 sm:p-6 max-w-lg mx-auto text-center py-16">
+          <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4" style={{ background: 'rgba(46,175,111,0.1)' }}>
+            <Users size={24} style={{ color: '#2EAF6F' }} />
+          </div>
+          <h1 className="text-2xl font-extrabold text-gray-900 mb-3" style={{ fontFamily: 'Nunito, sans-serif' }}>You&apos;ve been invited to a savings group</h1>
+          <p className="text-gray-500 mb-6">
+            Log in to accept your invitation, or create a free PadiHub account first. Either way we&apos;ll bring you right back here, then guide you through completing your profile so you can join.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-3 justify-center">
+            <Link
+              to={`/login?redirect=${encodeURIComponent(returnTo)}`}
+              className="px-6 py-3 rounded-2xl font-bold text-white"
+              style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}
+            >
+              Log in
+            </Link>
+            <Link
+              to={`/get-started?redirect=${encodeURIComponent(returnTo)}`}
+              className="px-6 py-3 rounded-2xl font-bold text-gray-600"
+              style={{ border: '1px solid #E5E7EB' }}
+            >
+              Create an account
+            </Link>
+          </div>
+        </div>
+      </DashboardLayout>
+    );
   }
 
   if (notFound) {
@@ -341,6 +407,27 @@ export default function JoinSavingsGroupPage() {
           </div>
         )}
 
+        {missingSteps.length > 0 && !needsPaymentSetup && (
+          <div className="rounded-2xl p-4 mb-5" style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)' }}>
+            <p className="text-sm font-semibold" style={{ color: '#92400E' }}>Finish setting up your profile to join</p>
+            <p className="text-xs mt-1" style={{ color: '#92400E' }}>
+              {missingSteps.length} step{missingSteps.length === 1 ? '' : 's'} left. Your subscription fee is only charged once you&apos;re in a valid, active group with at least three members.
+            </p>
+            <div className="flex flex-col gap-2 mt-3">
+              {missingSteps.map(step => (
+                <Link
+                  key={step.key}
+                  to={step.key === 'identity' ? `/verify-identity?next=${encodeURIComponent(verificationReturnPath)}` : step.href}
+                  className="text-xs font-bold underline"
+                  style={{ color: '#92400E' }}
+                >
+                  {step.label}
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
+
         {group.status === 'draft' && (
           <div className="rounded-2xl p-4 mb-5" style={{ background: 'rgba(139,92,246,0.06)', border: '1px solid rgba(139,92,246,0.2)' }}>
             <p className="text-sm font-semibold" style={{ color: '#7C3AED' }}>This group hasn&apos;t started yet</p>
@@ -362,12 +449,25 @@ export default function JoinSavingsGroupPage() {
             <p className="text-xs mt-1" style={{ color: '#92400E' }}>
               You need a verified payment method (to contribute) and a verified payout destination (to receive your payout when it&apos;s your turn) before you can join a group.
             </p>
-            <div className="flex gap-3 mt-3 flex-wrap">
-              {needsIdentityVerification && (
-                <Link to={`/verify-identity?next=${encodeURIComponent(verificationReturnPath)}`} className="text-xs font-bold underline" style={{ color: '#92400E' }}>Verify your identity</Link>
+            <div className="flex flex-col gap-2 mt-3">
+              {missingSteps.length ? missingSteps.map(step => (
+                <Link
+                  key={step.key}
+                  to={step.key === 'identity' ? `/verify-identity?next=${encodeURIComponent(verificationReturnPath)}` : step.href}
+                  className="text-xs font-bold underline"
+                  style={{ color: '#92400E' }}
+                >
+                  {step.label}
+                </Link>
+              )) : (
+                <div className="flex gap-3 flex-wrap">
+                  {needsIdentityVerification && (
+                    <Link to={`/verify-identity?next=${encodeURIComponent(verificationReturnPath)}`} className="text-xs font-bold underline" style={{ color: '#92400E' }}>Verify your identity</Link>
+                  )}
+                  <Link to="/payments/methods" className="text-xs font-bold underline" style={{ color: '#92400E' }}>Add payment method</Link>
+                  <Link to="/payments/payout" className="text-xs font-bold underline" style={{ color: '#92400E' }}>Connect payout destination</Link>
+                </div>
               )}
-              <Link to="/payments/methods" className="text-xs font-bold underline" style={{ color: '#92400E' }}>Add payment method</Link>
-              <Link to="/payments/payout" className="text-xs font-bold underline" style={{ color: '#92400E' }}>Connect payout destination</Link>
             </div>
           </div>
         )}

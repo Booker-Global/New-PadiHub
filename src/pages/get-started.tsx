@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { Eye, EyeOff, Mail, Lock, User, ArrowRight, CheckCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -16,6 +16,14 @@ const passwordRules = [
 
 export default function GetStartedPage() {
   const navigate = useNavigate();
+  // Carried over when someone lands here from a group invitation, so the
+  // "Log in" link (and the verify-email step) can send them back to the
+  // invitation once they have an account.
+  const [searchParams] = useSearchParams();
+  const redirectParam = searchParams.get('redirect');
+  const redirectSuffix = redirectParam && redirectParam.startsWith('/') && !redirectParam.startsWith('//')
+    ? `?redirect=${encodeURIComponent(redirectParam)}`
+    : '';
   const [showPassword, setShowPassword] = useState(false);
   const [form, setForm] = useState({ name: '', email: '', password: '', country: 'GB' as 'GB' | 'NG' });
   const [loading, setLoading] = useState(false);
@@ -61,7 +69,7 @@ export default function GetStartedPage() {
       }
       // Registration succeeded — verification email sent by the server.
       // Redirect to verify-email so the user knows to check their inbox.
-      navigate('/verify-email', { state: { email: form.email, fromRegister: true } });
+      navigate(`/verify-email${redirectSuffix}`, { state: { email: form.email, fromRegister: true } });
     } catch {
       setError('Network error. Please check your connection and try again.');
     } finally {
@@ -199,7 +207,7 @@ export default function GetStartedPage() {
 
         <p style={{ textAlign: 'center', fontSize: 14, color: '#6B7280', marginTop: 24 }}>
           Already have an account?{' '}
-          <Link to="/login" style={{ fontWeight: 700, color: '#2EAF6F', textDecoration: 'none' }}>Log in</Link>
+          <Link to={`/login${redirectSuffix}`} style={{ fontWeight: 700, color: '#2EAF6F', textDecoration: 'none' }}>Log in</Link>
         </p>
       </AuthLayout>
     </>

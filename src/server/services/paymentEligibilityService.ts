@@ -14,10 +14,9 @@ import { getStripeProvider } from '../integrations/payments/PaymentProviderFacto
 import { notificationService } from './notificationService.js';
 import { sendProfileSetupCompleteEmail } from '../integrations/email/emailService.js';
 import { SUBSCRIPTION_TIERS, isSubscriptionTierKey, formatTierPrice, type SubscriptionTierKey } from '../lib/constants.js';
+import { buildOnboardingSteps, lowerFirst } from '../lib/onboardingSteps.js';
 
-function lowerFirst(value: string): string {
-  return value.charAt(0).toLowerCase() + value.slice(1);
-}
+export type { OnboardingStep } from '../lib/onboardingSteps.js';
 
 type EligibilityUser = {
   id: string;
@@ -102,66 +101,6 @@ export async function getPaymentEligibility(userId: string) {
     payoutVerified,
     ready: emailVerified && identityVerified && subscriptionTierSelected && paymentMethodVerified && payoutVerified,
   };
-}
-
-/**
- * The ordered onboarding path every member must finish before they can
- * create or join a savings group (steps a–d of the agreed flow):
- *   a) sign up and confirm their email address,
- *   b) verify their identity,
- *   c) choose a subscription plan and accept the terms,
- *   d) add a payment card and payout details.
- *
- * `href` is always a member-facing dashboard page — never an API route — so
- * the same list can drive the blocked-action message, the dashboard's
- * profile-completion card, and the invitation flow.
- */
-export type OnboardingStep = {
-  key: 'email' | 'identity' | 'subscription' | 'payment_method' | 'payout';
-  label: string;
-  description: string;
-  href: string;
-  complete: boolean;
-};
-
-function buildOnboardingSteps(eligibility: Awaited<ReturnType<typeof getPaymentEligibility>>): OnboardingStep[] {
-  return [
-    {
-      key: 'email',
-      label: 'Confirm your email address',
-      description: 'Confirm the email address you signed up with so we can reach you about your groups.',
-      href: '/verify-email',
-      complete: eligibility.emailVerified,
-    },
-    {
-      key: 'identity',
-      label: 'Verify your identity',
-      description: 'A quick ID and selfie check that keeps every PadiHub savings group trustworthy.',
-      href: '/verify-identity',
-      complete: eligibility.identityVerified,
-    },
-    {
-      key: 'subscription',
-      label: 'Choose your subscription plan',
-      description: 'Pick Basic or Premium and accept the terms. Your subscription fee is only charged once you are part of a valid, active group with at least three members.',
-      href: '/onboarding',
-      complete: eligibility.subscriptionTierSelected,
-    },
-    {
-      key: 'payment_method',
-      label: 'Add your payment card',
-      description: 'The card your contributions (and your subscription) are charged to.',
-      href: '/payments/methods',
-      complete: eligibility.paymentMethodVerified,
-    },
-    {
-      key: 'payout',
-      label: 'Add your payout details',
-      description: 'Where we send your money when it is your turn to be paid out.',
-      href: '/payments/payout',
-      complete: eligibility.payoutVerified,
-    },
-  ];
 }
 
 /**

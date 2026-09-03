@@ -29,6 +29,14 @@ const fadeSlide = {
 
 const TOTAL_STEPS = 7;
 
+/**
+ * A rotating savings group can never launch with fewer than three active
+ * members, so the wizard must not let a leader pick a smaller size — mirrors
+ * GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH and the API's `maximum_members` minimum.
+ */
+const MIN_GROUP_MEMBERS = 3;
+const MAX_GROUP_MEMBERS = 50;
+
 interface GroupData {
   name: string;
   description: string;
@@ -49,6 +57,24 @@ interface GroupData {
 interface SavingsGroup {
   id: string;
   name: string;
+}
+
+interface OnboardingStep {
+  key: string;
+  label: string;
+  description: string;
+  href: string;
+  complete: boolean;
+}
+
+interface OnboardingProgress {
+  steps: OnboardingStep[];
+  complete: boolean;
+}
+
+interface InvitationResult {
+  sent?: string[];
+  failed?: { email: string; reason: string }[];
 }
 
 interface ApiResponse<T> {
@@ -91,6 +117,19 @@ function getErrorMessage<T>(json: ApiResponse<T> | null, fallback: string) {
     ? Object.values(json.errors).flat().find((value): value is string => Boolean(value))
     : undefined;
   return firstFieldError || json?.message || fallback;
+}
+
+/** Splits the leader's comma/newline/space-separated invite list into addresses. */
+function parseInviteEmails(value: string): string[] {
+  const candidates = value
+    .split(/[\s,;]+/)
+    .map(entry => entry.trim().toLowerCase())
+    .filter(Boolean);
+  return [...new Set(candidates)];
+}
+
+function isValidEmail(value: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
 function normalizeContributionAmount(value: string) {
@@ -139,6 +178,19 @@ function OptionCard({ selected, onClick, children }: { selected: boolean; onClic
   );
 }
 
+async function fetchMissingOnboardingSteps(token: string): Promise<OnboardingStep[]> {
+  try {
+    const response = await window.fetch('/api/users/onboarding-status', {
+      headers: { Authorization: 'Bearer ' + token },
+    });
+    if (!response.ok) return [];
+    const json = await response.json() as ApiResponse<OnboardingProgress>;
+    return (json.data?.steps ?? []).filter(step => !step.complete);
+  } catch {
+    return [];
+  }
+}
+
 function requiresIdentityVerification(message: string) {
   const normalized = message.toLowerCase();
   return normalized.includes('/verify-identity') || normalized.includes('identity verification');
@@ -156,6 +208,8 @@ export default function CreateGroupWizard() {
   const [needsIdentitySetup, setNeedsIdentitySetup] = useState(false);
   const [bypassing, setBypassing] = useState(false);
   const [createdGroup, setCreatedGroup] = useState<SavingsGroup | null>(null);
+  const [inviteSummary, setInviteSummary] = useState<{ sent: string[]; failed: { email: string; reason: string }[] } | null>(null);
+  const [missingSteps, setMissingSteps] = useState<OnboardingStep[]>([]);
   const verificationReturnPath = `${location.pathname}${location.search}`;
 
   const normalizedAmount = useMemo(() => normalizeContributionAmount(data.amount), [data.amount]);
@@ -175,6 +229,7 @@ export default function CreateGroupWizard() {
     setNeedsVerification(false);
     setNeedsPaymentSetup(false);
     setNeedsIdentitySetup(false);
+    setMissingSteps([]);
     setData(current => ({ ...current, [key]: value }));
   };
 
@@ -196,6 +251,57 @@ export default function CreateGroupWizard() {
       setNeedsPaymentSetup(false);
       setNeedsIdentitySetup(false);
       setStep(current => current - 1);
+    }
+  };
+
+  /**
+   * Sends the invitations the leader typed into the wizard. Invitees receive
+   * an email that lets them log in (existing members) or sign up (new ones)
+   * and walks them through completing their profile before they can join.
+   * A failed invite must never make a successfully created group look failed,
+   * so problems are surfaced on the confirmation screen instead.
+   */
+  const sendInvitations = async (groupId: string, token: string) => {
+    const emails = parseInviteEmails(data.inviteEmails);
+    const valid = emails.filter(isValidEmail);
+    const invalid = emails.filter(email => !isValidEmail(email));
+
+    if (!valid.length) {
+      setInviteSummary(invalid.length
+        ? { sent: [], failed: invalid.map(email => ({ email, reason: 'Not a valid email address.' })) }
+        : null);
+      return;
+    }
+
+    try {
+      const response = await window.fetch(`/api/groups/${groupId}/invitations`, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ emails: valid }),
+      });
+      const json = await response.json() as ApiResponse<InvitationResult>;
+      if (!response.ok) {
+        setInviteSummary({
+          sent: [],
+          failed: [
+            ...valid.map(email => ({ email, reason: getErrorMessage(json, 'Could not send this invitation.') })),
+            ...invalid.map(email => ({ email, reason: 'Not a valid email address.' })),
+          ],
+        });
+        return;
+      }
+      setInviteSummary({
+        sent: json.data?.sent ?? valid,
+        failed: [
+          ...(json.data?.failed ?? []),
+          ...invalid.map(email => ({ email, reason: 'Not a valid email address.' })),
+        ],
+      });
+    } catch {
+      setInviteSummary({
+        sent: [],
+        failed: valid.map(email => ({ email, reason: 'Network error — you can resend from the group page.' })),
+      });
     }
   };
 
@@ -247,10 +353,17 @@ export default function CreateGroupWizard() {
         setNeedsVerification(json.code === 'VERIFICATION_REQUIRED');
         setNeedsPaymentSetup(json.code === 'PAYMENT_SETUP_REQUIRED');
         setNeedsIdentitySetup(json.code === 'PAYMENT_SETUP_REQUIRED' && requiresIdentityVerification(message));
+        // Ask the server exactly which onboarding steps are still outstanding
+        // so the member only sees links for what they actually still need.
+        if (json.code === 'PAYMENT_SETUP_REQUIRED') {
+          setMissingSteps(await fetchMissingOnboardingSteps(session.token));
+        }
         return;
       }
 
-      setCreatedGroup(json.data ?? null);
+      const group = json.data ?? null;
+      setCreatedGroup(group);
+      if (group) await sendInvitations(group.id, session.token);
       setDone(true);
     } catch {
       setSubmitError('Network error. Please check your connection and try again.');
@@ -324,7 +437,27 @@ export default function CreateGroupWizard() {
               Group Created!
             </h1>
             <p className="text-gray-500 mb-2 text-lg font-semibold">{createdGroup?.name || data.name}</p>
-            <p className="text-gray-400 mb-8">Your savings group has been created successfully. Start inviting members to get going.</p>
+            <p className="text-gray-400 mb-6">Your savings group has been created successfully. Start inviting members to get going.</p>
+            {inviteSummary && (inviteSummary.sent.length > 0 || inviteSummary.failed.length > 0) && (
+              <div className="rounded-2xl p-4 mb-6 text-left" style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
+                {inviteSummary.sent.length > 0 && (
+                  <p className="text-sm text-gray-700">
+                    <strong>{inviteSummary.sent.length}</strong> invitation{inviteSummary.sent.length === 1 ? '' : 's'} sent. Invitees will be asked to log in or sign up, complete their profile, then join your group.
+                  </p>
+                )}
+                {inviteSummary.failed.length > 0 && (
+                  <div className="mt-2">
+                    <p className="text-sm font-bold" style={{ color: '#B91C1C' }}>Couldn&apos;t invite:</p>
+                    <ul className="mt-1 space-y-0.5">
+                      {inviteSummary.failed.map(failure => (
+                        <li key={failure.email} className="text-xs text-gray-600">{failure.email} — {failure.reason}</li>
+                      ))}
+                    </ul>
+                    <p className="text-xs text-gray-500 mt-1">You can resend these from the group page.</p>
+                  </div>
+                )}
+              </div>
+            )}
             <div className="flex flex-col gap-3">
               <Button
                 asChild
@@ -394,12 +527,25 @@ export default function CreateGroupWizard() {
                   </div>
                 )}
                 {needsPaymentSetup && (
-                  <div className="flex gap-3 mt-3 flex-wrap">
-                    {needsIdentitySetup && (
-                      <Link to={`/verify-identity?next=${encodeURIComponent(verificationReturnPath)}`} style={{ fontSize: 13, fontWeight: 700, color: '#DC2626', textDecoration: 'underline' }}>Verify your identity</Link>
+                  <div className="flex flex-col gap-2 mt-3">
+                    {(missingSteps.length ? missingSteps : []).map(step => (
+                      <Link
+                        key={step.key}
+                        to={step.key === 'identity' ? `/verify-identity?next=${encodeURIComponent(verificationReturnPath)}` : step.href}
+                        style={{ fontSize: 13, fontWeight: 700, color: '#DC2626', textDecoration: 'underline' }}
+                      >
+                        {step.label}
+                      </Link>
+                    ))}
+                    {!missingSteps.length && (
+                      <div className="flex gap-3 flex-wrap">
+                        {needsIdentitySetup && (
+                          <Link to={`/verify-identity?next=${encodeURIComponent(verificationReturnPath)}`} style={{ fontSize: 13, fontWeight: 700, color: '#DC2626', textDecoration: 'underline' }}>Verify your identity</Link>
+                        )}
+                        <Link to="/payments/methods" style={{ fontSize: 13, fontWeight: 700, color: '#DC2626', textDecoration: 'underline' }}>Add payment method</Link>
+                        <Link to="/payments/payout" style={{ fontSize: 13, fontWeight: 700, color: '#DC2626', textDecoration: 'underline' }}>Connect payout destination</Link>
+                      </div>
                     )}
-                    <Link to="/payments/methods" style={{ fontSize: 13, fontWeight: 700, color: '#DC2626', textDecoration: 'underline' }}>Add payment method</Link>
-                    <Link to="/payments/payout" style={{ fontSize: 13, fontWeight: 700, color: '#DC2626', textDecoration: 'underline' }}>Connect payout destination</Link>
                   </div>
                 )}
               </div>
@@ -523,19 +669,23 @@ export default function CreateGroupWizard() {
                       <label className="text-sm font-bold text-gray-700 block mb-2">Number of Members</label>
                       <div className="flex items-center gap-4">
                         <button
-                          onClick={() => set('memberCount', Math.max(2, data.memberCount - 1))}
-                          className="w-10 h-10 rounded-xl border border-gray-200 flex items-center justify-center text-lg font-bold hover:bg-gray-50 transition-colors"
+                          onClick={() => set('memberCount', Math.max(MIN_GROUP_MEMBERS, data.memberCount - 1))}
+                          disabled={data.memberCount <= MIN_GROUP_MEMBERS}
+                          className="w-10 h-10 rounded-xl border border-gray-200 flex items-center justify-center text-lg font-bold hover:bg-gray-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                         >
                           −
                         </button>
                         <span className="text-4xl font-black w-16 text-center" style={{ fontFamily: 'Nunito, sans-serif', color: '#2EAF6F' }}>{data.memberCount}</span>
                         <button
-                          onClick={() => set('memberCount', Math.min(50, data.memberCount + 1))}
+                          onClick={() => set('memberCount', Math.min(MAX_GROUP_MEMBERS, data.memberCount + 1))}
                           className="w-10 h-10 rounded-xl border border-gray-200 flex items-center justify-center text-lg font-bold hover:bg-gray-50 transition-colors"
                         >
                           +
                         </button>
                       </div>
+                      <p className="text-xs text-gray-500 mt-2">
+                        A savings group needs at least {MIN_GROUP_MEMBERS} members to start collecting, and can have up to {MAX_GROUP_MEMBERS}.
+                      </p>
                     </div>
                     <div className="rounded-2xl p-4" style={{ background: 'rgba(46,175,111,0.06)', border: '1px solid rgba(46,175,111,0.15)' }}>
                       <div className="flex items-center gap-2 mb-1">
@@ -639,17 +789,19 @@ export default function CreateGroupWizard() {
 
                 {step === 5 && (
                   <div className="space-y-5">
-                    <p className="text-gray-500 text-sm mb-5">Add emails now if you want a reminder list. You&apos;ll send real invites after the group is created.</p>
+                    <p className="text-gray-500 text-sm mb-5">Add the email addresses of the people you want in this group — we&apos;ll email them an invitation as soon as the group is created.</p>
                     <div>
                       <label className="text-sm font-bold text-gray-700 block mb-1.5">Invite by email</label>
                       <textarea
                         value={data.inviteEmails}
                         onChange={event => set('inviteEmails', event.target.value)}
-                        placeholder="Enter email addresses, one per line"
+                        placeholder="Enter email addresses, separated by commas or one per line"
                         rows={4}
                         className="w-full px-4 py-3 rounded-2xl border border-gray-200 text-sm focus:outline-none focus:border-green-400 transition-colors resize-none"
                       />
-                      <p className="text-xs text-gray-400 mt-1">You can send actual invites from the group page right after creation.</p>
+                      <p className="text-xs text-gray-400 mt-1">
+                        Each person gets an email inviting them to log in (or sign up), complete their profile and join this group. You can send more invites from the group page later.
+                      </p>
                     </div>
                     <div className="rounded-2xl p-4" style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
                       <div className="flex items-center gap-2 mb-2">
