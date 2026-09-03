@@ -137,8 +137,34 @@ export const membershipService = {
       );
     }
 
-    // Enforce the group's minimum Trust Score, set by its creator
-    if (group.min_trust_score > 0 && user.trust_score < group.min_trust_score) {
+    // Resolve whether this user was actually invited by the leader — either
+    // via the token in the URL, or (fallback) a still-open invitation the
+    // leader sent to this exact account email for this group. The fallback
+    // matters because the emailed link's token can expire (7 days) while the
+    // invitee is still working through onboarding (payment, subscription,
+    // identity verification), or because they clicked "Join" straight from
+    // the group page instead of the emailed link — in both cases the leader
+    // already vetted them, so it must not be treated as a fresh self-request.
+    let invitation: Awaited<ReturnType<typeof groupService.getInvitation>> | null = null;
+    if (inviteToken) {
+      try {
+        const inv = await groupService.getInvitation(inviteToken);
+        if (inv.group_id === groupId) invitation = inv;
+      } catch {
+        // Invalid/expired/used token — fall through to the email-match lookup below.
+      }
+    }
+    if (!invitation) {
+      invitation = await groupService.findOpenInvitationForEmail(groupId, user.email);
+    }
+
+    // Enforce the group's minimum Trust Score, set by its creator — but ONLY
+    // for users requesting to join themselves (e.g. found the group via
+    // search). A leader-issued invite means the leader already vetted this
+    // specific person, so the entry barrier does not apply to invitees; it
+    // would otherwise let a leader's own invited members get blocked by a
+    // bar the leader never intended to apply to people they hand-picked.
+    if (!invitation && group.min_trust_score > 0 && user.trust_score < group.min_trust_score) {
       throw new AppError(
         `This group requires a minimum Trust Score of ${group.min_trust_score}. Your current Trust Score is ${user.trust_score}.`,
         403,
@@ -146,13 +172,11 @@ export const membershipService = {
       );
     }
 
-    // If invite token provided, validate and mark used — leader already
-    // vetted this person, so they join as an active member immediately.
-    if (inviteToken) {
-      const inv = await groupService.getInvitation(inviteToken);
-      if (inv.group_id !== groupId) throw new AppError('Invalid invitation for this group.', 400);
+    // Invited (by token or by matching email) — leader already vetted this
+    // person, so they join as an active member immediately, no approval step.
+    if (invitation) {
       await db.update(schema.groupInvitations)
-        .set({ accepted: true }).where(eq(schema.groupInvitations.token, inviteToken));
+        .set({ accepted: true }).where(eq(schema.groupInvitations.token, invitation.token));
       await createAuditLog({ userId, action: 'INVITATION_ACCEPTED', entity: 'savings_groups', entityId: groupId, ipAddress });
 
       const rotationOrder = activeCount + 1;

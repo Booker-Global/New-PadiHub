@@ -631,6 +631,64 @@ export const groupService = {
   },
 
   /**
+   * Fallback lookup used by membershipService.join(): finds the most recent
+   * still-unaccepted invitation the leader sent to this exact email address
+   * for this group, regardless of whether its token has expired or the
+   * caller even has the token in hand (e.g. they're clicking "Join" straight
+   * from the group page rather than the emailed link, or the 7-day link
+   * expired while they were completing onboarding — payment, subscription,
+   * and identity verification can easily take longer than that). A leader's
+   * invite is a standing vetting decision, not a one-shot ticket, so an
+   * expired token must never force an already-invited person through the
+   * Trust-Score-gated self-request/approval flow instead.
+   */
+  async findOpenInvitationForEmail(groupId: string, email?: string | null) {
+    if (!email) return null;
+    const normalized = email.trim().toLowerCase();
+    const rows = await db.select().from(schema.groupInvitations)
+      .where(and(eq(schema.groupInvitations.group_id, groupId), eq(schema.groupInvitations.accepted, false)));
+    const matches = rows.filter(row => (row.email ?? '').trim().toLowerCase() === normalized);
+    if (!matches.length) return null;
+    return matches.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+  },
+
+  /**
+   * Every still-open (unaccepted) invitation addressed to this email, across
+   * ALL groups — powers the "you have a pending group invitation" banner
+   * that must stay visible on the invitee's dashboard/profile throughout
+   * signup and onboarding (Section 0.1), so they never lose sight of it
+   * once payment, subscription, and identity verification are complete.
+   */
+  async getPendingInvitationsForEmail(email?: string | null) {
+    if (!email) return [];
+    const normalized = email.trim().toLowerCase();
+    const rows = await db.select({
+      token:      schema.groupInvitations.token,
+      group_id:   schema.groupInvitations.group_id,
+      email:      schema.groupInvitations.email,
+      expires_at: schema.groupInvitations.expires_at,
+      created_at: schema.groupInvitations.created_at,
+      group_name: schema.savingsGroups.name,
+      group_status: schema.savingsGroups.status,
+    })
+      .from(schema.groupInvitations)
+      .innerJoin(schema.savingsGroups, eq(schema.groupInvitations.group_id, schema.savingsGroups.id))
+      .where(eq(schema.groupInvitations.accepted, false));
+
+    return rows
+      .filter(row => (row.email ?? '').trim().toLowerCase() === normalized)
+      .filter(row => row.group_status !== 'closed' && row.group_status !== 'expired')
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .map(row => ({
+        token: row.token,
+        group_id: row.group_id,
+        group_name: row.group_name,
+        expired: new Date() > row.expires_at,
+        join_link: `/savings-groups/${row.group_id}/join?invite_token=${row.token}`,
+      }));
+  },
+
+  /**
    * Aggregated data for the "Manage Group" / leader dashboard — the page
    * MUST ONLY reflect groups the requesting user actually leads (leader_id),
    * and every figure returned here must be something PadiHub genuinely
