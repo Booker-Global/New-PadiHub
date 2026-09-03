@@ -351,6 +351,21 @@ export const membershipService = {
   },
 
   /**
+   * Section 15.D — executes a PASSED member-removal vote (voteService owns
+   * proposing/tallying the vote itself). Removes the target via the
+   * standard Compensated Compression path; if the target was the group's
+   * Owner, routes through departGroupOwner instead so tenure-based
+   * succession (Section 15.B) also applies.
+   */
+  async removeMemberByVote(groupId: string, targetUserId: string, ipAddress?: string) {
+    const group = await groupService.getById(groupId);
+    if (group.leader_id === targetUserId) {
+      return this.departGroupOwner(targetUserId, groupId, 'vote_removed', ipAddress);
+    }
+    return this.departMember(targetUserId, groupId, 'vote_removed', ipAddress);
+  },
+
+  /**
    * Section 15.B — Owner departure (voluntary exit, default-suspension, or
    * account deletion). If the group never reached the 3-member launch
    * threshold (still Draft), there's no compression to do — nothing was
@@ -366,7 +381,7 @@ export const membershipService = {
    */
   async departGroupOwner(
     userId: string, groupId: string,
-    reason: 'voluntary' | 'removed_by_leader' | 'defaulted',
+    reason: 'voluntary' | 'removed_by_leader' | 'defaulted' | 'vote_removed',
     ipAddress?: string,
   ) {
     const group = await groupService.getById(groupId);

@@ -261,13 +261,18 @@ export const votes = mysqlTable('votes', {
   // vote_email_tokens) and a single reject or 48h timeout invalidates them —
   // see voteService.checkAndClose. 'payout_swap' is a direct 1:1
   // accept/decline with the target member (also email-based), not a
-  // group-wide vote.
-  proposal_type:  mysqlEnum('proposal_type', ['payout_swap', 'exceptional_request', 'member_admission', 'contribution_claim']).notNull(),
+  // group-wide vote. 'member_removal' is a unanimous group-wide vote (like
+  // member_admission/contribution_claim) EXCEPT the target_member_id is
+  // excluded from both the voting body and the eligible-voter tally — see
+  // voteService.proposeMemberRemoval.
+  proposal_type:  mysqlEnum('proposal_type', ['payout_swap', 'exceptional_request', 'member_admission', 'contribution_claim', 'member_removal']).notNull(),
   proposer_id:    varchar('proposer_id', { length: 36 }).notNull().references(() => users.id),
   proposal_text:  text('proposal_text').notNull(),
-  // The other party this vote concerns, when it's a 1:1 matter rather than a
-  // full-group one — the swap target for 'payout_swap', or left null for
-  // group-wide votes ('member_admission', 'contribution_claim').
+  // The other party this vote concerns — the swap target for 'payout_swap'
+  // (a direct 1:1 accept/decline), the member being voted out for
+  // 'member_removal' (a group-wide unanimous vote excluding this member),
+  // or left null for other group-wide votes ('member_admission',
+  // 'contribution_claim').
   target_member_id: varchar('target_member_id', { length: 36 }).references(() => users.id),
   // Structured payload for the vote (invitee email for member_admission,
   // claimed amount for contribution_claim) — kept separate from

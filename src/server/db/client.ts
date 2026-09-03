@@ -182,7 +182,7 @@ const REQUIRED_ENUM_VALUES: Record<string, Record<string, string[]>> = {
     payment_status: ['scheduled', 'due', 'paid', 'failed', 'missed', 'pending_default', 'defaulted'],
   },
   votes: {
-    proposal_type: ['payout_swap', 'exceptional_request', 'member_admission', 'contribution_claim'],
+    proposal_type: ['payout_swap', 'exceptional_request', 'member_admission', 'contribution_claim', 'member_removal'],
   },
   subscriptions: {
     billing_status: ['active', 'past_due', 'cancelled', 'trialing', 'paused'],

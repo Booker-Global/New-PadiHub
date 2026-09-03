@@ -247,6 +247,7 @@ app.post('/api/votes',           authenticate, ...voteController.create);
 app.post('/api/votes/payout-swap', authenticate, ...voteController.proposeSwap);
 app.post('/api/votes/member-admission', authenticate, ...voteController.proposeAdmission);
 app.post('/api/votes/contribution-claim', authenticate, ...voteController.proposeClaim);
+app.post('/api/votes/member-removal', authenticate, ...voteController.proposeRemoval);
 app.get('/api/votes/respond',    voteController.respond);
 app.put('/api/votes/:id',        authenticate, ...voteController.cast);
 app.put('/api/votes/:id/close',  authenticate, voteController.close);
