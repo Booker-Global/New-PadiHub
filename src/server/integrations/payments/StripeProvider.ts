@@ -118,12 +118,27 @@ export class StripeProvider implements IPaymentProvider {
     // the card is genuinely never charged at signup — this is the real
     // provider-level defer, not just a DB flag subscriptionService also
     // keeps in sync (see resumeBilling/pauseBilling below).
+    //
+    // payment_behavior: 'default_incomplete' must NEVER be combined with
+    // pause_collection at creation time: Stripe still generates (and
+    // immediately voids, because of pause_collection) the first invoice,
+    // but default_incomplete forces the subscription's status to stay
+    // 'incomplete' until an invoice is actually paid — which, once voided,
+    // can never happen. That previously left every deferred-billing member
+    // (i.e. everyone who hasn't yet joined a 3+ member active group)
+    // permanently stuck "awaiting payment confirmation" even after
+    // completing every onboarding step, and fired the payment-failed
+    // notification/email for a charge that was never even attempted. There
+    // is nothing to confirm when billing is deferred (no invoice is ever
+    // due), so only request default_incomplete confirmation when billing is
+    // genuinely live.
     const subscription = await stripe.subscriptions.create({
       customer: params.customerId,
       items:    [{ price: priceId }],
       metadata: { padihub_user_id: params.userId },
-      payment_behavior: 'default_incomplete',
-      ...(params.deferBilling ? { pause_collection: { behavior: 'void' as const } } : {}),
+      ...(params.deferBilling
+        ? { pause_collection: { behavior: 'void' as const } }
+        : { payment_behavior: 'default_incomplete' as const }),
     }) as unknown as Stripe.Subscription & { current_period_end: number };
 
     const renewalDate = new Date(subscription.current_period_end * 1000);

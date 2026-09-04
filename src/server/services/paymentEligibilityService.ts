@@ -34,6 +34,38 @@ type EligibilityUser = {
 };
 
 /**
+ * Self-heal for `users.subscription_status`: a subscription can genuinely
+ * already be confirmed with the provider — billing_status 'active' (real
+ * billing live) or 'paused' (Section D.2 deferred billing: equally
+ * confirmed, simply not yet charging until the member joins an active 3+
+ * member group) — while `users.subscription_status` is still stuck at a
+ * stale non-active value (e.g. a transient failure partway through an
+ * earlier activation attempt, or a race between two onboarding-completion
+ * paths that both call activateSubscriptionIfEligible). Left unhealed, this
+ * is exactly what leaves an otherwise fully-onboarded member (payment
+ * method, payout and identity all verified) stuck seeing "Complete your
+ * subscription payment" forever and blocked from joining/creating a group
+ * they've already paid for.
+ *
+ * Pure DB read + (if needed) DB write — this never calls the payment
+ * provider, so unlike retrying subscription creation itself it is always
+ * safe to run on every eligibility check (dashboard load, group join
+ * attempt, etc.) without risking duplicate provider subscriptions or
+ * repeated payment-failed emails for a genuine, still-unresolved failure.
+ */
+async function refreshSubscriptionActivationStatus(userId: string): Promise<boolean> {
+  const subRows = await db.select({ billing_status: schema.subscriptions.billing_status })
+    .from(schema.subscriptions).where(eq(schema.subscriptions.user_id, userId)).limit(1);
+  if (!subRows.length) return false;
+
+  const isConfirmedWithProvider = subRows[0].billing_status === 'active' || subRows[0].billing_status === 'paused';
+  if (!isConfirmedWithProvider) return false;
+
+  await db.update(schema.users).set({ subscription_status: 'active' as const }).where(eq(schema.users.id, userId));
+  return true;
+}
+
+/**
  * Self-healing live check for Stripe Connect accounts: if the account was
  * created but we haven't yet recorded `payout_verified_at` (e.g. the
  * `account.updated` webhook hasn't fired yet in this environment), check
@@ -106,7 +138,8 @@ export async function getPaymentEligibility(userId: string) {
   const emailVerified = Boolean(user.email_verified);
   const identityVerified = Boolean(user.identity_verified);
   const subscriptionTierSelected = user.subscription_tier === 'basic' || user.subscription_tier === 'premium';
-  const subscriptionActive = user.subscription_status === 'active' || user.subscription_status === 'trial';
+  const subscriptionActive = (user.subscription_status === 'active' || user.subscription_status === 'trial')
+    || await refreshSubscriptionActivationStatus(user.id);
 
   return {
     emailVerified,
