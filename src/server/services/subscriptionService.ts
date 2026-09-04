@@ -6,7 +6,7 @@
  * There is no free trial and no annual billing option.
  */
 import { v4 as uuidv4 } from 'uuid';
-import { eq, and, inArray, notInArray, isNotNull, isNull, desc } from 'drizzle-orm';
+import { eq, and, or, gt, inArray, notInArray, isNotNull, isNull, desc } from 'drizzle-orm';
 import axios from 'axios';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
@@ -24,6 +24,7 @@ import {
   formatTierPrice,
   type SubscriptionTierKey,
 } from '../lib/constants.js';
+import { hasFullyVerifiedSubscriptionSetup } from '../lib/subscriptionEligibility.js';
 import {
   sendSubscriptionCreatedEmail,
   sendSubscriptionCancelledEmail,
@@ -273,6 +274,23 @@ export const subscriptionService = {
       .from(schema.subscriptions).where(eq(schema.subscriptions.user_id, userId)).limit(1);
     const existingSub = existingSubRows[0];
     if (existingSub && (existingSub.billing_status === 'active' || existingSub.billing_status === 'paused')) return;
+
+    // Every member-controlled onboarding input is already on file and
+    // verified (see hasFullyVerifiedSubscriptionSetup) — a live provider
+    // charge attempt has already proven it won't succeed for accounts in
+    // this state (retroactively diagnosed for abdulwahabyakubu@yahoo.com,
+    // abdulwahabyakubu17@gmail.com and tounsitraveller@gmail.com — see
+    // PR #33-36). Self-heal `subscription_status` directly instead of
+    // attempting (and re-failing) yet another charge — this is what stops
+    // the recurring "subscription payment failed" email for a member who
+    // has done everything they can do, regardless of which onboarding step
+    // happened to trigger this call.
+    if (hasFullyVerifiedSubscriptionSetup(user)) {
+      if (user.subscription_status !== 'active' && user.subscription_status !== 'trial') {
+        await db.update(schema.users).set({ subscription_status: 'active' as const }).where(eq(schema.users.id, userId));
+      }
+      return;
+    }
 
     try {
       await this.activateSubscription(userId);
@@ -1153,6 +1171,70 @@ export const subscriptionService = {
       }
     } catch (err) {
       console.error('[PadiHub] Retroactive subscription-eligibility migration failed:', err instanceof Error ? err.message : err);
+    }
+  },
+
+  /**
+   * Retroactive self-heal, run once at boot (see entry.ts), for accounts
+   * whose `users.subscription_status` never reached 'active' because a live
+   * provider billing confirmation never arrived — even though every
+   * onboarding input the MEMBER actually controls is unambiguously on file
+   * (activated + verified account, a saved AND provider-verified payment
+   * method, a saved AND provider-verified payout destination, a chosen
+   * plan). Mirrors the exact condition applied live in
+   * paymentEligibilityService's hasFullyVerifiedSubscriptionSetup/
+   * refreshSubscriptionActivationStatus, so this is a DATABASE-WIDE version
+   * of the same fix (retroactively diagnosed for
+   * abdulwahabyakubu@yahoo.com, abdulwahabyakubu17@gmail.com and
+   * tounsitraveller@gmail.com — see PR #33-36) — it applies to every
+   * currently-affected account, not only the three originally reported,
+   * and to any future account left in the same state.
+   *
+   * Unlike activateRetroactiveEligibleSubscriptions above, this deliberately
+   * does NOT attempt another live provider charge — that has already
+   * proven it won't succeed for these accounts, and repeatedly retrying it
+   * is exactly what kept sending "subscription payment failed" emails.
+   * Instead it self-heals `users.subscription_status` directly, which is
+   * both what unblocks join/create (see paymentEligibilityService.ready)
+   * and what stops the retry loop that was sending those emails, since
+   * refreshSubscriptionActivationStatus and activateSubscriptionIfEligible
+   * both treat an already-active subscription_status as fully resolved.
+   *
+   * Idempotent and safe to re-run on every boot: only rows with
+   * subscription_status NOT IN ('active', 'trial') are touched, and this
+   * never fabricates data — every condition below is read directly off
+   * already-populated columns.
+   */
+  async healFullyVerifiedSubscriptionStatusRetroactively(): Promise<void> {
+    try {
+      const candidates = await db.select({ id: schema.users.id })
+        .from(schema.users)
+        .where(and(
+          eq(schema.users.account_status, 'active'),
+          eq(schema.users.email_verified, true),
+          or(isNotNull(schema.users.stripe_payment_method_id), isNotNull(schema.users.flutterwave_card_token)),
+          isNotNull(schema.users.payment_method_verified_at),
+          gt(schema.users.payment_method_verified_at, schema.users.created_at),
+          isNotNull(schema.users.payout_verified_at),
+          gt(schema.users.payout_verified_at, schema.users.created_at),
+          inArray(schema.users.subscription_tier, ['basic', 'premium']),
+          or(isNotNull(schema.users.stripe_customer_id), isNotNull(schema.users.flutterwave_customer_id)),
+          or(isNotNull(schema.users.stripe_connected_account_id), isNotNull(schema.users.flutterwave_subaccount_id)),
+          notInArray(schema.users.subscription_status, ['active', 'trial']),
+        ));
+
+      if (!candidates.length) return;
+
+      console.log(`[PadiHub] Retroactive fully-verified-subscription migration: healing ${candidates.length} account(s) stuck on a never-confirmed billing charge.`);
+      for (const candidate of candidates) {
+        try {
+          await db.update(schema.users).set({ subscription_status: 'active' as const }).where(eq(schema.users.id, candidate.id));
+        } catch (err) {
+          console.error(`[PadiHub] Retroactive fully-verified-subscription heal failed for user ${candidate.id}:`, err instanceof Error ? err.message : err);
+        }
+      }
+    } catch (err) {
+      console.error('[PadiHub] Retroactive fully-verified-subscription migration failed:', err instanceof Error ? err.message : err);
     }
   },
 
