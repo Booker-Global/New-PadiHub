@@ -229,6 +229,17 @@ export const subscriptionService = {
    * emails the member on a genuine provider/charge failure, but never
    * throws — the calling request (saving a card, confirming a payout,
    * etc.) must still succeed even if activation itself fails.
+   *
+   * Deliberately does NOT gate on `users.subscription_status` to decide
+   * whether a subscription already exists — that column can end up
+   * 'active' with no corresponding `subscriptions` row at all if an
+   * earlier bug (or a manual data fix) ever set it without going through
+   * createSubscription's insert. Trusting it here would make this
+   * function — one of the platform's core self-heals — permanently blind
+   * to exactly the accounts it exists to repair. Instead it checks the
+   * real `subscriptions` table directly; `activateSubscription()` below
+   * performs the same real check before deciding whether to create a new
+   * one, so this can never create a duplicate.
    */
   async activateSubscriptionIfEligible(userId: string): Promise<void> {
     const userRows = await db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1);
@@ -237,7 +248,11 @@ export const subscriptionService = {
 
     if (!isSubscriptionTierKey(user.subscription_tier)) return;
     if (!user.identity_verified || !user.payment_method_verified_at || !user.payout_verified_at) return;
-    if (user.subscription_status === 'active' || user.subscription_status === 'trial') return;
+
+    const existingSubRows = await db.select({ billing_status: schema.subscriptions.billing_status })
+      .from(schema.subscriptions).where(eq(schema.subscriptions.user_id, userId)).limit(1);
+    const existingSub = existingSubRows[0];
+    if (existingSub && (existingSub.billing_status === 'active' || existingSub.billing_status === 'paused')) return;
 
     try {
       await this.activateSubscription(userId);
