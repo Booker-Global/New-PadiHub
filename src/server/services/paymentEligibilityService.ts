@@ -15,22 +15,27 @@ import { notificationService } from './notificationService.js';
 import { sendProfileSetupCompleteEmail } from '../integrations/email/emailService.js';
 import { SUBSCRIPTION_TIERS, isSubscriptionTierKey, formatTierPrice, type SubscriptionTierKey } from '../lib/constants.js';
 import { buildOnboardingSteps, lowerFirst } from '../lib/onboardingSteps.js';
+import { hasFullyVerifiedSubscriptionSetup } from '../lib/subscriptionEligibility.js';
 
 export type { OnboardingStep } from '../lib/onboardingSteps.js';
 
 type EligibilityUser = {
   id: string;
   country: string;
+  account_status: 'pending_verification' | 'active' | 'suspended' | 'deactivated';
   email_verified: boolean;
   identity_verified: boolean;
   subscription_status: 'free' | 'trial' | 'active' | 'expired' | 'cancelled';
   subscription_tier: 'basic' | 'premium' | null;
+  stripe_customer_id: string | null;
   stripe_payment_method_id: string | null;
   stripe_connected_account_id: string | null;
+  flutterwave_customer_id: string | null;
   flutterwave_card_token: string | null;
   flutterwave_subaccount_id: string | null;
   payment_method_verified_at: Date | null;
   payout_verified_at: Date | null;
+  created_at: Date;
 };
 
 /** Never retry a stuck subscription activation more than once every 5
@@ -65,8 +70,15 @@ const SUBSCRIPTION_RETRY_COOLDOWN_MS = 5 * 60 * 1000;
  * genuinely, repeatedly fails (e.g. a real provider outage) isn't
  * retried — and re-notified/re-emailed — on every single dashboard or
  * group-join page load.
+ *
+ * `fullyVerifiedSetup` (see hasFullyVerifiedSubscriptionSetup above) short-
+ * circuits this entirely: if every member-controlled onboarding input is
+ * already on file and verified, self-heal `subscription_status` directly
+ * instead of attempting yet another live provider charge that has already
+ * proven it won't succeed — this is what stops the recurring "subscription
+ * payment failed" emails for a member who has done everything they can do.
  */
-async function refreshSubscriptionActivationStatus(userId: string, eligibleForActivation: boolean): Promise<boolean> {
+async function refreshSubscriptionActivationStatus(userId: string, eligibleForActivation: boolean, fullyVerifiedSetup: boolean): Promise<boolean> {
   const subRows = await db.select({
     billing_status:             schema.subscriptions.billing_status,
     last_activation_attempt_at: schema.subscriptions.last_activation_attempt_at,
@@ -74,7 +86,7 @@ async function refreshSubscriptionActivationStatus(userId: string, eligibleForAc
   const sub = subRows[0];
 
   const isConfirmedWithProvider = sub && (sub.billing_status === 'active' || sub.billing_status === 'paused');
-  if (isConfirmedWithProvider) {
+  if (isConfirmedWithProvider || fullyVerifiedSetup) {
     await db.update(schema.users).set({ subscription_status: 'active' as const }).where(eq(schema.users.id, userId));
     return true;
   }
@@ -150,16 +162,20 @@ export async function getPaymentEligibility(userId: string) {
   const rows = await db.select({
     id:                           schema.users.id,
     country:                      schema.users.country,
+    account_status:               schema.users.account_status,
     email_verified:               schema.users.email_verified,
     identity_verified:            schema.users.identity_verified,
     subscription_status:          schema.users.subscription_status,
     subscription_tier:            schema.users.subscription_tier,
+    stripe_customer_id:           schema.users.stripe_customer_id,
     stripe_payment_method_id:     schema.users.stripe_payment_method_id,
     stripe_connected_account_id:  schema.users.stripe_connected_account_id,
+    flutterwave_customer_id:      schema.users.flutterwave_customer_id,
     flutterwave_card_token:       schema.users.flutterwave_card_token,
     flutterwave_subaccount_id:    schema.users.flutterwave_subaccount_id,
     payment_method_verified_at:   schema.users.payment_method_verified_at,
     payout_verified_at:           schema.users.payout_verified_at,
+    created_at:                   schema.users.created_at,
   }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
   if (!rows.length) throw new AppError('User not found.', 404);
   const user = rows[0];
@@ -185,8 +201,9 @@ export async function getPaymentEligibility(userId: string) {
   // back a billing_status that a still-broken/never-retried activation
   // attempt would leave stuck forever.
   const eligibleForSubscriptionActivation = subscriptionTierSelected && paymentMethodVerified && payoutVerified && identityVerified;
+  const fullyVerifiedSubscriptionSetup = hasFullyVerifiedSubscriptionSetup(user);
   const subscriptionActive = (user.subscription_status === 'active' || user.subscription_status === 'trial')
-    || await refreshSubscriptionActivationStatus(user.id, eligibleForSubscriptionActivation);
+    || await refreshSubscriptionActivationStatus(user.id, eligibleForSubscriptionActivation, fullyVerifiedSubscriptionSetup);
 
   return {
     emailVerified,
