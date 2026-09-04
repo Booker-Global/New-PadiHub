@@ -126,6 +126,10 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
     { column: 'identity_verification_status', sqlType: "ENUM('not_started','pending','verified','failed') NOT NULL DEFAULT 'not_started'" },
     { column: 'identity_verification_fee_amount', sqlType: 'DECIMAL(12,2) NULL' },
     { column: 'subscription_activation_failure_notified_at', sqlType: 'TIMESTAMP NULL' },
+    { column: 'group_join_reminder_last_sent_at', sqlType: 'TIMESTAMP NULL' },
+    { column: 'onboarding_incomplete_reminder_last_sent_at', sqlType: 'TIMESTAMP NULL' },
+    { column: 'resubscribe_reminder_last_sent_at', sqlType: 'TIMESTAMP NULL' },
+    { column: 'vote_removed_count', sqlType: 'INT NOT NULL DEFAULT 0' },
   ],
   savings_groups: [
     { column: 'description',     sqlType: 'TEXT NULL' },
@@ -165,6 +169,8 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
     { column: 'renewal_date',             sqlType: 'TIMESTAMP NULL' },
     { column: 'pending_tier',             sqlType: "ENUM('basic','premium') NULL" },
     { column: 'last_activation_attempt_at', sqlType: 'TIMESTAMP NULL' },
+    { column: 'cancelled_at',               sqlType: 'TIMESTAMP NULL' },
+    { column: 'first_charge_failed_at',     sqlType: 'TIMESTAMP NULL' },
   ],
   votes: [
     { column: 'target_member_id',    sqlType: 'VARCHAR(36) NULL' },

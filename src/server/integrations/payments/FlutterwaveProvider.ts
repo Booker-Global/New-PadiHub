@@ -9,6 +9,7 @@ import type {
   IPaymentProvider, CreateCustomerResult, SavePaymentMethodResult,
   ChargeResult, TransferResult, SubscriptionResult, WebhookResult,
 } from './PaymentProviderInterface.js';
+import { PaymentProviderConfigError } from './PaymentProviderInterface.js';
 
 const FLW_BASE = 'https://api.flutterwave.com/v3';
 
@@ -29,7 +30,7 @@ type FlutterwaveVerifyResponse = {
 
 function getHeaders() {
   const key = process.env.FLUTTERWAVE_SECRET_KEY;
-  if (!key) throw new Error('FLUTTERWAVE_SECRET_KEY environment variable is not set.');
+  if (!key) throw new PaymentProviderConfigError('FLUTTERWAVE_SECRET_KEY environment variable is not set.');
   return {
     Authorization: 'Bearer ' + key,
     'Content-Type': 'application/json',
@@ -188,7 +189,7 @@ export class FlutterwaveProvider implements IPaymentProvider {
       ? process.env.FLUTTERWAVE_PLAN_ID_NG_PREMIUM_MONTHLY
       : process.env.FLUTTERWAVE_PLAN_ID_NG_MONTHLY;
     if (!planId) {
-      throw new Error(`${params.tier === 'premium' ? 'FLUTTERWAVE_PLAN_ID_NG_PREMIUM_MONTHLY' : 'FLUTTERWAVE_PLAN_ID_NG_MONTHLY'} environment variable is not set.`);
+      throw new PaymentProviderConfigError(`${params.tier === 'premium' ? 'FLUTTERWAVE_PLAN_ID_NG_PREMIUM_MONTHLY' : 'FLUTTERWAVE_PLAN_ID_NG_MONTHLY'} environment variable is not set.`);
     }
 
     const renewalDate = new Date();

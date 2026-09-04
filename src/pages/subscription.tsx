@@ -162,7 +162,7 @@ export default function SubscriptionPage() {
           // is verified in an active (3+ member) group; this is a normal,
           // expected state, not a problem, so it gets its own neutral badge
           // rather than being folded into either "Active" or a failure state.
-          ? { label: 'Billing on hold', color: '#2563EB', background: 'rgba(37,99,235,0.14)' }
+          ? { label: 'Pending Charge', color: '#2563EB', background: 'rgba(37,99,235,0.14)' }
           : { label: 'Active', color: '#2EAF6F', background: 'rgba(46,175,111,0.2)' };
 
   const features = plan
@@ -230,7 +230,7 @@ export default function SubscriptionPage() {
                 <p className="text-gray-400 text-sm">
                   {plan
                     ? status?.billing_status === 'paused'
-                      ? 'Billing on hold — starts once you\'re a verified member of an active group with at least 3 members.'
+                      ? 'Pending Charge — your card is validated but you will only be charged once you\'re a verified member of an active group with at least 3 members.'
                       : renewalDate
                         ? `Next billing ${renewalDate}`
                         : 'Billing starts once you\'re a verified member of an active group with at least 3 members.'

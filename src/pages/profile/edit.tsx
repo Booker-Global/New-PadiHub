@@ -49,6 +49,7 @@ type UserProfile = {
   trust_score?: number | null;
   account_status?: string | null;
   subscription_status?: string | null;
+  subscription_status_display?: string | null;
   email_verified?: boolean | null;
   identity_verified?: boolean | null;
   notification_preferences?: Record<string, unknown> | null;
@@ -253,7 +254,7 @@ export default function EditProfilePage() {
         setCurrency(profile.currency ?? 'Not set');
         setTrustScore(profile.trust_score ?? 0);
         setAccountStatus(humanizeStatus(profile.account_status));
-        setSubscriptionStatus(humanizeStatus(profile.subscription_status));
+        setSubscriptionStatus(profile.subscription_status_display || humanizeStatus(profile.subscription_status));
         setEmailVerified(Boolean(profile.email_verified));
         setIdentityVerified(Boolean(profile.identity_verified));
         setAvatarDataUrl(typeof preferences.avatarDataUrl === 'string' ? preferences.avatarDataUrl : null);

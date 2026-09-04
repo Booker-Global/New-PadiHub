@@ -177,13 +177,11 @@ export default function PricingPage() {
       <style>{`
         .pricing-cards { display: grid; grid-template-columns: 1fr; gap: 2rem; max-width: 72rem; margin: 0 auto; }
         @media (min-width: 768px) { .pricing-cards { grid-template-columns: 1fr 1fr; } }
-        .info-grid { display: grid; grid-template-columns: 1fr; gap: 1.5rem; }
-        @media (min-width: 768px) { .info-grid { grid-template-columns: 1fr 1fr; } }
+        .info-grid { display: grid; grid-template-columns: 1fr; gap: 1.5rem; max-width: 40rem; margin: 0 auto; }
         .shared-grid { display: grid; grid-template-columns: 1fr; gap: 1.5rem; }
         @media (min-width: 640px) { .shared-grid { grid-template-columns: 1fr 1fr; } }
         @media (min-width: 1024px) { .shared-grid { grid-template-columns: repeat(4, 1fr); } }
-        .trust-grid { display: grid; grid-template-columns: 1fr; gap: 1.5rem; text-align: center; }
-        @media (min-width: 768px) { .trust-grid { grid-template-columns: repeat(2, 1fr); } }
+        .trust-grid { display: grid; grid-template-columns: 1fr; gap: 1.5rem; text-align: center; justify-items: center; }
         .cta-btns { display: flex; flex-direction: column; gap: 1rem; justify-content: center; }
         @media (min-width: 640px) { .cta-btns { flex-direction: row; } }
       `}</style>

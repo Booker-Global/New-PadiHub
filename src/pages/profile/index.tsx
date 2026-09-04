@@ -52,6 +52,7 @@ type UserProfile = {
   trust_score?: number | null;
   account_status?: string | null;
   subscription_status?: string | null;
+  subscription_status_display?: string | null;
   subscription_tier?: 'basic' | 'premium' | null;
   email_verified?: boolean | null;
   identity_verified?: boolean | null;
@@ -230,9 +231,11 @@ export default function ProfilePage() {
   const country = formatCountry(profile.country);
   const currency = profile.currency || 'Not set';
   const accountStatus = humanizeStatus(profile.account_status);
-  const isActivelySubscribed = profile.subscription_status === 'active' || profile.subscription_status === 'trial';
+  const statusDisplay = profile.subscription_status_display
+    || (profile.subscription_status === 'active' || profile.subscription_status === 'trial' ? 'Active' : 'Inactive');
+  const isActivelySubscribed = statusDisplay === 'Active' || statusDisplay === 'Pending Charge';
   const subscriptionTierLabel = isActivelySubscribed && profile.subscription_tier
-    ? humanizeStatus(profile.subscription_tier)
+    ? `${humanizeStatus(profile.subscription_tier)}${statusDisplay === 'Pending Charge' ? ' (Pending Charge)' : ''}`
     : 'Unsubscribed';
 
   const achievements = [

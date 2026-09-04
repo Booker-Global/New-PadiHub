@@ -5,10 +5,10 @@ import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
-import { BCRYPT_ROUNDS, TRUST_SCORE_MAX, TRUST_SCORE_MIN, SUBSCRIPTION_TIERS, isSubscriptionTierKey } from '../lib/constants.js';
+import { BCRYPT_ROUNDS, TRUST_SCORE_MAX, TRUST_SCORE_MIN, SUBSCRIPTION_TIERS, isSubscriptionTierKey, resolveSubscriptionStatusDisplay } from '../lib/constants.js';
 import { getPaymentProvider } from '../integrations/payments/PaymentProviderFactory.js';
 import { hashEmail } from '../lib/emailBlocklist.js';
-import { sendAccountDeletedEmail } from '../integrations/email/emailService.js';
+import { sendAccountDeletedEmail, type AccountDeletionReason } from '../integrations/email/emailService.js';
 import { membershipService } from './membershipService.js';
 
 function getDeletedEmail(userId: string): string {
@@ -44,7 +44,22 @@ export const userService = {
     if (!rows.length) throw new AppError('User not found.', 404);
     const safe = { ...rows[0] };
     delete (safe as { password_hash?: string }).password_hash;
-    return safe;
+
+    // Non-technical status label (Section 7 / item 1) — a deferred-billing
+    // ("Pending Charge") member has subscription_status='active' in the DB
+    // just like a fully-active one, so the raw column alone would mislead
+    // the dashboard. Resolve against the subscription's billing_status too.
+    const subRows = await db.select({ billing_status: schema.subscriptions.billing_status })
+      .from(schema.subscriptions)
+      .where(eq(schema.subscriptions.user_id, userId))
+      .orderBy(desc(schema.subscriptions.created_at))
+      .limit(1);
+    const subscription_status_display = resolveSubscriptionStatusDisplay({
+      subscription_status: safe.subscription_status,
+      billing_status: subRows[0]?.billing_status ?? null,
+    });
+
+    return { ...safe, subscription_status_display };
   },
 
   /**
@@ -208,7 +223,36 @@ export const userService = {
     return this.getProfile(userId);
   },
 
+  /** Self-initiated deletion (member clicked "Delete my account"). Permanently blocks the email — see emailBlocklist.ts. */
   async deleteAccount(userId: string, ipAddress?: string) {
+    return this._performAccountDeletion(userId, { reason: 'user_requested', permanentlyBlockEmail: true, ipAddress });
+  },
+
+  /**
+   * Section 2/3/4 — SYSTEM-initiated deletion: 60 days of an incomplete
+   * profile, 60 days cancelled/inactive without re-subscribing, or removed
+   * from a group by member vote for the 3rd time.
+   *
+   * Only 'voted_out_three_times' permanently blocks the email, exactly like
+   * deleteAccount's self-service path — being kicked out of groups three
+   * times is a trust/behavioural judgement on the member, not a passive
+   * lapse, so evading it via delete-then-re-register must be prevented the
+   * same way. The other two reasons (60-day incomplete profile, 60-day
+   * cancelled/inactive) are passive lapses, not misconduct, so those
+   * members MAY sign up again with the same address — they just can't log
+   * back in to this account — see scheduledJobs.ts /
+   * membershipService.departMember.
+   */
+  async systemDeleteAccount(userId: string, reason: Exclude<AccountDeletionReason, 'user_requested'>) {
+    const permanentlyBlockEmail = reason === 'voted_out_three_times';
+    return this._performAccountDeletion(userId, { reason, permanentlyBlockEmail });
+  },
+
+  async _performAccountDeletion(
+    userId: string,
+    options: { reason: AccountDeletionReason; permanentlyBlockEmail: boolean; ipAddress?: string },
+  ) {
+    const { reason, permanentlyBlockEmail, ipAddress } = options;
     const userRows = await db.select({
       id:                        schema.users.id,
       first_name:                schema.users.first_name,
@@ -313,14 +357,20 @@ export const userService = {
       await tx.delete(schema.emailVerificationTokens).where(eq(schema.emailVerificationTokens.user_id, userId));
       await tx.delete(schema.passwordResetTokens).where(eq(schema.passwordResetTokens.user_id, userId));
 
-      // Permanently block the ORIGINAL email before it's overwritten below —
-      // see src/server/lib/emailBlocklist.ts for why (prevents evading
-      // default/suspension history via delete-then-re-register).
-      const emailHash = hashEmail(user.email);
-      const alreadyBlocked = await tx.select({ id: schema.emailBlocklist.id }).from(schema.emailBlocklist)
-        .where(eq(schema.emailBlocklist.email_hash, emailHash)).limit(1);
-      if (!alreadyBlocked.length) {
-        await tx.insert(schema.emailBlocklist).values({ id: uuidv4(), email_hash: emailHash, reason: 'account_deleted' });
+      // Whether the ORIGINAL email gets permanently blocked before it's
+      // overwritten below is decided by the caller (permanentlyBlockEmail) —
+      // see src/server/lib/emailBlocklist.ts, deleteAccount, and
+      // systemDeleteAccount above for exactly which reasons block vs. free
+      // up the email for a fresh sign-up. Prevents evading default/
+      // suspension/vote-kick history via delete-then-re-register for the
+      // reasons that DO block it.
+      if (permanentlyBlockEmail) {
+        const emailHash = hashEmail(user.email);
+        const alreadyBlocked = await tx.select({ id: schema.emailBlocklist.id }).from(schema.emailBlocklist)
+          .where(eq(schema.emailBlocklist.email_hash, emailHash)).limit(1);
+        if (!alreadyBlocked.length) {
+          await tx.insert(schema.emailBlocklist).values({ id: uuidv4(), email_hash: emailHash, reason });
+        }
       }
 
       // Groups the member led/joined have already had their departure logic
@@ -377,11 +427,13 @@ export const userService = {
     });
 
     await createAuditLog({
-      action: 'ACCOUNT_DELETED',
+      action: reason === 'user_requested' ? 'ACCOUNT_DELETED' : 'ACCOUNT_SYSTEM_DELETED',
       entity: 'users',
       entityId: userId,
       ipAddress,
       metadata: {
+        deletionReason: reason,
+        permanentlyBlockedEmail: permanentlyBlockEmail,
         accountDeletionOutcome: hardDeleted ? 'hard_deleted' : 'anonymized',
         groupsDeparted: activeMemberships.map(membership => membership.group_id),
         dependencyCounts,
@@ -392,7 +444,7 @@ export const userService = {
       },
     });
 
-    await sendAccountDeletedEmail(user.email, accountHolderName);
+    await sendAccountDeletedEmail(user.email, accountHolderName, reason);
 
     return { hardDeleted };
   },

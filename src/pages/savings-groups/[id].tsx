@@ -88,6 +88,7 @@ interface Membership {
   strike_count: number;
   join_date: string;
   user_name?: string;
+  trust_score?: number | null;
 }
 
 interface Contribution {
@@ -1403,6 +1404,20 @@ export default function SavingsGroupDetailPage() {
                               <p className="text-xs text-gray-400 break-all">
                                 {titleCase(member.role)} · Position {member.rotation_order ?? '—'}
                               </p>
+                              {member.status === 'active' && (
+                                <div className="flex items-center gap-3 flex-wrap mt-1.5">
+                                  <span className="inline-flex items-center gap-1 text-xs font-semibold text-gray-500">
+                                    <Calendar size={12} style={{ color: '#9CA3AF' }} />
+                                    Joined {new Date(member.join_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
+                                  </span>
+                                  {typeof member.trust_score === 'number' && (
+                                    <span className="inline-flex items-center gap-1 text-xs font-bold" style={{ color: '#2eafaf' }}>
+                                      <Shield size={12} style={{ color: '#2eafaf' }} />
+                                      Trust Score {member.trust_score}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
                             </div>
                             <div className="text-right">
                               <span className="px-2 py-0.5 rounded-full text-xs font-bold" style={{ background: badge.bg, color: badge.color }}>

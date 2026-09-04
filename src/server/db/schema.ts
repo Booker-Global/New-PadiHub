@@ -79,6 +79,30 @@ export const users = mysqlTable('users', {
   // account was re-emailed on every single one of those actions. See
   // subscriptionService.activateSubscriptionIfEligible.
   subscription_activation_failure_notified_at: timestamp('subscription_activation_failure_notified_at'),
+  // Section 1/1a — a fully-onboarded (steps a-e complete) member whose
+  // subscription is 'Pending Charge' (billing paused, see subscriptions.
+  // billing_status) because they haven't yet joined an active (3+ member)
+  // group gets a reminder every 7 days; this throttles it. Cleared whenever
+  // onboarding_completed_email_sent_at is cleared (see
+  // scheduledJobs.weeklyPendingChargeGroupJoinFollowUp).
+  group_join_reminder_last_sent_at: timestamp('group_join_reminder_last_sent_at'),
+  // Section 2 — an account that hasn't yet finished every onboarding step
+  // (a-e) gets a reminder every 7 days detailing what's missing, and the
+  // profile is deleted after 60 days of remaining incomplete — see
+  // scheduledJobs.weeklyIncompleteOnboardingFollowUp.
+  onboarding_incomplete_reminder_last_sent_at: timestamp('onboarding_incomplete_reminder_last_sent_at'),
+  // Section 3 — a member who cancelled their subscription gets a reminder
+  // every 7 days to re-subscribe, and the profile is deleted after 60 days
+  // of remaining cancelled/inactive — see
+  // scheduledJobs.weeklyResubscribeFollowUp.
+  resubscribe_reminder_last_sent_at: timestamp('resubscribe_reminder_last_sent_at'),
+  // Section 4 — cumulative count of times this member has been removed
+  // from a group via a passed member-removal vote (never reset). On the
+  // 3rd, the profile is auto-deleted (see membershipService.departMember /
+  // userService.systemDeleteAccount). Backfilled retroactively from
+  // audit-log history at boot — see subscriptionService.
+  // backfillVoteRemovedCountsAndEnforceThreshold.
+  vote_removed_count:          int('vote_removed_count').notNull().default(0),
   active:                      boolean('active').notNull().default(true),
   role:                        mysqlEnum('role', ['member', 'group_leader', 'admin']).notNull().default('member'),
   created_at:                  timestamp('created_at').notNull().defaultNow(),
@@ -396,6 +420,22 @@ export const subscriptions = mysqlTable('subscriptions', {
   // "payment could not be completed" email on every single onboarding action
   // for a member whose activation is still (genuinely) failing.
   last_activation_attempt_at: timestamp('last_activation_attempt_at'),
+  // Section 3 — stamped whenever billing_status is set to 'cancelled' via
+  // subscriptionService.cancelSubscription (never via account deletion,
+  // which cancels for an unrelated reason). Anchors the 7-day
+  // resubscribe-reminder / 60-day auto-deletion workflow — see
+  // scheduledJobs.weeklyResubscribeFollowUp. Deliberately separate from
+  // updated_at for the same reason as last_activation_attempt_at above.
+  cancelled_at:            timestamp('cancelled_at'),
+  // Section 7 — stamped when the synchronous Flutterwave "first charge on
+  // joining an active group" attempt fails (see subscriptionService's
+  // reconcileBillingForActiveGroupMembership). Anchors the one-time 72-hour
+  // retry (scheduledJobs.dailySubscriptionFirstChargeRetry) — after which,
+  // if still failing, the member is removed from the group they just
+  // joined and notified, per the "never send a payment-failure email except
+  // for an actual failed charge attempt" policy. Cleared as soon as the
+  // retry succeeds (or the member is removed), so it never re-fires.
+  first_charge_failed_at: timestamp('first_charge_failed_at'),
   created_at:              timestamp('created_at').notNull().defaultNow(),
   updated_at:              timestamp('updated_at').notNull().defaultNow().onUpdateNow(),
 });

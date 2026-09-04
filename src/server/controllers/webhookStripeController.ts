@@ -14,6 +14,7 @@ import { createAuditLog } from '../middleware/auditLogger.js';
 import { notificationService } from '../services/notificationService.js';
 import { isSubscriptionTierKey, type SubscriptionTierKey } from '../lib/constants.js';
 import { planCode, subscriptionService } from '../services/subscriptionService.js';
+import { sendSubscriptionPaymentFailedEmail } from '../integrations/email/emailService.js';
 
 /** Recover the tier key ('basic'/'premium') from a stored plan code like 'gb_premium'. */
 function tierFromPlanCode(plan?: string | null): SubscriptionTierKey | null {
@@ -122,6 +123,24 @@ async function handleStripeEvent(event: Stripe.Event) {
         .set({ billing_status: 'active' })
         .where(eq(schema.subscriptions.id, sub.id));
 
+      // An upgrade's first invoice that needed 3D-Secure/extra confirmation
+      // (or was otherwise not yet confirmed) deliberately leaves
+      // users.subscription_tier unchanged until billing is genuinely
+      // active — see subscriptionService.switchPlan's upgrade branch.
+      // subscriptions.plan, however, already reflects the new tier (it's
+      // set immediately, tied to the specific provider subscription object
+      // just created for the upgrade). Now that Stripe confirms this
+      // invoice was actually paid, apply it. Guarded on `!sub.pending_tier`
+      // so this never fires for/collides with the separate
+      // downgrade-at-renewal case handled just below.
+      if (!sub.pending_tier) {
+        const confirmedTier = tierFromPlanCode(sub.plan);
+        if (confirmedTier && confirmedTier !== user.subscription_tier) {
+          await db.update(schema.users).set({ subscription_tier: confirmedTier }).where(eq(schema.users.id, sub.user_id));
+          await createAuditLog({ userId: sub.user_id, action: 'SUBSCRIPTION_TIER_SWITCHED', entity: 'subscriptions', entityId: sub.id, metadata: { from: user.subscription_tier, to: confirmedTier, confirmedAfter3ds: true } });
+        }
+      }
+
       // A mid-cycle downgrade request keeps the member on their current
       // tier's limits until this renewal — apply it now that the renewal
       // invoice has actually been paid. See subscriptionService's
@@ -160,6 +179,7 @@ async function handleStripeEvent(event: Stripe.Event) {
 
       const userRows = await db.select({
         id: schema.users.id,
+        email: schema.users.email,
         subscription_status: schema.users.subscription_status,
         stripe_customer_id: schema.users.stripe_customer_id,
       }).from(schema.users).where(eq(schema.users.id, subForFailedInvoice.user_id)).limit(1);
@@ -204,6 +224,10 @@ async function handleStripeEvent(event: Stripe.Event) {
           title: 'Subscription Payment Failed',
           message: 'Your subscription payment failed. Please update your payment method to keep access.',
         });
+        // Item 7 — a genuine failed charge attempt against a live (not
+        // merely deferred) subscription is exactly the case a
+        // payment-failure email is for.
+        await sendSubscriptionPaymentFailedEmail(user.email, formatInvoiceAmount(invoice.amount_due, invoice.currency) ?? '');
       }
 
       await createAuditLog({
