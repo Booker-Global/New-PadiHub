@@ -481,7 +481,7 @@ export const TERMS_SECTIONS: TermsSection[] = [
       },
       {
         subtitle: 'Three Removals Rule',
-        text: 'If a member is removed from groups a total of three times, PadiHub may permanently delete that account and notify the member by email that they can no longer use PadiHub.',
+        text: 'If a member is removed from groups a total of three times, PadiHub will permanently delete that account and notify the member by email that they can no longer use PadiHub. The email address associated with that account can never be used to sign up to PadiHub again — this is different from the 60-day inactivity deletions described elsewhere in these Terms, where signing up again with the same email address remains possible.',
       },
     ],
   },

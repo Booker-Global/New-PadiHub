@@ -231,14 +231,21 @@ export const userService = {
   /**
    * Section 2/3/4 — SYSTEM-initiated deletion: 60 days of an incomplete
    * profile, 60 days cancelled/inactive without re-subscribing, or removed
-   * from a group by member vote for the 3rd time. Unlike deleteAccount
-   * above, this deliberately does NOT permanently block the email — the
-   * member may sign up again with the same address (they just can't log
-   * back in to this account) — see scheduledJobs.ts /
+   * from a group by member vote for the 3rd time.
+   *
+   * Only 'voted_out_three_times' permanently blocks the email, exactly like
+   * deleteAccount's self-service path — being kicked out of groups three
+   * times is a trust/behavioural judgement on the member, not a passive
+   * lapse, so evading it via delete-then-re-register must be prevented the
+   * same way. The other two reasons (60-day incomplete profile, 60-day
+   * cancelled/inactive) are passive lapses, not misconduct, so those
+   * members MAY sign up again with the same address — they just can't log
+   * back in to this account — see scheduledJobs.ts /
    * membershipService.departMember.
    */
   async systemDeleteAccount(userId: string, reason: Exclude<AccountDeletionReason, 'user_requested'>) {
-    return this._performAccountDeletion(userId, { reason, permanentlyBlockEmail: false });
+    const permanentlyBlockEmail = reason === 'voted_out_three_times';
+    return this._performAccountDeletion(userId, { reason, permanentlyBlockEmail });
   },
 
   async _performAccountDeletion(
@@ -350,18 +357,19 @@ export const userService = {
       await tx.delete(schema.emailVerificationTokens).where(eq(schema.emailVerificationTokens.user_id, userId));
       await tx.delete(schema.passwordResetTokens).where(eq(schema.passwordResetTokens.user_id, userId));
 
-      // Only a self-initiated deletion permanently blocks the ORIGINAL email
-      // before it's overwritten below — see src/server/lib/emailBlocklist.ts
-      // (prevents evading default/suspension history via delete-then-
-      // re-register). A SYSTEM-initiated deletion (incomplete onboarding,
-      // inactivity after cancellation, voted out 3 times) deliberately frees
-      // the email up for a fresh sign-up instead — see systemDeleteAccount.
+      // Whether the ORIGINAL email gets permanently blocked before it's
+      // overwritten below is decided by the caller (permanentlyBlockEmail) —
+      // see src/server/lib/emailBlocklist.ts, deleteAccount, and
+      // systemDeleteAccount above for exactly which reasons block vs. free
+      // up the email for a fresh sign-up. Prevents evading default/
+      // suspension/vote-kick history via delete-then-re-register for the
+      // reasons that DO block it.
       if (permanentlyBlockEmail) {
         const emailHash = hashEmail(user.email);
         const alreadyBlocked = await tx.select({ id: schema.emailBlocklist.id }).from(schema.emailBlocklist)
           .where(eq(schema.emailBlocklist.email_hash, emailHash)).limit(1);
         if (!alreadyBlocked.length) {
-          await tx.insert(schema.emailBlocklist).values({ id: uuidv4(), email_hash: emailHash, reason: 'account_deleted' });
+          await tx.insert(schema.emailBlocklist).values({ id: uuidv4(), email_hash: emailHash, reason });
         }
       }
 

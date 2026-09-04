@@ -214,12 +214,14 @@ export async function sendPayoutDestinationUpdatedEmail(to: string, name: string
 }
 
 /**
- * Reason-specific copy for account deletion. `user_requested` (the default)
- * is a deliberate, member-initiated deletion — that email address is then
- * permanently blocked from ever signing up again (see emailBlocklist.ts).
- * Every other reason is a SYSTEM-initiated deletion for inactivity/repeated
- * removal — the email address is freed up and may be used to sign up again
- * (see userService.systemDeleteAccount), so the copy must say so explicitly.
+ * Reason-specific copy for account deletion. `user_requested` (self-service
+ * deletion) and `voted_out_three_times` (kicked out of a group by member
+ * vote for the 3rd time — a trust/behavioural judgement, not a passive
+ * lapse) both permanently block that email address from ever signing up
+ * again (see emailBlocklist.ts). The other two reasons are SYSTEM-initiated
+ * deletions for passive inactivity — the email address is freed up and may
+ * be used to sign up again (see userService.systemDeleteAccount), so the
+ * copy must say so explicitly.
  */
 export type AccountDeletionReason =
   | 'user_requested'
@@ -231,13 +233,13 @@ export async function sendAccountDeletedEmail(
   to: string, name: string, reason: AccountDeletionReason = 'user_requested',
 ): Promise<void> {
   const safeName = escapeHtml(name);
-  const canResignUp = reason !== 'user_requested';
+  const canResignUp = reason !== 'user_requested' && reason !== 'voted_out_three_times';
 
   const reasonCopy: Record<AccountDeletionReason, string> = {
     user_requested: `Hi ${safeName}, your PadiHub account has now been deleted, as you requested.`,
     incomplete_profile_60_days: `Hi ${safeName}, your PadiHub profile has been deleted because your onboarding (email, identity verification, subscription plan, payment card and payout details) was not completed within 60 days.`,
     inactive_after_cancellation_60_days: `Hi ${safeName}, your PadiHub profile has been deleted because your subscription remained cancelled/inactive for 60 days without re-subscribing.`,
-    voted_out_three_times: `Hi ${safeName}, your PadiHub profile has been deleted because you were removed from a savings group by a member vote for the third time.`,
+    voted_out_three_times: `Hi ${safeName}, your PadiHub profile has been permanently deleted because you were removed from a savings group by a member vote for the third time. This email address can no longer be used to sign up to PadiHub.`,
   };
 
   await send(to, 'Your PadiHub account has been deleted', wrap(`
