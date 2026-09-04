@@ -55,6 +55,31 @@ function isStripeSubscriptionAwaitingConfirmation(country: string, providerStatu
   return country === 'GB' && providerStatus === 'incomplete';
 }
 
+/** Never re-send the "subscription payment could not be completed" email
+ * more than once per hour for the same member — see
+ * activateSubscriptionIfEligible's catch block below. */
+const ACTIVATION_FAILURE_EMAIL_COOLDOWN_MS = 60 * 60 * 1000;
+
+/**
+ * Returns true (and stamps the timestamp) the first time this is called for
+ * a member since the cooldown last elapsed; returns false otherwise. Not
+ * perfectly race-proof under true concurrency, but activation attempts for
+ * one member are effectively sequential in practice (one request at a
+ * time), so this is enough to stop the same still-failing account being
+ * emailed on every onboarding action/page load.
+ */
+async function shouldNotifyActivationFailureByEmail(userId: string): Promise<boolean> {
+  const rows = await db.select({ at: schema.users.subscription_activation_failure_notified_at })
+    .from(schema.users).where(eq(schema.users.id, userId)).limit(1);
+  const lastNotifiedAt = rows[0]?.at ? new Date(rows[0].at).getTime() : 0;
+  if (Date.now() - lastNotifiedAt < ACTIVATION_FAILURE_EMAIL_COOLDOWN_MS) return false;
+
+  await db.update(schema.users)
+    .set({ subscription_activation_failure_notified_at: new Date() })
+    .where(eq(schema.users.id, userId));
+  return true;
+}
+
 type PlanSelectionResult = { tier: SubscriptionTierKey; plan: string; monthly_amount: number };
 type PlanSwitchResult = {
   tier: SubscriptionTierKey;
@@ -229,7 +254,17 @@ export const subscriptionService = {
         title: 'Payment could not be completed',
         message,
       });
-      await sendSubscriptionPaymentFailedEmail(user.email, formatTierPrice(user.subscription_tier, user.country));
+      // Every onboarding-completing action (re-selecting a plan, saving a
+      // card, saving a payout destination, verifying identity) calls this
+      // method directly, with no cooldown of its own, and the dashboard/
+      // join-page self-heal (refreshSubscriptionActivationStatus) can also
+      // retry it every 5 minutes — so a member whose activation is
+      // genuinely still failing was previously re-emailed on every single
+      // one of those, sometimes minutes apart. Only actually send the email
+      // once per hour for the same still-failing account.
+      if (await shouldNotifyActivationFailureByEmail(userId)) {
+        await sendSubscriptionPaymentFailedEmail(user.email, formatTierPrice(user.subscription_tier, user.country));
+      }
     }
   },
 
@@ -252,6 +287,20 @@ export const subscriptionService = {
     // changes.
     const activeGroupCount = await groupService.countActiveGroupMembershipsForUser(userId);
     const deferBilling = activeGroupCount === 0;
+
+    // Stamp the attempt on any PRE-EXISTING subscription row up front —
+    // before contacting the provider at all — so a retry that ends up
+    // throwing below still updates the timestamp
+    // refreshSubscriptionActivationStatus (paymentEligibilityService) keys
+    // its retry cooldown off. Without this, a persistently-failing account
+    // (e.g. a genuine, ongoing provider outage) would be retried — and the
+    // member re-emailed — on every single dashboard/join-page load instead
+    // of being cooled down like any other outcome. A first-ever attempt (no
+    // row yet) has nothing to throttle against, so this is a no-op then;
+    // the insert branch below sets it once the attempt actually completes.
+    await db.update(schema.subscriptions)
+      .set({ last_activation_attempt_at: new Date() })
+      .where(eq(schema.subscriptions.user_id, userId));
 
     // Ensure customer record exists
     let customerId = country === 'NG' ? user.flutterwave_customer_id : user.stripe_customer_id;
@@ -329,20 +378,22 @@ export const subscriptionService = {
 
     if (existing.length) {
       await db.update(schema.subscriptions).set({
-        provider_subscription_id: result.subscriptionId,
-        billing_status:           billingStatus,
-        renewal_date:             result.renewalDate,
+        provider_subscription_id:   result.subscriptionId,
+        billing_status:             billingStatus,
+        renewal_date:               result.renewalDate,
         plan,
+        last_activation_attempt_at: new Date(),
       }).where(eq(schema.subscriptions.user_id, userId));
     } else {
       await db.insert(schema.subscriptions).values({
-        id:                       uuidv4(),
-        user_id:                  userId,
-        provider:                 country === 'NG' ? 'flutterwave' : 'stripe',
-        provider_subscription_id: result.subscriptionId,
+        id:                         uuidv4(),
+        user_id:                    userId,
+        provider:                   country === 'NG' ? 'flutterwave' : 'stripe',
+        provider_subscription_id:   result.subscriptionId,
         plan,
-        billing_status:           billingStatus,
-        renewal_date:             result.renewalDate,
+        billing_status:             billingStatus,
+        renewal_date:               result.renewalDate,
+        last_activation_attempt_at: new Date(),
       });
     }
 
@@ -383,7 +434,12 @@ export const subscriptionService = {
         title: 'Payment could not be completed',
         message: 'We could not confirm payment for your subscription. Please check your card details or complete any additional verification your bank requires.',
       });
-      await sendSubscriptionPaymentFailedEmail(user.email, formatTierPrice(tier, country));
+      // Same reasoning as activateSubscriptionIfEligible's catch block —
+      // this branch is reached again on every retry of a persistently
+      // declined/unconfirmed card, so only actually email once per hour.
+      if (await shouldNotifyActivationFailureByEmail(userId)) {
+        await sendSubscriptionPaymentFailedEmail(user.email, formatTierPrice(tier, country));
+      }
     }
 
     return result;
@@ -493,11 +549,12 @@ export const subscriptionService = {
       const upgradeBillingStatus = !upgradeBillingIsActive ? 'past_due' : deferBilling ? 'paused' : 'active';
 
       await db.update(schema.subscriptions).set({
-        provider_subscription_id: result.subscriptionId,
-        plan:                     planCode(user.country, newTier),
-        billing_status:           upgradeBillingStatus,
-        renewal_date:             result.renewalDate,
-        pending_tier:             null,
+        provider_subscription_id:   result.subscriptionId,
+        plan:                       planCode(user.country, newTier),
+        billing_status:             upgradeBillingStatus,
+        renewal_date:               result.renewalDate,
+        pending_tier:               null,
+        last_activation_attempt_at: new Date(),
       }).where(eq(schema.subscriptions.user_id, userId));
       await db.update(schema.users).set({ subscription_tier: newTier }).where(eq(schema.users.id, userId));
 
@@ -527,7 +584,9 @@ export const subscriptionService = {
             title: 'Payment could not be completed',
             message: 'We could not confirm payment for your upgraded plan. Please check your card details or complete any additional verification your bank requires.',
           });
-          await sendSubscriptionPaymentFailedEmail(user.email, newAmount);
+          if (await shouldNotifyActivationFailureByEmail(userId)) {
+            await sendSubscriptionPaymentFailedEmail(user.email, newAmount);
+          }
         }
       }
     }
