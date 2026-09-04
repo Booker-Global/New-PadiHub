@@ -3,6 +3,26 @@
  * PadiHub never holds customer funds; all money moves through provider infrastructure.
  */
 
+/**
+ * Thrown when a provider method can't even attempt a real request because
+ * required PadiHub-side configuration (an API secret key, a Stripe Price ID,
+ * a Flutterwave Payment Plan ID, etc.) is missing from the environment —
+ * see getStripe()/getFlutterwave() and the tier→price/plan ID lookups in
+ * StripeProvider.ts/FlutterwaveProvider.ts. This is categorically different
+ * from a genuine provider-level outcome (a declined card, a 3DS challenge,
+ * a network/API error) — no charge was ever attempted, so it must never be
+ * surfaced to the member as "your payment failed" (see subscriptionService
+ * .activateSubscriptionIfEligible's catch block, which checks
+ * `instanceof PaymentProviderConfigError` to alert the team instead of
+ * emailing the member).
+ */
+export class PaymentProviderConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PaymentProviderConfigError';
+  }
+}
+
 export interface CreateCustomerResult {
   customerId: string;
 }

@@ -13,6 +13,7 @@ import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { getPaymentProvider } from '../integrations/payments/PaymentProviderFactory.js';
+import { PaymentProviderConfigError } from '../integrations/payments/PaymentProviderInterface.js';
 import { groupService } from './groupService.js';
 import { membershipService } from './membershipService.js';
 import { notificationService } from './notificationService.js';
@@ -29,6 +30,7 @@ import {
   sendSubscriptionTierChangedEmail,
   sendSubscriptionPaymentFailedEmail,
   sendSubscriptionBillingResumedEmail,
+  sendPaymentProviderConfigErrorAlertEmail,
 } from '../integrations/email/emailService.js';
 
 export function planCode(country: string, tier: SubscriptionTierKey): string {
@@ -77,6 +79,24 @@ async function shouldNotifyActivationFailureByEmail(userId: string): Promise<boo
   await db.update(schema.users)
     .set({ subscription_activation_failure_notified_at: new Date() })
     .where(eq(schema.users.id, userId));
+  return true;
+}
+
+/**
+ * A missing env var (Stripe/Flutterwave secret key, Price/Plan ID) affects
+ * EVERY member's activation attempt at once, not just one account — the
+ * per-user DB-backed cooldown above would still send one alert per affected
+ * member (e.g. all 3 in the boot-time retroactive migration) instead of one
+ * alert for the whole incident. A simple in-process timestamp is enough
+ * here (and deliberately resets on every deploy/restart, which is exactly
+ * when a just-fixed or just-introduced env var problem should be re-alerted
+ * on if it recurs).
+ */
+const CONFIG_ERROR_ALERT_COOLDOWN_MS = 60 * 60 * 1000;
+let lastConfigErrorAlertSentAt = 0;
+function shouldSendConfigErrorAlertEmail(): boolean {
+  if (Date.now() - lastConfigErrorAlertSentAt < CONFIG_ERROR_ALERT_COOLDOWN_MS) return false;
+  lastConfigErrorAlertSentAt = Date.now();
   return true;
 }
 
@@ -257,10 +277,26 @@ export const subscriptionService = {
     try {
       await this.activateSubscription(userId);
     } catch (err) {
-      // Every prerequisite is already met here, so a failure is a genuine
-      // provider/charge problem, not "not ready yet" — surface the real
-      // reason instead of silently dropping it, so the member isn't left
-      // thinking they're subscribed when they aren't.
+      // A missing Stripe/Flutterwave secret key or Price/Plan ID env var
+      // (PaymentProviderConfigError, surfaced here as AppError code
+      // SUBSCRIPTION_PROVIDER_CONFIG_ERROR — see createSubscription() above)
+      // means no request was ever sent to the provider at all — this is a
+      // PadiHub-side setup problem, not a genuine card decline. The member's
+      // card is not at fault, so they must never be told their payment
+      // failed; only the team should be alerted, loudly, to go fix the
+      // missing configuration.
+      if (err instanceof AppError && err.code === 'SUBSCRIPTION_PROVIDER_CONFIG_ERROR') {
+        console.error(`[PadiHub] CONFIGURATION ERROR — subscription activation blocked for user ${userId} (${user.email}): ${err.message}`);
+        if (shouldSendConfigErrorAlertEmail()) {
+          await sendPaymentProviderConfigErrorAlertEmail(userId, err.message);
+        }
+        return;
+      }
+
+      // Every prerequisite is already met here, so any other failure is a
+      // genuine provider/charge problem, not "not ready yet" — surface the
+      // real reason instead of silently dropping it, so the member isn't
+      // left thinking they're subscribed when they aren't.
       const message = err instanceof AppError ? err.message : 'Could not activate your subscription with the payment provider.';
       console.warn('[subscriptionService] Onboarding complete but subscription could not be activated:', message);
       await notificationService.create({
@@ -329,6 +365,9 @@ export const subscriptionService = {
           currency: user.currency,
         });
       } catch (err) {
+        if (err instanceof PaymentProviderConfigError) {
+          throw new AppError(err.message, 500, 'SUBSCRIPTION_PROVIDER_CONFIG_ERROR');
+        }
         throw new AppError(
           describeProviderError(err, 'Could not create your billing account with the payment provider.'),
           502, 'SUBSCRIPTION_PROVIDER_CUSTOMER_ERROR',
@@ -358,6 +397,13 @@ export const subscriptionService = {
         deferBilling,
       });
     } catch (err) {
+      // Distinguish a PadiHub-side setup problem (missing Price/Plan ID —
+      // no request to the provider was ever made) from a genuine
+      // provider/network error, so callers like activateSubscriptionIfEligible
+      // never mistake a config gap for the member's own card failing.
+      if (err instanceof PaymentProviderConfigError) {
+        throw new AppError(err.message, 500, 'SUBSCRIPTION_PROVIDER_CONFIG_ERROR');
+      }
       throw new AppError(
         describeProviderError(err, 'Could not activate your subscription with the payment provider.'),
         502, 'SUBSCRIPTION_PROVIDER_CREATE_ERROR',
@@ -572,7 +618,15 @@ export const subscriptionService = {
         pending_tier:               null,
         last_activation_attempt_at: new Date(),
       }).where(eq(schema.subscriptions.user_id, userId));
-      await db.update(schema.users).set({ subscription_tier: newTier }).where(eq(schema.users.id, userId));
+      // Only apply the new tier to the user's own record once billing for
+      // it is genuinely confirmed active — never optimistically. When it
+      // isn't (declined, or still awaiting 3D-Secure confirmation),
+      // users.subscription_tier stays on the current tier; webhookStripeController's
+      // invoice.payment_succeeded handler applies it later if/when Stripe
+      // confirms the first invoice was actually paid.
+      if (upgradeBillingIsActive) {
+        await db.update(schema.users).set({ subscription_tier: newTier }).where(eq(schema.users.id, userId));
+      }
 
       // The upgrade bills immediately (unlike a downgrade) — record it as a
       // real billing-history event alongside SUBSCRIPTION_CREATED/renewal
@@ -624,7 +678,10 @@ export const subscriptionService = {
       });
     }
 
-    return { tier: newTier, direction, effective_date: effectiveDate };
+    // Report the tier that's actually in effect on the user's record — for
+    // a failed/unconfirmed upgrade that's still the current (old) tier, not
+    // the requested one, matching users.subscription_tier above.
+    return { tier: upgradeBillingFailed ? currentTier : newTier, direction, effective_date: effectiveDate };
   },
 
   /** Cancel a user's subscription */

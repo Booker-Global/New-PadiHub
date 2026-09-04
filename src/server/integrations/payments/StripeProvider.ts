@@ -3,14 +3,15 @@
  * All funds move through Stripe infrastructure; PadiHub never holds customer money.
  */
 import Stripe from 'stripe';
-import type {
-  IPaymentProvider, CreateCustomerResult, SavePaymentMethodResult,
-  ChargeResult, TransferResult, SubscriptionResult, WebhookResult,
+import {
+  PaymentProviderConfigError,
+  type IPaymentProvider, type CreateCustomerResult, type SavePaymentMethodResult,
+  type ChargeResult, type TransferResult, type SubscriptionResult, type WebhookResult,
 } from './PaymentProviderInterface.js';
 
 function getStripe(): Stripe {
   const key = process.env.STRIPE_SECRET_KEY;
-  if (!key) throw new Error('STRIPE_SECRET_KEY environment variable is not set.');
+  if (!key) throw new PaymentProviderConfigError('STRIPE_SECRET_KEY environment variable is not set.');
   return new Stripe(key, { apiVersion: '2026-06-24.dahlia' });
 }
 
@@ -109,7 +110,7 @@ export class StripeProvider implements IPaymentProvider {
       ? process.env.STRIPE_PRICE_ID_PREMIUM_MONTHLY
       : process.env.STRIPE_PRICE_ID_BASIC_MONTHLY;
     if (!priceId) {
-      throw new Error(`${params.tier === 'premium' ? 'STRIPE_PRICE_ID_PREMIUM_MONTHLY' : 'STRIPE_PRICE_ID_BASIC_MONTHLY'} environment variable is not set.`);
+      throw new PaymentProviderConfigError(`${params.tier === 'premium' ? 'STRIPE_PRICE_ID_PREMIUM_MONTHLY' : 'STRIPE_PRICE_ID_BASIC_MONTHLY'} environment variable is not set.`);
     }
 
     // Section D.2 — billing must stay inert until the member is verified in

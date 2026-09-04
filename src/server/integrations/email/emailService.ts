@@ -781,6 +781,30 @@ export async function sendSubscriptionPaymentFailedEmail(
   `));
 }
 
+/**
+ * Internal alert (sent to the shared hello@padihub.com inbox, same as
+ * sendSupportTicketSubmissionEmail/sendContactEmail — NEVER to the member)
+ * for a subscription-activation attempt blocked by missing PadiHub-side
+ * configuration (a missing Stripe/Flutterwave secret key or Price/Plan ID
+ * env var — see PaymentProviderConfigError). No charge was ever attempted
+ * for the affected member, so this must never be confused with — or
+ * substitute for — sendSubscriptionPaymentFailedEmail above.
+ */
+export async function sendPaymentProviderConfigErrorAlertEmail(
+  userId: string, errorMessage: string,
+): Promise<void> {
+  const safeErrorMessage = escapeHtml(errorMessage);
+  await send('hello@padihub.com', '[URGENT] Subscription activation blocked by missing configuration', wrap(`
+    ${h2('Subscription activation blocked by missing configuration')}
+    ${p('A subscription activation attempt failed before any payment provider was even contacted — this is a PadiHub configuration problem, not a member-facing card decline. No customer has been emailed about this.')}
+    ${table(
+      detail('Affected user ID', escapeHtml(userId)) +
+      detail('Error', safeErrorMessage),
+    )}
+    ${p('Please check the required environment variables (Stripe/Flutterwave secret keys, Price/Plan IDs) on the server and redeploy.')}
+  `));
+}
+
 export async function sendSubscriptionCancelledEmail(
   to: string, accessEndDate: string,
 ): Promise<void> {
