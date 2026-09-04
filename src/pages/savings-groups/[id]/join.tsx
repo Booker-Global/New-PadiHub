@@ -467,7 +467,13 @@ export default function JoinSavingsGroupPage() {
           <div className="rounded-2xl p-4 mb-5" style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)' }}>
             <p className="text-sm font-semibold" style={{ color: '#92400E' }}>Complete payment setup to join</p>
             <p className="text-xs mt-1" style={{ color: '#92400E' }}>
-              You need a verified payment method (to contribute) and a verified payout destination (to receive your payout when it&apos;s your turn) before you can join a group.
+              {missingSteps.length
+                // Only name the step(s) actually still outstanding — never
+                // blanket-claim payment method/payout are missing when
+                // they've already been verified and it's really only
+                // subscription confirmation (or another single step) left.
+                ? `Before you can join, you still need to: ${missingSteps.map(step => step.label).join('; ')}.`
+                : 'You need a verified payment method (to contribute) and a verified payout destination (to receive your payout when it\u2019s your turn) before you can join a group.'}
             </p>
             <div className="flex flex-col gap-2 mt-3">
               {missingSteps.length ? missingSteps.map(step => (

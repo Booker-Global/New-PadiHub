@@ -72,6 +72,12 @@ type SwitchPlanResult = {
   effective_date?: string | null;
 };
 
+type OnboardingStep = {
+  key: string;
+  label: string;
+  complete: boolean;
+};
+
 function isTierKey(value: string | null | undefined): value is TierKey {
   return value === 'basic' || value === 'premium';
 }
@@ -101,6 +107,29 @@ function getCountryFromStatus(status?: SubscriptionStatus | null): CountryCode |
   if (status?.plan?.startsWith('ng_') || status?.provider === 'flutterwave') return 'NG';
   if (status?.plan?.startsWith('gb_') || status?.provider === 'stripe') return 'GB';
   return null;
+}
+
+/** Fetches the member's real onboarding progress and returns the labels of
+ * whichever steps are still outstanding — excluding 'subscription' itself,
+ * since the caller (handleSelectPlan) just finished that step. Used to build
+ * an accurate "what's next" message instead of a hardcoded one that always
+ * claimed payment card/payout/identity were still missing, even for members
+ * who'd already completed them. Best-effort: falls back to an empty list
+ * (meaning "nothing outstanding") if the status can't be fetched, since this
+ * message is purely informational and must never block plan selection.
+ */
+async function getRemainingOnboardingStepLabels(token: string): Promise<string[]> {
+  try {
+    const response = await window.fetch('/api/users/onboarding-status', {
+      headers: { Authorization: 'Bearer ' + token },
+    });
+    if (!response.ok) return [];
+    const json = await response.json().catch(() => null) as ApiResponse<{ steps?: OnboardingStep[] }> | null;
+    const steps = json?.data?.steps ?? [];
+    return steps.filter(step => !step.complete && step.key !== 'subscription').map(step => step.label);
+  } catch {
+    return [];
+  }
 }
 
 export default function ManageMembershipPage() {
@@ -302,8 +331,16 @@ export default function ManageMembershipPage() {
       }
 
       await refreshSubscription();
+      // Only tell the member to add a payment card / payout details / verify
+      // identity if those steps genuinely aren't done yet — this message was
+      // previously hardcoded, so a member who had already completed every
+      // other onboarding step (e.g. re-selecting/confirming their plan) was
+      // wrongly told to redo steps they'd already finished.
+      const remainingStepLabels = await getRemainingOnboardingStepLabels(session.token);
       setActionNotice(
-        `${tierConfig[tier].name} selected. Next, add your payment card and payout details, then verify your identity to activate billing — see the steps below.`,
+        remainingStepLabels.length
+          ? `${tierConfig[tier].name} selected. Next: ${remainingStepLabels.join('; ')} — see the steps below.`
+          : `${tierConfig[tier].name} selected. Your subscription is confirmed — billing starts once you're a verified member of an active group with at least 3 members.`,
       );
     } catch (error) {
       setActionError(error instanceof Error ? error.message : 'Unable to select that plan right now.');
@@ -421,7 +458,7 @@ export default function ManageMembershipPage() {
             <div className="absolute top-0 right-0 w-32 h-32 rounded-full blur-3xl opacity-20" style={{ background: '#2EAF6F' }} />
             <div className="relative">
               <div className="flex items-start justify-between mb-4 gap-4">
-                <div>
+                <div className="min-w-0">
                   <span className="text-xs font-bold px-3 py-1 rounded-full mb-2 inline-block" style={{ background: statusBadge.background, color: statusBadge.color }}>
                     {statusBadge.label}
                   </span>
@@ -434,9 +471,9 @@ export default function ManageMembershipPage() {
                       : 'Choose Basic or Premium to set your monthly membership.'}
                   </p>
                 </div>
-                <div className="text-right">
-                  <p className="text-3xl font-black text-white" style={{ fontFamily: 'Nunito, sans-serif' }}>{priceLabel ?? '—'}</p>
-                  <p className="text-gray-400 text-xs">monthly</p>
+                <div className="text-right shrink-0">
+                  <p className="text-2xl sm:text-3xl font-black text-white whitespace-nowrap" style={{ fontFamily: 'Nunito, sans-serif' }}>{priceLabel ?? '—'}</p>
+                  <p className="text-gray-400 text-xs whitespace-nowrap">monthly</p>
                 </div>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">

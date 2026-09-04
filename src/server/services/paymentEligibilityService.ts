@@ -33,6 +33,10 @@ type EligibilityUser = {
   payout_verified_at: Date | null;
 };
 
+/** Never retry a stuck subscription activation more than once every 5
+ * minutes per member — see refreshSubscriptionActivationStatus below. */
+const SUBSCRIPTION_RETRY_COOLDOWN_MS = 5 * 60 * 1000;
+
 /**
  * Self-heal for `users.subscription_status`: a subscription can genuinely
  * already be confirmed with the provider — billing_status 'active' (real
@@ -47,22 +51,53 @@ type EligibilityUser = {
  * subscription payment" forever and blocked from joining/creating a group
  * they've already paid for.
  *
- * Pure DB read + (if needed) DB write — this never calls the payment
- * provider, so unlike retrying subscription creation itself it is always
- * safe to run on every eligibility check (dashboard load, group join
- * attempt, etc.) without risking duplicate provider subscriptions or
- * repeated payment-failed emails for a genuine, still-unresolved failure.
+ * If billing_status isn't 'active'/'paused' yet, this is NOT necessarily a
+ * genuine, still-unresolved failure — it can just as easily be a member
+ * whose earlier activation attempt hit a now-fixed bug (e.g. the
+ * default_incomplete + pause_collection combination that used to leave
+ * every deferred-billing subscription permanently stuck 'incomplete') and
+ * would succeed if simply retried. So when every OTHER onboarding
+ * prerequisite (`eligibleForActivation`) is already met, actively retry
+ * activation here too — instead of leaving the member stuck until the next
+ * server boot (activateRetroactiveEligibleSubscriptions) or the next
+ * provider webhook delivery — throttled to at most once every 5 minutes per
+ * member (via subscriptions.updated_at) so a member whose activation
+ * genuinely, repeatedly fails (e.g. a real provider outage) isn't
+ * retried — and re-notified/re-emailed — on every single dashboard or
+ * group-join page load.
  */
-async function refreshSubscriptionActivationStatus(userId: string): Promise<boolean> {
-  const subRows = await db.select({ billing_status: schema.subscriptions.billing_status })
-    .from(schema.subscriptions).where(eq(schema.subscriptions.user_id, userId)).limit(1);
-  if (!subRows.length) return false;
+async function refreshSubscriptionActivationStatus(userId: string, eligibleForActivation: boolean): Promise<boolean> {
+  const subRows = await db.select({
+    billing_status: schema.subscriptions.billing_status,
+    updated_at:     schema.subscriptions.updated_at,
+  }).from(schema.subscriptions).where(eq(schema.subscriptions.user_id, userId)).limit(1);
+  const sub = subRows[0];
 
-  const isConfirmedWithProvider = subRows[0].billing_status === 'active' || subRows[0].billing_status === 'paused';
-  if (!isConfirmedWithProvider) return false;
+  const isConfirmedWithProvider = sub && (sub.billing_status === 'active' || sub.billing_status === 'paused');
+  if (isConfirmedWithProvider) {
+    await db.update(schema.users).set({ subscription_status: 'active' as const }).where(eq(schema.users.id, userId));
+    return true;
+  }
 
-  await db.update(schema.users).set({ subscription_status: 'active' as const }).where(eq(schema.users.id, userId));
-  return true;
+  if (!eligibleForActivation) return false;
+  const lastAttemptAt = sub?.updated_at ? new Date(sub.updated_at).getTime() : 0;
+  if (Date.now() - lastAttemptAt < SUBSCRIPTION_RETRY_COOLDOWN_MS) return false;
+
+  try {
+    // Dynamically imported to avoid a static circular dependency
+    // (subscriptionService imports membershipService, which imports this
+    // module) — same pattern used by refreshStripePayoutVerification below.
+    const { subscriptionService } = await import('./subscriptionService.js');
+    await subscriptionService.activateSubscriptionIfEligible(userId);
+  } catch (err) {
+    console.error('[paymentEligibilityService] Could not retry stuck subscription activation:', err);
+    return false;
+  }
+
+  const refreshedUserRows = await db.select({ subscription_status: schema.users.subscription_status })
+    .from(schema.users).where(eq(schema.users.id, userId)).limit(1);
+  const refreshedStatus = refreshedUserRows[0]?.subscription_status;
+  return refreshedStatus === 'active' || refreshedStatus === 'trial';
 }
 
 /**
@@ -138,8 +173,14 @@ export async function getPaymentEligibility(userId: string) {
   const emailVerified = Boolean(user.email_verified);
   const identityVerified = Boolean(user.identity_verified);
   const subscriptionTierSelected = user.subscription_tier === 'basic' || user.subscription_tier === 'premium';
+  // Every OTHER onboarding prerequisite is met — if the subscription still
+  // isn't marked active, it's worth actively retrying activation (see
+  // refreshSubscriptionActivationStatus) rather than only passively reading
+  // back a billing_status that a still-broken/never-retried activation
+  // attempt would leave stuck forever.
+  const eligibleForSubscriptionActivation = subscriptionTierSelected && paymentMethodVerified && payoutVerified && identityVerified;
   const subscriptionActive = (user.subscription_status === 'active' || user.subscription_status === 'trial')
-    || await refreshSubscriptionActivationStatus(user.id);
+    || await refreshSubscriptionActivationStatus(user.id, eligibleForSubscriptionActivation);
 
   return {
     emailVerified,

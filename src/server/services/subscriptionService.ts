@@ -308,11 +308,15 @@ export const subscriptionService = {
     // never show "Active" or send the welcome email for a card that hasn't
     // actually been verified yet. invoice.payment_succeeded/failed webhooks
     // reconcile this to the real outcome once Stripe finishes processing.
-    // Note: when deferBilling is set, Stripe never attempts a charge at all
-    // (pause_collection), so this will be true trivially — that's exactly
-    // the point (Section D.2: no failure is possible for a charge that was
-    // never attempted).
-    const billingIsActive = result.status === 'active' || result.status === 'trialing';
+    // When deferBilling is set, no charge is EVER attempted (pause_collection
+    // is set instead of default_incomplete — see StripeProvider), so there is
+    // nothing that could have failed to confirm; treat deferBilling
+    // unconditionally as activated rather than trusting the provider's status
+    // field to happen to read 'active'/'trialing'. Getting this wrong is what
+    // previously sent members "payment could not be completed" emails (and
+    // left them stuck unable to join/create a group) for a subscription whose
+    // billing was only ever deliberately deferred, never actually declined.
+    const billingIsActive = deferBilling || result.status === 'active' || result.status === 'trialing';
     // The subscription is only genuinely BILLING (money can actually move)
     // if the provider confirmed it AND we didn't defer collection.
     const billingStatus = !billingIsActive ? 'past_due' : deferBilling ? 'paused' : 'active';
@@ -482,8 +486,10 @@ export const subscriptionService = {
 
       // Same reasoning as createSubscription() above — Stripe's
       // default_incomplete subscription can come back non-active if the
-      // card is declined or needs 3D-Secure, without throwing.
-      const upgradeBillingIsActive = result.status === 'active' || result.status === 'trialing';
+      // card is declined or needs 3D-Secure, without throwing. And, same as
+      // createSubscription(), a deferred upgrade never attempts a charge at
+      // all, so it must never be reported as a payment failure.
+      const upgradeBillingIsActive = deferBilling || result.status === 'active' || result.status === 'trialing';
       const upgradeBillingStatus = !upgradeBillingIsActive ? 'past_due' : deferBilling ? 'paused' : 'active';
 
       await db.update(schema.subscriptions).set({
