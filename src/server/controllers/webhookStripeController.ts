@@ -240,9 +240,23 @@ async function handleStripeEvent(event: Stripe.Event) {
       const account = event.data.object as Stripe.Account;
       const verified = Boolean(account.charges_enabled && account.payouts_enabled);
 
-      await db.update(schema.users)
-        .set({ payout_verified_at: verified ? new Date() : null })
-        .where(eq(schema.users.stripe_connected_account_id, account.id));
+      // Only ever SET payout_verified_at, never clear it. `account.updated`
+      // fires on any change to the connected account — including Stripe's
+      // periodic risk/requirements re-checks, or out-of-order webhook
+      // delivery of a stale event — so charges_enabled/payouts_enabled can
+      // legitimately (and temporarily) read false again long after the
+      // member genuinely completed payout verification. Nulling the
+      // timestamp here previously erased that completed onboarding step —
+      // resetting the member's profile-completion percentage, re-blocking
+      // them from joining/creating a group, and (via
+      // activateSubscriptionIfEligible's eligibility gate) silently
+      // no-opping their subscription activation retries — even though
+      // nothing about their own payout setup had actually changed.
+      if (verified) {
+        await db.update(schema.users)
+          .set({ payout_verified_at: new Date() })
+          .where(eq(schema.users.stripe_connected_account_id, account.id));
+      }
 
       await createAuditLog({
         action: 'STRIPE_ACCOUNT_UPDATED', entity: 'users',

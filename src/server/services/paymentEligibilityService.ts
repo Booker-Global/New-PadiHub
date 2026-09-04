@@ -68,8 +68,8 @@ const SUBSCRIPTION_RETRY_COOLDOWN_MS = 5 * 60 * 1000;
  */
 async function refreshSubscriptionActivationStatus(userId: string, eligibleForActivation: boolean): Promise<boolean> {
   const subRows = await db.select({
-    billing_status: schema.subscriptions.billing_status,
-    updated_at:     schema.subscriptions.updated_at,
+    billing_status:             schema.subscriptions.billing_status,
+    last_activation_attempt_at: schema.subscriptions.last_activation_attempt_at,
   }).from(schema.subscriptions).where(eq(schema.subscriptions.user_id, userId)).limit(1);
   const sub = subRows[0];
 
@@ -80,7 +80,13 @@ async function refreshSubscriptionActivationStatus(userId: string, eligibleForAc
   }
 
   if (!eligibleForActivation) return false;
-  const lastAttemptAt = sub?.updated_at ? new Date(sub.updated_at).getTime() : 0;
+  // Deliberately keyed off subscriptions.last_activation_attempt_at, NOT
+  // updated_at — updated_at is also bumped by writes that have nothing to
+  // do with an activation retry (billing pause/resume reconciliation,
+  // Stripe invoice webhooks), which would otherwise perpetually reset this
+  // cooldown and starve a genuinely stuck subscription of ever being
+  // retried at all.
+  const lastAttemptAt = sub?.last_activation_attempt_at ? new Date(sub.last_activation_attempt_at).getTime() : 0;
   if (Date.now() - lastAttemptAt < SUBSCRIPTION_RETRY_COOLDOWN_MS) return false;
 
   try {

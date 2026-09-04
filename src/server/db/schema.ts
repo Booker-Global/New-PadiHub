@@ -70,6 +70,15 @@ export const users = mysqlTable('users', {
   // the "your profile setup is complete" email is only ever sent once —
   // see paymentEligibilityService.notifyOnboardingComplete().
   onboarding_completed_email_sent_at: timestamp('onboarding_completed_email_sent_at'),
+  // Last time a "your subscription payment could not be completed" email
+  // was sent for a still-failing activation attempt — every onboarding
+  // action that can trigger a retry (re-selecting a plan, saving a card,
+  // saving a payout destination, verifying identity, and the passive
+  // dashboard/join-page self-heal) calls activateSubscriptionIfEligible
+  // with no cooldown of its own, so without this a persistently-failing
+  // account was re-emailed on every single one of those actions. See
+  // subscriptionService.activateSubscriptionIfEligible.
+  subscription_activation_failure_notified_at: timestamp('subscription_activation_failure_notified_at'),
   active:                      boolean('active').notNull().default(true),
   role:                        mysqlEnum('role', ['member', 'group_leader', 'admin']).notNull().default('member'),
   created_at:                  timestamp('created_at').notNull().defaultNow(),
@@ -377,6 +386,16 @@ export const subscriptions = mysqlTable('subscriptions', {
   // renewal job (scheduledJobs.ts) / Stripe invoice.payment_succeeded
   // webhook (webhookStripeController.ts). Null when no downgrade is pending.
   pending_tier:            mysqlEnum('pending_tier', ['basic', 'premium']),
+  // Stamped every time activation (createSubscription) is actually attempted
+  // with the provider — deliberately separate from `updated_at`, which also
+  // gets bumped by unrelated writes (billing-status reconciliation on group
+  // join/leave, Stripe invoice webhooks) that have nothing to do with an
+  // activation retry. paymentEligibilityService's stuck-subscription self-heal
+  // throttles on THIS column so those unrelated writes can never starve it of
+  // ever retrying; subscriptionService also uses it to avoid re-sending the
+  // "payment could not be completed" email on every single onboarding action
+  // for a member whose activation is still (genuinely) failing.
+  last_activation_attempt_at: timestamp('last_activation_attempt_at'),
   created_at:              timestamp('created_at').notNull().defaultNow(),
   updated_at:              timestamp('updated_at').notNull().defaultNow().onUpdateNow(),
 });
