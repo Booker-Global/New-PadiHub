@@ -398,8 +398,96 @@ export const TERMS_SECTIONS: TermsSection[] = [
     ],
   },
   {
+    id: 'profile-completion',
+    title: '18. Profile Completion, Activation & Inactive Accounts',
+    icon: Shield,
+    color: '#2eafaf',
+    content: [
+      {
+        subtitle: 'When Your Profile Is Complete',
+        text: 'Your profile is only treated as fully complete once you have signed up, verified your email address, chosen a subscription plan, added and verified a payment card, verified a payout account, and completed identity verification. Joining a savings group comes after these steps — it is separate from profile completion.',
+      },
+      {
+        subtitle: 'Complete Profile, No Group Yet',
+        text: 'If you have finished every setup step but have not yet joined a group that has already started with at least 3 active members, we do not charge you yet. Your account may show "Pending Charge" while you wait, but your card is not billed until you become part of an active group. During this waiting period, you may still join or be invited to as many groups as your plan allows.',
+      },
+      {
+        subtitle: 'Reminders if You Have Not Joined a Group',
+        text: 'While your profile is complete but you are still not in an active group, we may send reminder emails about every 7 days encouraging you to join one. If 30 days pass after your profile is completed and you still have not joined an active group, we may move your profile back to an incomplete state, make your subscription inactive, and email you to log in, choose a plan again, and join a group before you can become fully active.',
+      },
+      {
+        subtitle: 'Profiles Left Unfinished',
+        text: 'If you do not finish every required setup step, your subscription stays inactive and you cannot join or take part in any group until everything is complete. Your dashboard will show what is still missing. Because nothing has been charged at this stage, we do not send payment-failed emails for unfinished profiles — only friendly reminder emails, usually about every 7 days. If a profile stays unfinished for 60 days, we may delete that account and notify you by email. If this happens, you may sign up again later with the same email address.',
+      },
+    ],
+  },
+  {
+    id: 'billing-start-and-payment-notices',
+    title: '19. Subscription Billing, Group Charges & Payment Emails',
+    icon: AlertTriangle,
+    color: '#EF4444',
+    content: [
+      {
+        subtitle: 'When Subscription Billing Starts',
+        text: 'Your subscription billing starts on the day you become an active member of a started group with at least 3 active members. From that date, your subscription renews monthly.',
+      },
+      {
+        subtitle: 'Group Charge and Payout Schedule',
+        text: 'The day your group contributions are charged, and the day the group payout is sent, follow the schedule chosen by the Group Owner when the group was created. After a payout is sent, the time it takes to reach the recipient\'s bank or mobile money account depends on the payment provider handling that transfer. Please also read the payment processing and payout timing sections of these Terms.',
+      },
+      {
+        subtitle: 'Payment Failure Emails',
+        text: 'We send a payment-failed email only in two situations: first, if we try to collect your subscription because you have just joined an active group and that charge does not go through; or second, if one of your regular group contribution charges fails. We do not send payment-failed emails for profiles that are still unfinished, or for cards that have simply not been charged yet because the member has not joined an active group.',
+      },
+    ],
+  },
+  {
+    id: 'cancellation-and-resubscription',
+    title: '20. Cancellation & Re-Subscription',
+    icon: Shield,
+    color: '#8B5CF6',
+    content: [
+      {
+        subtitle: 'What Happens if You Cancel',
+        text: 'If you cancel your subscription, you are automatically removed from any groups you belong to. You and the other members of those groups will be notified. Your subscription becomes inactive, and you cannot join groups or receive payouts unless you subscribe again.',
+      },
+      {
+        subtitle: 'Reminders After Cancellation',
+        text: 'If you stay inactive after cancelling, we may email you about every 7 days to invite you to subscribe again.',
+      },
+      {
+        subtitle: 'Long-Term Inactivity After Cancellation',
+        text: 'If 60 days pass after cancellation and you have not re-subscribed, we may delete your account and notify you by email. If this happens, you may sign up again later with the same email address, but you will not be able to log back into the deleted account.',
+      },
+    ],
+  },
+  {
+    id: 'group-membership-visibility-and-removal',
+    title: '21. Group Member Visibility & Removal',
+    icon: Users,
+    color: '#2EAF6F',
+    content: [
+      {
+        subtitle: 'Seeing Other Members',
+        text: 'Members of an active group can view the other active members on that group\'s page, including each person\'s name, join date, and Trust Score™.',
+      },
+      {
+        subtitle: 'Removal by Group Vote',
+        text: 'A group may remove a member through a vote of the other group members, in line with the governance rules set out in these Terms.',
+      },
+      {
+        subtitle: 'Trust Score Impact',
+        text: 'Each time a member is removed from a group, that removal lowers the member\'s Trust Score™.',
+      },
+      {
+        subtitle: 'Three Removals Rule',
+        text: 'If a member is removed from groups a total of three times, PadiHub may permanently delete that account and notify the member by email that they can no longer use PadiHub.',
+      },
+    ],
+  },
+  {
     id: 'contact',
-    title: '18. Contact',
+    title: '22. Contact',
     icon: FileText,
     color: '#2EAF6F',
     content: [

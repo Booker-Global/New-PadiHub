@@ -14,6 +14,7 @@ import { createAuditLog } from '../middleware/auditLogger.js';
 import { notificationService } from '../services/notificationService.js';
 import { isSubscriptionTierKey, type SubscriptionTierKey } from '../lib/constants.js';
 import { planCode, subscriptionService } from '../services/subscriptionService.js';
+import { sendSubscriptionPaymentFailedEmail } from '../integrations/email/emailService.js';
 
 /** Recover the tier key ('basic'/'premium') from a stored plan code like 'gb_premium'. */
 function tierFromPlanCode(plan?: string | null): SubscriptionTierKey | null {
@@ -160,6 +161,7 @@ async function handleStripeEvent(event: Stripe.Event) {
 
       const userRows = await db.select({
         id: schema.users.id,
+        email: schema.users.email,
         subscription_status: schema.users.subscription_status,
         stripe_customer_id: schema.users.stripe_customer_id,
       }).from(schema.users).where(eq(schema.users.id, subForFailedInvoice.user_id)).limit(1);
@@ -204,6 +206,10 @@ async function handleStripeEvent(event: Stripe.Event) {
           title: 'Subscription Payment Failed',
           message: 'Your subscription payment failed. Please update your payment method to keep access.',
         });
+        // Item 7 — a genuine failed charge attempt against a live (not
+        // merely deferred) subscription is exactly the case a
+        // payment-failure email is for.
+        await sendSubscriptionPaymentFailedEmail(user.email, formatInvoiceAmount(invoice.amount_due, invoice.currency) ?? '');
       }
 
       await createAuditLog({

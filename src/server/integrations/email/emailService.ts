@@ -213,13 +213,43 @@ export async function sendPayoutDestinationUpdatedEmail(to: string, name: string
   `));
 }
 
-export async function sendAccountDeletedEmail(to: string, name: string): Promise<void> {
+/**
+ * Reason-specific copy for account deletion. `user_requested` (the default)
+ * is a deliberate, member-initiated deletion — that email address is then
+ * permanently blocked from ever signing up again (see emailBlocklist.ts).
+ * Every other reason is a SYSTEM-initiated deletion for inactivity/repeated
+ * removal — the email address is freed up and may be used to sign up again
+ * (see userService.systemDeleteAccount), so the copy must say so explicitly.
+ */
+export type AccountDeletionReason =
+  | 'user_requested'
+  | 'incomplete_profile_60_days'
+  | 'inactive_after_cancellation_60_days'
+  | 'voted_out_three_times';
+
+export async function sendAccountDeletedEmail(
+  to: string, name: string, reason: AccountDeletionReason = 'user_requested',
+): Promise<void> {
+  const safeName = escapeHtml(name);
+  const canResignUp = reason !== 'user_requested';
+
+  const reasonCopy: Record<AccountDeletionReason, string> = {
+    user_requested: `Hi ${safeName}, your PadiHub account has now been deleted, as you requested.`,
+    incomplete_profile_60_days: `Hi ${safeName}, your PadiHub profile has been deleted because your onboarding (email, identity verification, subscription plan, payment card and payout details) was not completed within 60 days.`,
+    inactive_after_cancellation_60_days: `Hi ${safeName}, your PadiHub profile has been deleted because your subscription remained cancelled/inactive for 60 days without re-subscribing.`,
+    voted_out_three_times: `Hi ${safeName}, your PadiHub profile has been deleted because you were removed from a savings group by a member vote for the third time.`,
+  };
+
   await send(to, 'Your PadiHub account has been deleted', wrap(`
     ${h2('Account deleted')}
-    ${p(`Hi ${escapeHtml(name)}, your PadiHub account has now been deleted.`)}
+    ${p(reasonCopy[reason])}
     ${p('Your subscription access has been cancelled and your personal details have been removed or anonymised where retention is required for operational or compliance reasons.')}
-    ${p('If you did not request this, please contact <a href="mailto:hello@padihub.com" style="color:#2EAF6F;">hello@padihub.com</a> immediately.')}
-    ${btn('Contact Support', 'mailto:hello@padihub.com')}
+    ${canResignUp
+      ? p('You will need to sign up again and complete identity verification from scratch to use PadiHub — you may sign up again with this same email address, but you will not be able to log in to this account any more.')
+      : p('If you did not request this, please contact <a href="mailto:hello@padihub.com" style="color:#2EAF6F;">hello@padihub.com</a> immediately.')}
+    ${canResignUp
+      ? btn('Sign Up Again', `${process.env.APP_URL ?? 'https://padihub.com'}/register`)
+      : btn('Contact Support', 'mailto:hello@padihub.com')}
   `));
 }
 
@@ -437,7 +467,7 @@ export async function sendGroupExpiryReminderEmail(
  */
 export async function sendMemberExitCompressionEmail(
   to: string, groupName: string, departedName: string,
-  reason: 'voluntary' | 'removed_by_leader' | 'defaulted' | 'vote_removed',
+  reason: 'voluntary' | 'removed_by_leader' | 'defaulted' | 'vote_removed' | 'subscription_payment_failed',
   /**
    * Set only when the departing member was the group's Owner/Organiser —
    * folds the tenure-based succession announcement into this SAME email
@@ -450,6 +480,7 @@ export async function sendMemberExitCompressionEmail(
   const reasonText = reason === 'voluntary' ? 'left the group'
     : reason === 'defaulted' ? 'was suspended after repeated contribution defaults'
     : reason === 'vote_removed' ? 'was removed by a group member vote'
+    : reason === 'subscription_payment_failed' ? 'was removed after their subscription payment could not be processed'
     : 'was removed by the group leader';
   await send(to, `Payout schedule updated in ${groupName}`, wrap(`
     ${h2('Group membership and payout schedule updated')}
@@ -895,6 +926,13 @@ export async function sendProfileSetupCompleteEmail(
   to: string,
   firstName: string,
   plan: { tierName: string; monthlyPrice: string; maxGroupsCreate: number; maxGroupsJoin: number },
+  // Section 1 — profile completion (steps a-e: email, identity, plan,
+  // payment card, payout) is deliberately distinct from step f (joining an
+  // active group). When billing is still 'Pending Charge' (deferred — see
+  // subscriptions.billing_status 'paused'), the card has been validated but
+  // NOT charged, so this must say so explicitly rather than implying the
+  // member is already being billed.
+  billingDeferred = false,
 ): Promise<void> {
   const canCreate = plan.maxGroupsCreate > 0;
   await send(to, `Your PadiHub profile is complete — ${plan.tierName} plan`, wrap(`
@@ -909,7 +947,73 @@ export async function sendProfileSetupCompleteEmail(
     ${p(canCreate
       ? `You can now create up to <strong>${plan.maxGroupsCreate}</strong> savings groups and be a member of up to <strong>${plan.maxGroupsJoin}</strong> in total.`
       : `You can now join up to <strong>${plan.maxGroupsJoin}</strong> savings groups. Creating your own group is a Premium feature — you can upgrade at any time.`)}
-    ${p('Your subscription is now active and your payment setup is complete. If a future renewal ever needs attention, we’ll email you right away.')}
+    ${billingDeferred
+      ? p('Your subscription status is <strong>Pending Charge</strong> — we\'ve validated your payment card but you will not be charged until you join or launch an active savings group (3+ members). There\'s no restriction on joining or creating groups (within your plan\'s limits) in the meantime.')
+      : p('Your subscription is now active and your payment setup is complete. If a future renewal ever needs attention, we’ll email you right away.')}
     ${btn(canCreate ? 'Create or Join a Group' : 'Find a Group to Join', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
+  `));
+}
+
+// ─── Retention follow-up emails (Sections 1, 2 & 3) ───────────────────────────
+
+/**
+ * Section 1 — sent every 7 days to a fully-onboarded (steps a-e complete)
+ * member whose subscription is 'Pending Charge' because they haven't yet
+ * joined or launched an active (3+ member) group. See
+ * scheduledJobs.weeklyPendingChargeGroupJoinFollowUp.
+ */
+export async function sendPendingChargeGroupJoinReminderEmail(
+  to: string, firstName: string, daysRemaining: number,
+): Promise<void> {
+  await send(to, 'Join a group to activate your PadiHub subscription', wrap(`
+    ${h2(`Don't forget to join a group, ${escapeHtml(firstName)}`)}
+    ${p('Your PadiHub profile setup is complete and your subscription status is <strong>Pending Charge</strong> — your payment card is validated but you have not been charged, because you\'re not yet a verified member of an active (3+ member) savings group.')}
+    ${p(`You have <strong>${daysRemaining} day${daysRemaining === 1 ? '' : 's'}</strong> left to join or launch a group before your profile reverts to incomplete and you\'ll need to choose a plan again.`)}
+    ${btn('Find or Create a Group', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
+  `));
+}
+
+/** Section 1 — sent once when the 30-day Pending Charge window elapses without the member joining/launching an active group. */
+export async function sendPendingChargeExpiredEmail(to: string, firstName: string): Promise<void> {
+  await send(to, 'Your PadiHub profile is now incomplete', wrap(`
+    ${h2(`Your profile setup has expired, ${escapeHtml(firstName)}`)}
+    ${p('It has been 30 days since your PadiHub profile setup was completed, and you still haven\'t joined or launched an active savings group, so your subscription has been cancelled and your profile is now marked as incomplete.')}
+    ${p('You have not been charged. To use PadiHub, please log back in, choose a subscription plan again, and join or launch a group.')}
+    ${btn('Log In', `${process.env.APP_URL ?? 'https://padihub.com'}/login`)}
+  `));
+}
+
+/**
+ * Section 2 — sent every 7 days to an account that hasn't finished every
+ * onboarding step yet, detailing exactly what's missing. See
+ * scheduledJobs.weeklyIncompleteOnboardingFollowUp.
+ */
+export async function sendIncompleteProfileReminderEmail(
+  to: string, firstName: string, missingSteps: string[], daysRemaining: number,
+): Promise<void> {
+  await send(to, 'Finish setting up your PadiHub profile', wrap(`
+    ${h2(`Complete your profile, ${escapeHtml(firstName)}`)}
+    ${p('Your PadiHub profile setup is still incomplete. Here\'s what\'s left:')}
+    <ul style="margin:0 0 16px;padding-left:20px;color:#374151;font-size:15px;line-height:1.8;">
+      ${missingSteps.map(step => `<li>${escapeHtml(step)}</li>`).join('')}
+    </ul>
+    ${p(`You have <strong>${daysRemaining} day${daysRemaining === 1 ? '' : 's'}</strong> left to complete these before your profile is deleted.`)}
+    ${btn('Complete Your Profile', `${process.env.APP_URL ?? 'https://padihub.com'}/dashboard`)}
+  `));
+}
+
+/**
+ * Section 3 — sent every 7 days to a member whose subscription is
+ * cancelled, reminding them to re-subscribe. See
+ * scheduledJobs.weeklyResubscribeFollowUp.
+ */
+export async function sendResubscribeReminderEmail(
+  to: string, firstName: string, daysRemaining: number,
+): Promise<void> {
+  await send(to, 'Re-subscribe to keep using PadiHub', wrap(`
+    ${h2(`We miss you, ${escapeHtml(firstName)}`)}
+    ${p('Your PadiHub subscription is still cancelled, so you cannot join groups or receive payouts until you re-subscribe.')}
+    ${p(`You have <strong>${daysRemaining} day${daysRemaining === 1 ? '' : 's'}</strong> left to re-subscribe before your profile is deleted.`)}
+    ${btn('Re-subscribe', `${process.env.APP_URL ?? 'https://padihub.com'}/subscription/manage`)}
   `));
 }

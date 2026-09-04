@@ -263,21 +263,33 @@ async function notifyOnboardingComplete(userId: string, tier: SubscriptionTierKe
   }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
   if (!rows.length) return;
 
+  // Section 1 — profile completion (steps a-e) is distinct from step f
+  // (joining an active group); a member can be 100% complete with
+  // subscription status 'Pending Charge' (billing_status 'paused' — card
+  // validated, not yet charged). The email must say so explicitly instead
+  // of implying they're already being billed.
+  const subRows = await db.select({ billing_status: schema.subscriptions.billing_status })
+    .from(schema.subscriptions).where(eq(schema.subscriptions.user_id, userId)).limit(1);
+  const billingDeferred = subRows[0]?.billing_status === 'paused';
+
   const plan = SUBSCRIPTION_TIERS[tier];
   await notificationService.create({
     userId,
     type: 'profile_setup_complete',
     title: 'Profile Setup Complete',
-    message: plan.maxGroupsCreate > 0
-      ? `Your profile is complete on the ${plan.name} plan — you can now create up to ${plan.maxGroupsCreate} groups and join up to ${plan.maxGroupsJoin}.`
-      : `Your profile is complete on the ${plan.name} plan — you can now join up to ${plan.maxGroupsJoin} groups. Upgrade to Premium if you'd like to create your own group.`,
+    message: (billingDeferred
+      ? `Your profile is 100% complete on the ${plan.name} plan — subscription status: Pending Charge (validated, not yet charged until you join an active group). `
+      : `Your profile is complete on the ${plan.name} plan — `)
+      + (plan.maxGroupsCreate > 0
+        ? `you can now create up to ${plan.maxGroupsCreate} groups and join up to ${plan.maxGroupsJoin}.`
+        : `you can now join up to ${plan.maxGroupsJoin} groups. Upgrade to Premium if you'd like to create your own group.`),
   });
   await sendProfileSetupCompleteEmail(rows[0].email, rows[0].first_name, {
     tierName:        plan.name,
     monthlyPrice:    formatTierPrice(tier, rows[0].country),
     maxGroupsCreate: plan.maxGroupsCreate,
     maxGroupsJoin:   plan.maxGroupsJoin,
-  });
+  }, billingDeferred);
 }
 
 /**

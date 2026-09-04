@@ -66,6 +66,26 @@ export const GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH = 3; // "Start Group" stays disa
 export const GROUP_STUCK_BELOW_MIN_EXPIRY_DAYS  = 30; // draft/suspended groups auto-expire after this many days stuck below the minimum
 export const GROUP_STUCK_EXPIRY_REMINDER_DAYS_BEFORE = [7, 3, 1]; // reminder nudges before auto-expiry
 
+/**
+ * Account lifecycle timers — see scheduledJobs.ts for the 3 daily jobs that
+ * apply these:
+ *  - Section 1: profile complete (steps a-e) but no active group joined yet
+ *    ("Pending Charge") — 7-day reminder nudges, reverts to an incomplete
+ *    profile (re-select plan) after PENDING_CHARGE_GROUP_JOIN_EXPIRY_DAYS.
+ *  - Section 2: profile never finished steps a-e — 7-day reminders detailing
+ *    what's missing, account deleted after INCOMPLETE_PROFILE_EXPIRY_DAYS.
+ *  - Section 3: subscription cancelled (and, per Section 15.B, every active
+ *    group departed) — 7-day re-subscribe reminders, account deleted after
+ *    CANCELLED_SUBSCRIPTION_EXPIRY_DAYS.
+ */
+export const ACCOUNT_LIFECYCLE_REMINDER_INTERVAL_DAYS = 7;
+export const PENDING_CHARGE_GROUP_JOIN_EXPIRY_DAYS    = 30;
+export const INCOMPLETE_PROFILE_EXPIRY_DAYS           = 60;
+export const CANCELLED_SUBSCRIPTION_EXPIRY_DAYS       = 60;
+
+/** Section 4 — a member voted out of groups this many times has their account deleted outright. */
+export const VOTE_REMOVED_ACCOUNT_DELETION_THRESHOLD = 3;
+
 export function clampGroupMaximumMembers(maximumMembers: number): number {
   return Math.min(maximumMembers, GROUP_MAX_MEMBERS);
 }
@@ -170,4 +190,26 @@ export function resolveUserDisplayName(user: {
     || `${user.first_name ?? ''} ${user.last_name ?? ''}`.trim()
     || user.email?.split('@')[0]
     || 'A PadiHub member';
+}
+
+/**
+ * Single source of truth for the non-technical subscription status label
+ * shown anywhere in the UI. The DB stores `users.subscription_status`
+ * ('free' | 'trial' | 'active' | 'expired' | 'cancelled') and
+ * `subscriptions.billing_status` ('active' | 'past_due' | 'cancelled' |
+ * 'trialing' | 'paused') separately — a deferred-billing member (profile
+ * steps a-e complete, step f/group-join still outstanding) has
+ * subscription_status='active' AND billing_status='paused', which must
+ * never be surfaced to the user as plain "Active" (they have not been
+ * charged yet). Never show raw enum/snake_case values in the UI — always
+ * resolve through this helper instead.
+ */
+export function resolveSubscriptionStatusDisplay(input: {
+  subscription_status?: string | null;
+  billing_status?: string | null;
+} | undefined | null): 'Pending Charge' | 'Active' | 'Inactive' | 'Not Set' {
+  if (!input || !input.subscription_status) return 'Not Set';
+  if (input.billing_status === 'paused') return 'Pending Charge';
+  if (input.subscription_status === 'active' || input.subscription_status === 'trial') return 'Active';
+  return 'Inactive';
 }

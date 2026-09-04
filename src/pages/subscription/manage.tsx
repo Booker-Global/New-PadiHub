@@ -216,7 +216,7 @@ export default function ManageMembershipPage() {
           // is verified in an active (3+ member) group; a normal, expected
           // state, not a failure, so it gets its own neutral badge rather
           // than being folded into "Active".
-          ? { label: 'Billing on hold', color: '#2563EB', background: 'rgba(37,99,235,0.14)' }
+          ? { label: 'Pending Charge', color: '#2563EB', background: 'rgba(37,99,235,0.14)' }
           : { label: 'Active', color: '#2EAF6F', background: 'rgba(46,175,111,0.2)' };
 
   // Only a real, billable provider subscription counts as "subscribed" — a

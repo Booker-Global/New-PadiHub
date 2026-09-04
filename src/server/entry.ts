@@ -653,6 +653,9 @@ if (import.meta.env.PROD) {
 				await normalizeLegacyTrustScores();
 				const { subscriptionService } = await import('./services/subscriptionService.js');
 				await subscriptionService.activateRetroactiveEligibleSubscriptions();
+				await subscriptionService.backfillCancelledAtRetroactively();
+				const { membershipService } = await import('./services/membershipService.js');
+				await membershipService.reconcileVoteRemovedAccountsRetroactively();
 			} else {
 				console.error(
 					`[PadiHub] ✗ Database connection FAILED after all retries. ` +

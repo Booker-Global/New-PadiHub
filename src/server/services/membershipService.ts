@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { eq, and, inArray, gt, ne, asc } from 'drizzle-orm';
+import { eq, and, inArray, gt, ne, asc, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -8,7 +8,7 @@ import { notificationService } from './notificationService.js';
 import { trustScoreService } from './trustScoreService.js';
 import { groupService } from './groupService.js';
 import { assertPaymentSetupComplete } from './paymentEligibilityService.js';
-import { TRUST_SCORE_DELTA_MEMBER_SUSPENDED, SUBSCRIPTION_TIERS, isSubscriptionTierKey, countryDisplayName, resolveUserDisplayName } from '../lib/constants.js';
+import { TRUST_SCORE_DELTA_MEMBER_SUSPENDED, SUBSCRIPTION_TIERS, isSubscriptionTierKey, countryDisplayName, resolveUserDisplayName, VOTE_REMOVED_ACCOUNT_DELETION_THRESHOLD } from '../lib/constants.js';
 import { describeGroupDuration } from './groupService.js';
 import {
   sendMemberRemovedEmail,
@@ -44,6 +44,9 @@ export const membershipService = {
       first_name:     schema.users.first_name,
       last_name:      schema.users.last_name,
       email:          schema.users.email,
+      // Section 6 — the group page's "Active Members" display card shows
+      // each member's Trust Score alongside their name/join date.
+      trust_score:    schema.users.trust_score,
     }).from(schema.memberships)
       .leftJoin(schema.users, eq(schema.memberships.user_id, schema.users.id))
       .where(eq(schema.memberships.group_id, groupId));
@@ -458,7 +461,7 @@ export const membershipService = {
    */
   async departGroupOwner(
     userId: string, groupId: string,
-    reason: 'voluntary' | 'removed_by_leader' | 'defaulted' | 'vote_removed',
+    reason: 'voluntary' | 'removed_by_leader' | 'defaulted' | 'vote_removed' | 'subscription_payment_failed',
     ipAddress?: string,
   ) {
     const group = await groupService.getById(groupId);
@@ -544,7 +547,7 @@ export const membershipService = {
    */
   async departMember(
     userId: string, groupId: string,
-    reason: 'voluntary' | 'removed_by_leader' | 'defaulted' | 'vote_removed',
+    reason: 'voluntary' | 'removed_by_leader' | 'defaulted' | 'vote_removed' | 'subscription_payment_failed',
     ipAddress?: string,
     succession?: { newOwnerName: string },
   ) {
@@ -607,6 +610,21 @@ export const membershipService = {
       await trustScoreService.decrease(userId, TRUST_SCORE_DELTA_MEMBER_SUSPENDED, 'MEMBER_SUSPENDED');
     }
 
+    // Section 4 — a member voted out of a group for the 3rd time has their
+    // profile deleted outright (distinct from the ordinary per-kick Trust
+    // Score penalty above). Uses a dedicated counter rather than re-deriving
+    // from audit logs on every kick, for speed; the boot-time self-heal in
+    // subscriptionService.ts recomputes it from history for existing accounts.
+    let votedOutThreeTimes = false;
+    if (reason === 'vote_removed') {
+      await db.update(schema.users)
+        .set({ vote_removed_count: sql`${schema.users.vote_removed_count} + 1` })
+        .where(eq(schema.users.id, userId));
+      const countRows = await db.select({ vote_removed_count: schema.users.vote_removed_count })
+        .from(schema.users).where(eq(schema.users.id, userId)).limit(1);
+      votedOutThreeTimes = (countRows[0]?.vote_removed_count ?? 0) >= VOTE_REMOVED_ACCOUNT_DELETION_THRESHOLD;
+    }
+
     const departedUserRow = await db.select({
       email: schema.users.email, first_name: schema.users.first_name, last_name: schema.users.last_name,
     }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
@@ -617,7 +635,9 @@ export const membershipService = {
         ? 'Removed by group leader.'
         : reason === 'vote_removed'
           ? 'Removed by a unanimous group member vote.'
-          : 'Suspended after repeated contribution defaults.';
+          : reason === 'subscription_payment_failed'
+            ? 'Your subscription payment could not be processed even after a retry, so you have been removed from the group.'
+            : 'Suspended after repeated contribution defaults.';
 
     await notificationService.create({
       userId, type: reason === 'defaulted' ? 'membership_suspended' : 'removed_from_group',
@@ -665,6 +685,16 @@ export const membershipService = {
     // may have just hit zero (if this was their only active group); pause
     // their billing immediately rather than waiting for the nightly sweep.
     await groupService.reconcileMemberBilling([userId]);
+
+    // Section 4 — do this LAST, after the group has been notified of the
+    // departure above: deleting the account also departs every OTHER active
+    // group this member belongs to (see userService._performAccountDeletion),
+    // which must not short-circuit the notifications this group's remaining
+    // members are owed for this specific vote-removal.
+    if (votedOutThreeTimes) {
+      const { userService } = await import('./userService.js');
+      await userService.systemDeleteAccount(userId, 'voted_out_three_times');
+    }
     return true;
   },
 
@@ -783,5 +813,56 @@ export const membershipService = {
     }
 
     return { action: 'warned' as const, newStrikeCount };
+  },
+
+  /**
+   * Section 4 retroactive self-heal, run once at boot (see entry.ts). The
+   * per-kick `vote_removed_count` counter was only added in this change, so
+   * accounts already voted out 3+ times under the old code have no counter
+   * value reflecting their real history. Rebuilds the count from the audit
+   * trail (`MEMBER_DEPARTED_COMPENSATED_COMPRESSION` entries with
+   * `metadata.reason === 'vote_removed'`) — the only durable record of why
+   * a member departed, since `memberships.status` itself doesn't retain a
+   * reason. Idempotent: always SETs (never increments) the counter to the
+   * true historical total, so re-running on every boot converges to the
+   * same value and never double-counts.
+   */
+  async reconcileVoteRemovedAccountsRetroactively(): Promise<void> {
+    try {
+      const rows = await db.select({
+        user_id: schema.auditLogs.user_id,
+        metadata: schema.auditLogs.metadata,
+      }).from(schema.auditLogs).where(eq(schema.auditLogs.action, 'MEMBER_DEPARTED_COMPENSATED_COMPRESSION'));
+
+      const voteRemovedCounts = new Map<string, number>();
+      for (const row of rows) {
+        if (!row.user_id) continue;
+        const metadata = row.metadata as { reason?: string } | null;
+        if (metadata?.reason !== 'vote_removed') continue;
+        voteRemovedCounts.set(row.user_id, (voteRemovedCounts.get(row.user_id) ?? 0) + 1);
+      }
+      if (!voteRemovedCounts.size) return;
+
+      for (const [userId, actualCount] of voteRemovedCounts) {
+        const userRows = await db.select({
+          vote_removed_count: schema.users.vote_removed_count,
+          account_status: schema.users.account_status,
+        }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
+        if (!userRows.length) continue;
+        const user = userRows[0];
+
+        if (user.vote_removed_count !== actualCount) {
+          await db.update(schema.users).set({ vote_removed_count: actualCount }).where(eq(schema.users.id, userId));
+        }
+
+        if (actualCount >= VOTE_REMOVED_ACCOUNT_DELETION_THRESHOLD && user.account_status !== 'deactivated') {
+          console.log(`[PadiHub] Retroactive vote-kick migration: deleting account ${userId} (voted out ${actualCount} times).`);
+          const { userService } = await import('./userService.js');
+          await userService.systemDeleteAccount(userId, 'voted_out_three_times');
+        }
+      }
+    } catch (err) {
+      console.error('[PadiHub] Retroactive vote-kick migration failed:', err instanceof Error ? err.message : err);
+    }
   },
 };

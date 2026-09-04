@@ -6,7 +6,7 @@
  * There is no free trial and no annual billing option.
  */
 import { v4 as uuidv4 } from 'uuid';
-import { eq, and, inArray, notInArray, isNotNull, desc } from 'drizzle-orm';
+import { eq, and, inArray, notInArray, isNotNull, isNull, desc } from 'drizzle-orm';
 import axios from 'axios';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
@@ -383,6 +383,7 @@ export const subscriptionService = {
         renewal_date:               result.renewalDate,
         plan,
         last_activation_attempt_at: new Date(),
+        cancelled_at:               null,
       }).where(eq(schema.subscriptions.user_id, userId));
     } else {
       await db.insert(schema.subscriptions).values({
@@ -631,7 +632,7 @@ export const subscriptionService = {
     }
 
     await db.update(schema.subscriptions)
-      .set({ billing_status: 'cancelled' })
+      .set({ billing_status: 'cancelled', cancelled_at: new Date() })
       .where(eq(schema.subscriptions.user_id, userId));
 
     await db.update(schema.users)
@@ -798,6 +799,91 @@ export const subscriptionService = {
           console.error('[SubscriptionService] Failed to resume provider billing:', error);
         }
       }
+
+      // Section 1/5 — a member is billed FROM THE DAY they become an
+      // active group member (step f complete), then monthly afterwards.
+      // Stripe (GB) resumeBilling above already clears pause_collection,
+      // which makes Stripe itself charge the card immediately and fire the
+      // usual invoice.payment_succeeded/payment_failed webhooks (handled in
+      // webhookStripeController.ts) — so GB's outcome-dependent emails are
+      // already correctly deferred to those webhooks. Flutterwave (NG) has
+      // no such subscription engine to do this for us (pauseBilling/
+      // resumeBilling are no-ops there — see FlutterwaveProvider), so we
+      // must charge the saved card token here, synchronously, and only
+      // report success/failure once we actually know the real outcome.
+      if (user.country === 'NG' && sub.provider === 'flutterwave') {
+        if (!user.flutterwave_card_token) {
+          await db.update(schema.subscriptions).set({ billing_status: 'past_due', first_charge_failed_at: new Date() }).where(eq(schema.subscriptions.user_id, userId));
+          await db.update(schema.users).set({ subscription_status: 'expired' }).where(eq(schema.users.id, userId));
+          await sendSubscriptionPaymentFailedEmail(
+            user.email,
+            isSubscriptionTierKey(user.subscription_tier) ? formatTierPrice(user.subscription_tier, user.country) : '',
+          );
+          await createAuditLog({ userId, action: 'FLW_SUBSCRIPTION_FIRST_CHARGE_FAILED', entity: 'subscriptions', metadata: { reason: 'no_card_on_file', activeGroupCount } });
+          return;
+        }
+
+        const amountInSmallestUnit = Math.round(getTierMonthlyPrice(
+          isSubscriptionTierKey(user.subscription_tier) ? user.subscription_tier : 'basic', 'NG',
+        ) * 100);
+        const chargeRef = `sub-first-charge-${sub.id}-${Date.now()}`;
+        let chargeSucceeded = false;
+        try {
+          const result = await provider.chargeContribution({
+            customerId:      user.email,
+            paymentMethodId: user.flutterwave_card_token,
+            amount:          amountInSmallestUnit,
+            currency:        user.currency,
+            countryCode:     user.country,
+            contributionId:  chargeRef,
+            description:     'PadiHub monthly subscription — first charge on joining an active group',
+          });
+          chargeSucceeded = result.status === 'succeeded';
+          await createAuditLog({
+            userId, action: 'FLW_SUBSCRIPTION_FIRST_CHARGE', entity: 'subscriptions', entityId: sub.id,
+            metadata: { ...(result as unknown as Record<string, unknown>), activeGroupCount },
+          });
+        } catch (error) {
+          console.error('[SubscriptionService] Flutterwave first-charge-on-join failed:', error);
+        }
+
+        if (!chargeSucceeded) {
+          await db.update(schema.subscriptions).set({ billing_status: 'past_due', first_charge_failed_at: new Date() }).where(eq(schema.subscriptions.user_id, userId));
+          await db.update(schema.users).set({ subscription_status: 'expired' }).where(eq(schema.users.id, userId));
+          await sendSubscriptionPaymentFailedEmail(
+            user.email,
+            isSubscriptionTierKey(user.subscription_tier) ? formatTierPrice(user.subscription_tier, user.country) : '',
+          );
+          return;
+        }
+
+        await db.update(schema.subscriptions).set({ first_charge_failed_at: null }).where(eq(schema.subscriptions.user_id, userId));
+
+        // Monthly from date of first charge (Section 5).
+        const firstRenewalDate = new Date();
+        firstRenewalDate.setMonth(firstRenewalDate.getMonth() + 1);
+        await db.update(schema.subscriptions)
+          .set({ billing_status: 'active', renewal_date: firstRenewalDate })
+          .where(eq(schema.subscriptions.user_id, userId));
+        await db.update(schema.users).set({ subscription_status: 'active' }).where(eq(schema.users.id, userId));
+        await createAuditLog({ userId, action: 'SUBSCRIPTION_BILLING_RESUMED', entity: 'subscriptions', metadata: { activeGroupCount, provider: 'flutterwave' } });
+
+        if (isSubscriptionTierKey(user.subscription_tier)) {
+          await sendSubscriptionCreatedEmail(
+            user.email,
+            SUBSCRIPTION_TIERS[user.subscription_tier].name,
+            formatTierPrice(user.subscription_tier, user.country),
+            firstRenewalDate.toLocaleDateString('en-GB'),
+          );
+        }
+        await notificationService.create({
+          userId, type: 'subscription_billing_resumed',
+          title: 'Payment successful — your subscription has begun',
+          message: 'You\'re now an active member of a launched group. Your card was charged successfully and your monthly PadiHub subscription has begun.',
+        });
+        return;
+      }
+
       await db.update(schema.subscriptions).set({ billing_status: 'active' }).where(eq(schema.subscriptions.user_id, userId));
       await createAuditLog({ userId, action: 'SUBSCRIPTION_BILLING_RESUMED', entity: 'subscriptions', metadata: { activeGroupCount } });
 
@@ -815,6 +901,146 @@ export const subscriptionService = {
         message: 'You\'re now an active member of a launched group — your PadiHub subscription billing has started.',
       });
     }
+  },
+
+  /**
+   * Section 7 — the one-and-only 72-hour retry for a failed Flutterwave
+   * "first charge on joining an active group" (see
+   * reconcileBillingForActiveGroupMembership's NG branch above). Called by
+   * scheduledJobs.dailySubscriptionFirstChargeRetry for every subscription
+   * whose first_charge_failed_at is 72+ hours old. If the retry succeeds,
+   * billing resumes exactly as if the original charge had succeeded; if it
+   * fails again (or there's still no card on file), the member is removed
+   * from every active group they're currently in and notified — never
+   * silently left stuck in "past_due" limbo.
+   */
+  async retryFirstChargeOrRemoveOnFailure(userId: string): Promise<void> {
+    const subRows = await db.select().from(schema.subscriptions).where(eq(schema.subscriptions.user_id, userId)).limit(1);
+    if (!subRows.length) return;
+    const sub = subRows[0];
+    // Already resolved (e.g. billing resumed via another path in the
+    // meantime) — just clear the stale flag and stop.
+    if (!sub.first_charge_failed_at || sub.provider !== 'flutterwave' || sub.billing_status !== 'past_due') {
+      if (sub.first_charge_failed_at) {
+        await db.update(schema.subscriptions).set({ first_charge_failed_at: null }).where(eq(schema.subscriptions.user_id, userId));
+      }
+      return;
+    }
+
+    const userRows = await db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1);
+    if (!userRows.length) return;
+    const user = userRows[0];
+
+    let chargeSucceeded = false;
+    if (user.flutterwave_card_token) {
+      const amountInSmallestUnit = Math.round(getTierMonthlyPrice(
+        isSubscriptionTierKey(user.subscription_tier) ? user.subscription_tier : 'basic', 'NG',
+      ) * 100);
+      const chargeRef = `sub-first-charge-retry-${sub.id}-${Date.now()}`;
+      try {
+        const result = await getPaymentProvider('NG').chargeContribution({
+          customerId:      user.email,
+          paymentMethodId: user.flutterwave_card_token,
+          amount:          amountInSmallestUnit,
+          currency:        user.currency,
+          countryCode:     user.country,
+          contributionId:  chargeRef,
+          description:     'PadiHub monthly subscription — 72-hour retry of first charge on joining an active group',
+        });
+        chargeSucceeded = result.status === 'succeeded';
+        await createAuditLog({
+          userId, action: 'FLW_SUBSCRIPTION_FIRST_CHARGE_RETRY', entity: 'subscriptions', entityId: sub.id,
+          metadata: { ...(result as unknown as Record<string, unknown>) },
+        });
+      } catch (error) {
+        console.error('[SubscriptionService] Flutterwave first-charge 72h retry failed:', error);
+      }
+    }
+
+    if (!chargeSucceeded) {
+      await db.update(schema.subscriptions).set({ first_charge_failed_at: null }).where(eq(schema.subscriptions.user_id, userId));
+
+      const activeMemberships = await db.select({
+        group_id: schema.memberships.group_id,
+        leader_id: schema.savingsGroups.leader_id,
+      })
+        .from(schema.memberships)
+        .innerJoin(schema.savingsGroups, eq(schema.memberships.group_id, schema.savingsGroups.id))
+        .where(and(eq(schema.memberships.user_id, userId), eq(schema.memberships.status, 'active')));
+
+      for (const membership of activeMemberships) {
+        if (membership.leader_id === userId) {
+          await membershipService.departGroupOwner(userId, membership.group_id, 'subscription_payment_failed');
+        } else {
+          await membershipService.departMember(userId, membership.group_id, 'subscription_payment_failed');
+        }
+      }
+      return;
+    }
+
+    await db.update(schema.subscriptions).set({ first_charge_failed_at: null }).where(eq(schema.subscriptions.user_id, userId));
+
+    const firstRenewalDate = new Date();
+    firstRenewalDate.setMonth(firstRenewalDate.getMonth() + 1);
+    await db.update(schema.subscriptions)
+      .set({ billing_status: 'active', renewal_date: firstRenewalDate })
+      .where(eq(schema.subscriptions.user_id, userId));
+    await db.update(schema.users).set({ subscription_status: 'active' }).where(eq(schema.users.id, userId));
+    await createAuditLog({ userId, action: 'SUBSCRIPTION_BILLING_RESUMED', entity: 'subscriptions', metadata: { provider: 'flutterwave', retried: true } });
+
+    if (isSubscriptionTierKey(user.subscription_tier)) {
+      await sendSubscriptionCreatedEmail(
+        user.email,
+        SUBSCRIPTION_TIERS[user.subscription_tier].name,
+        formatTierPrice(user.subscription_tier, user.country),
+        firstRenewalDate.toLocaleDateString('en-GB'),
+      );
+    }
+    await notificationService.create({
+      userId, type: 'subscription_billing_resumed',
+      title: 'Payment successful — your subscription has begun',
+      message: 'Your retried card charge succeeded. Your monthly PadiHub subscription has begun.',
+    });
+  },
+
+  /**
+   * Section 1 — called by scheduledJobs.dailyPendingChargeGroupJoinFollowUp
+   * once a member has sat in "Pending Charge" (billing_status 'paused', no
+   * active group) for PENDING_CHARGE_GROUP_JOIN_EXPIRY_DAYS (30) without
+   * joining/launching an active group. Never charges anything — cancels
+   * the still-dormant provider subscription (if one was ever created),
+   * clears the chosen plan so the dashboard shows "subscription plan
+   * pending" again, and resets subscription_status to the inactive state,
+   * putting the member back at the "choose a plan" onboarding step. Their
+   * verified card/payout/identity are all left intact — only the plan
+   * selection needs to be redone.
+   */
+  async expirePendingChargeWithoutGroup(userId: string): Promise<void> {
+    const subRows = await db.select().from(schema.subscriptions).where(eq(schema.subscriptions.user_id, userId)).limit(1);
+    const sub = subRows[0];
+
+    if (sub?.provider_subscription_id && sub.billing_status !== 'cancelled') {
+      try {
+        const userRows = await db.select({ country: schema.users.country }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
+        const country = userRows[0]?.country ?? 'GB';
+        const provider = getPaymentProvider(country === 'NG' ? 'NG' : 'GB');
+        await provider.cancelSubscription({ subscriptionId: sub.provider_subscription_id });
+      } catch (error) {
+        console.error('[SubscriptionService] Failed to cancel dormant provider subscription during Pending Charge expiry:', error);
+      }
+    }
+
+    if (sub) {
+      await db.update(schema.subscriptions)
+        .set({ billing_status: 'cancelled', provider_subscription_id: null, renewal_date: null, cancelled_at: new Date() })
+        .where(eq(schema.subscriptions.user_id, userId));
+    }
+
+    await db.update(schema.users)
+      .set({ subscription_tier: null, subscription_status: 'expired', onboarding_completed_email_sent_at: null, group_join_reminder_last_sent_at: null })
+      .where(eq(schema.users.id, userId));
+
+    await createAuditLog({ userId, action: 'SUBSCRIPTION_PENDING_CHARGE_EXPIRED', entity: 'subscriptions', metadata: { reason: 'no_active_group_joined_within_window' } });
   },
 
   /**
@@ -855,6 +1081,36 @@ export const subscriptionService = {
       }
     } catch (err) {
       console.error('[PadiHub] Retroactive subscription-eligibility migration failed:', err instanceof Error ? err.message : err);
+    }
+  },
+
+  /**
+   * Section 3 retroactive self-heal, run once at boot (see entry.ts).
+   * `cancelled_at` was only added in this change to anchor the 60-day
+   * "cancelled and never rejoined" deletion window (dailyResubscribeFollowUp
+   * in scheduledJobs.ts) — rows already sitting at billing_status=
+   * 'cancelled' from before then have no value to anchor against, which
+   * would leave those existing accounts stuck forever without a deletion
+   * clock ever starting. Backfills from `updated_at` (the timestamp of the
+   * cancellation write itself, since cancelSubscription's own update is the
+   * last write that ever touches a cancelled row). Idempotent — only
+   * targets rows where `cancelled_at IS NULL`, so it's a no-op after the
+   * first successful run.
+   */
+  async backfillCancelledAtRetroactively(): Promise<void> {
+    try {
+      const rows = await db.select({ id: schema.subscriptions.id, updated_at: schema.subscriptions.updated_at })
+        .from(schema.subscriptions)
+        .where(and(eq(schema.subscriptions.billing_status, 'cancelled'), isNull(schema.subscriptions.cancelled_at)));
+
+      if (!rows.length) return;
+
+      console.log(`[PadiHub] Retroactive cancellation-timestamp migration: backfilling ${rows.length} cancelled subscription(s).`);
+      for (const row of rows) {
+        await db.update(schema.subscriptions).set({ cancelled_at: row.updated_at }).where(eq(schema.subscriptions.id, row.id));
+      }
+    } catch (err) {
+      console.error('[PadiHub] Retroactive cancellation-timestamp migration failed:', err instanceof Error ? err.message : err);
     }
   },
 };

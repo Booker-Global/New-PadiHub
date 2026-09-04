@@ -5,7 +5,7 @@
  *
  * These are named exports ready for Trigger.dev or any cron runner.
  */
-import { eq, lt, lte, and, inArray } from 'drizzle-orm';
+import { eq, lt, lte, and, inArray, isNotNull, ne } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { contributionService } from './contributionService.js';
@@ -20,13 +20,21 @@ import { computeNextPayoutDate } from '../lib/payoutSchedule.js';
 import {
   SUBSCRIPTION_TIERS, isSubscriptionTierKey, getTierMonthlyPrice, formatTierPrice,
   GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH, GROUP_STUCK_BELOW_MIN_EXPIRY_DAYS, GROUP_STUCK_EXPIRY_REMINDER_DAYS_BEFORE,
+  ACCOUNT_LIFECYCLE_REMINDER_INTERVAL_DAYS, PENDING_CHARGE_GROUP_JOIN_EXPIRY_DAYS,
+  INCOMPLETE_PROFILE_EXPIRY_DAYS, CANCELLED_SUBSCRIPTION_EXPIRY_DAYS,
 } from '../lib/constants.js';
 import { planCode, subscriptionService } from './subscriptionService.js';
+import { getOnboardingProgress } from './paymentEligibilityService.js';
 import {
   sendContributionReminderEmail,
   sendSubscriptionRenewalReminderEmail,
   sendGroupExpiredEmail,
   sendGroupExpiryReminderEmail,
+  sendSubscriptionPaymentFailedEmail,
+  sendPendingChargeGroupJoinReminderEmail,
+  sendPendingChargeExpiredEmail,
+  sendIncompleteProfileReminderEmail,
+  sendResubscribeReminderEmail,
 } from '../integrations/email/emailService.js';
 
 // Nigeria "Basic" tier price is the default fallback if a user somehow has no
@@ -285,6 +293,36 @@ export async function dailyBillingActiveGroupReconciliation(): Promise<void> {
 }
 
 /**
+ * Section 7 — the one-and-only 72-hour retry for a Flutterwave "first
+ * charge on joining an active group" that failed synchronously (see
+ * subscriptionService.reconcileBillingForActiveGroupMembership). Finds
+ * every subscription whose first_charge_failed_at is 72+ hours old and
+ * hands it to subscriptionService.retryFirstChargeOrRemoveOnFailure, which
+ * either resumes billing (retry succeeded) or removes the member from
+ * every active group they're in and notifies them (retry failed again).
+ */
+export async function dailySubscriptionFirstChargeRetry(): Promise<void> {
+  await runJob('daily_subscription_first_charge_retry', async () => {
+    const cutoff = new Date(Date.now() - 72 * 60 * 60 * 1000);
+    const due = await db.select({ user_id: schema.subscriptions.user_id })
+      .from(schema.subscriptions)
+      .where(and(
+        eq(schema.subscriptions.billing_status, 'past_due'),
+        isNotNull(schema.subscriptions.first_charge_failed_at),
+        lte(schema.subscriptions.first_charge_failed_at, cutoff),
+      ));
+
+    for (const sub of due) {
+      try {
+        await subscriptionService.retryFirstChargeOrRemoveOnFailure(sub.user_id);
+      } catch (err) {
+        console.error(`[Job] daily_subscription_first_charge_retry: failed for user ${sub.user_id}:`, err instanceof Error ? err.message : err);
+      }
+    }
+  });
+}
+
+/**
  * Section 4 — governance votes (member_admission, contribution_claim,
  * payout_swap) must auto-resolve once their 48h voting_deadline passes,
  * since checkAndClose is otherwise only invoked reactively when a member
@@ -296,6 +334,185 @@ export async function dailyGovernanceVoteExpiry(): Promise<void> {
   await runJob('daily_governance_vote_expiry', async () => {
     const { voteService } = await import('./voteService.js');
     await voteService.expireOverdueVotes();
+  });
+}
+
+/**
+ * Section 1 — a member whose profile is 100% complete (steps a-e) but who
+ * hasn't yet joined/launched an active (3+ member) group sits in
+ * "Pending Charge" (billing_status 'paused', activeGroupCount 0) — their
+ * card is validated but never charged while in this state. Nudges them
+ * every ACCOUNT_LIFECYCLE_REMINDER_INTERVAL_DAYS (7) to go join a group,
+ * anchored on users.onboarding_completed_email_sent_at (the moment steps
+ * a-e finished). After PENDING_CHARGE_GROUP_JOIN_EXPIRY_DAYS (30) with no
+ * active group joined, the subscription is cancelled and the plan
+ * selection cleared — the profile becomes incomplete again ("subscription
+ * plan pending") and the member must re-select a plan and join a group
+ * from scratch. They are never charged in this entire flow.
+ */
+export async function dailyPendingChargeGroupJoinFollowUp(): Promise<void> {
+  await runJob('daily_pending_charge_group_join_follow_up', async () => {
+    const candidates = await db.select({
+      id:                                schema.users.id,
+      email:                             schema.users.email,
+      first_name:                        schema.users.first_name,
+      onboarding_completed_email_sent_at: schema.users.onboarding_completed_email_sent_at,
+      group_join_reminder_last_sent_at:  schema.users.group_join_reminder_last_sent_at,
+    })
+      .from(schema.users)
+      .innerJoin(schema.subscriptions, eq(schema.subscriptions.user_id, schema.users.id))
+      .where(and(
+        eq(schema.subscriptions.billing_status, 'paused'),
+        isNotNull(schema.users.onboarding_completed_email_sent_at),
+        eq(schema.users.active, true),
+      ));
+
+    const now = Date.now();
+    const expiryMs = PENDING_CHARGE_GROUP_JOIN_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
+    const reminderMs = ACCOUNT_LIFECYCLE_REMINDER_INTERVAL_DAYS * 24 * 60 * 60 * 1000;
+
+    for (const user of candidates) {
+      if (!user.onboarding_completed_email_sent_at) continue;
+      // Only genuinely "no active group" members qualify — a member who has
+      // since joined one is no longer in this cohort even if the nightly
+      // billing-reconciliation sweep hasn't flipped billing_status yet.
+      const activeGroupCount = await groupService.countActiveGroupMembershipsForUser(user.id);
+      if (activeGroupCount > 0) continue;
+
+      const anchorMs = new Date(user.onboarding_completed_email_sent_at).getTime();
+      const elapsedMs = now - anchorMs;
+
+      if (elapsedMs >= expiryMs) {
+        await subscriptionService.expirePendingChargeWithoutGroup(user.id);
+        await sendPendingChargeExpiredEmail(user.email, user.first_name);
+        continue;
+      }
+
+      const lastSentMs = user.group_join_reminder_last_sent_at ? new Date(user.group_join_reminder_last_sent_at).getTime() : null;
+      const dueForReminder = elapsedMs >= reminderMs && (lastSentMs === null || (now - lastSentMs) >= reminderMs);
+      if (!dueForReminder) continue;
+
+      const daysRemaining = Math.max(1, Math.ceil((expiryMs - elapsedMs) / (24 * 60 * 60 * 1000)));
+      await sendPendingChargeGroupJoinReminderEmail(user.email, user.first_name, daysRemaining);
+      await db.update(schema.users).set({ group_join_reminder_last_sent_at: new Date() }).where(eq(schema.users.id, user.id));
+    }
+  });
+}
+
+/**
+ * Section 2 — a member who hasn't finished every onboarding step (email,
+ * plan, verified card, verified payout, identity) yet. Subscription stays
+ * inactive and they cannot join a group at all while incomplete — no
+ * payment has ever been attempted, so this NEVER sends a payment-failure
+ * email, only a friendly reminder of what's outstanding, anchored on
+ * users.created_at (account age). Account is deleted after
+ * INCOMPLETE_PROFILE_EXPIRY_DAYS (60) — see userService.systemDeleteAccount,
+ * which (unlike self-service deletion) leaves the email free for a fresh
+ * sign-up.
+ */
+export async function dailyIncompleteProfileFollowUp(): Promise<void> {
+  await runJob('daily_incomplete_profile_follow_up', async () => {
+    const candidates = await db.select({
+      id:                                             schema.users.id,
+      email:                                          schema.users.email,
+      first_name:                                     schema.users.first_name,
+      created_at:                                      schema.users.created_at,
+      onboarding_incomplete_reminder_last_sent_at:      schema.users.onboarding_incomplete_reminder_last_sent_at,
+    })
+      .from(schema.users)
+      // subscription_status only ever becomes 'active' once every onboarding
+      // step (including plan selection) succeeds — see subscriptionService
+      // .createSubscription — so excluding it here cheaply narrows to
+      // exactly this cohort (steps a-e not yet finished) without needing to
+      // run the full eligibility check against every single user.
+      .where(and(eq(schema.users.active, true), ne(schema.users.subscription_status, 'active')));
+
+    const now = Date.now();
+    const expiryMs = INCOMPLETE_PROFILE_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
+    const reminderMs = ACCOUNT_LIFECYCLE_REMINDER_INTERVAL_DAYS * 24 * 60 * 60 * 1000;
+
+    for (const user of candidates) {
+      const progress = await getOnboardingProgress(user.id);
+      if (progress.complete) continue; // steps a-e already done — not this cohort
+
+      const anchorMs = new Date(user.created_at).getTime();
+      const elapsedMs = now - anchorMs;
+
+      if (elapsedMs >= expiryMs) {
+        const { userService } = await import('./userService.js');
+        try {
+          await userService.systemDeleteAccount(user.id, 'incomplete_profile_60_days');
+        } catch (err) {
+          console.error(`[Job] daily_incomplete_profile_follow_up: failed to delete account ${user.id}:`, err instanceof Error ? err.message : err);
+        }
+        continue;
+      }
+
+      const lastSentMs = user.onboarding_incomplete_reminder_last_sent_at ? new Date(user.onboarding_incomplete_reminder_last_sent_at).getTime() : null;
+      const dueForReminder = elapsedMs >= reminderMs && (lastSentMs === null || (now - lastSentMs) >= reminderMs);
+      if (!dueForReminder) continue;
+
+      const missingSteps = progress.steps.filter(step => !step.complete).map(step => step.label);
+      const daysRemaining = Math.max(1, Math.ceil((expiryMs - elapsedMs) / (24 * 60 * 60 * 1000)));
+      await sendIncompleteProfileReminderEmail(user.email, user.first_name, missingSteps, daysRemaining);
+      await db.update(schema.users).set({ onboarding_incomplete_reminder_last_sent_at: new Date() }).where(eq(schema.users.id, user.id));
+    }
+  });
+}
+
+/**
+ * Section 3 — a member who was previously subscribed and cancelled (their
+ * subscription_status/billing_status both went to 'cancelled' via
+ * subscriptionService.cancelSubscription, which also already departs them
+ * from every group they were in). Nudged every 7 days to re-subscribe,
+ * anchored on subscriptions.cancelled_at; deleted after
+ * CANCELLED_SUBSCRIPTION_EXPIRY_DAYS (60) if they never do.
+ */
+export async function dailyResubscribeFollowUp(): Promise<void> {
+  await runJob('daily_resubscribe_follow_up', async () => {
+    const candidates = await db.select({
+      id:                                schema.users.id,
+      email:                             schema.users.email,
+      first_name:                        schema.users.first_name,
+      resubscribe_reminder_last_sent_at: schema.users.resubscribe_reminder_last_sent_at,
+      cancelled_at:                      schema.subscriptions.cancelled_at,
+    })
+      .from(schema.users)
+      .innerJoin(schema.subscriptions, eq(schema.subscriptions.user_id, schema.users.id))
+      .where(and(
+        eq(schema.subscriptions.billing_status, 'cancelled'),
+        eq(schema.users.subscription_status, 'cancelled'),
+        isNotNull(schema.subscriptions.cancelled_at),
+        eq(schema.users.active, true),
+      ));
+
+    const now = Date.now();
+    const expiryMs = CANCELLED_SUBSCRIPTION_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
+    const reminderMs = ACCOUNT_LIFECYCLE_REMINDER_INTERVAL_DAYS * 24 * 60 * 60 * 1000;
+
+    for (const user of candidates) {
+      if (!user.cancelled_at) continue;
+      const anchorMs = new Date(user.cancelled_at).getTime();
+      const elapsedMs = now - anchorMs;
+
+      if (elapsedMs >= expiryMs) {
+        const { userService } = await import('./userService.js');
+        try {
+          await userService.systemDeleteAccount(user.id, 'inactive_after_cancellation_60_days');
+        } catch (err) {
+          console.error(`[Job] daily_resubscribe_follow_up: failed to delete account ${user.id}:`, err instanceof Error ? err.message : err);
+        }
+        continue;
+      }
+
+      const lastSentMs = user.resubscribe_reminder_last_sent_at ? new Date(user.resubscribe_reminder_last_sent_at).getTime() : null;
+      const dueForReminder = elapsedMs >= reminderMs && (lastSentMs === null || (now - lastSentMs) >= reminderMs);
+      if (!dueForReminder) continue;
+
+      const daysRemaining = Math.max(1, Math.ceil((expiryMs - elapsedMs) / (24 * 60 * 60 * 1000)));
+      await sendResubscribeReminderEmail(user.email, user.first_name, daysRemaining);
+      await db.update(schema.users).set({ resubscribe_reminder_last_sent_at: new Date() }).where(eq(schema.users.id, user.id));
+    }
   });
 }
 
@@ -482,6 +699,14 @@ export async function monthlySubscriptionRenewalCharge(): Promise<void> {
         });
         await db.update(schema.subscriptions).set({ billing_status: 'past_due' }).where(eq(schema.subscriptions.id, sub.id));
         await db.update(schema.users).set({ subscription_status: 'expired' }).where(eq(schema.users.id, user.id));
+        // Item 7 — payment failure emails are sent for a genuine failed
+        // charge attempt against monthly contribution due; a missing card
+        // means the charge could never even be attempted, but the member
+        // still needs to know their subscription lapsed and why.
+        await sendSubscriptionPaymentFailedEmail(
+          user.email,
+          isSubscriptionTierKey(user.subscription_tier) ? formatTierPrice(user.subscription_tier, user.country) : '',
+        );
         continue;
       }
 
@@ -515,6 +740,12 @@ export async function monthlySubscriptionRenewalCharge(): Promise<void> {
             title: 'Subscription Renewal Failed',
             message: 'Your subscription payment failed. Please update your payment method to keep access.',
           });
+          // Item 7 — genuine failed charge attempt for the monthly
+          // contribution due.
+          await sendSubscriptionPaymentFailedEmail(
+            user.email,
+            isSubscriptionTierKey(user.subscription_tier) ? formatTierPrice(user.subscription_tier, user.country) : '',
+          );
         }
 
         await createAuditLog({
@@ -529,6 +760,10 @@ export async function monthlySubscriptionRenewalCharge(): Promise<void> {
       } catch (err) {
         await db.update(schema.subscriptions).set({ billing_status: 'past_due' }).where(eq(schema.subscriptions.id, sub.id));
         await db.update(schema.users).set({ subscription_status: 'expired' }).where(eq(schema.users.id, user.id));
+        await sendSubscriptionPaymentFailedEmail(
+          user.email,
+          isSubscriptionTierKey(user.subscription_tier) ? formatTierPrice(user.subscription_tier, user.country) : '',
+        );
         console.warn(
           `[Job] monthly_subscription_renewal_charge: renewal charge failed for subscription ${sub.id}:`,
           err instanceof Error ? err.message : err,
