@@ -794,8 +794,14 @@ export const groupService = {
    * reminder card per group must ever reach the dashboard, so this collapses
    * to the single best invite per group_id: the newest non-expired one if
    * any exists, otherwise the newest overall.
+   *
+   * `userId` is used as a defense-in-depth guard: even if a stale duplicate
+   * invitation row was left `accepted=false` for a group the member has
+   * already joined (e.g. an older re-sent invite whose token was never the
+   * one actually used to join), a group the user already has an
+   * active/pending membership in must never be shown as "pending" again.
    */
-  async getPendingInvitationsForEmail(email?: string | null) {
+  async getPendingInvitationsForEmail(email?: string | null, userId?: string | null) {
     if (!email) return [];
     const normalized = email.trim().toLowerCase();
     const rows = await db.select({
@@ -811,11 +817,20 @@ export const groupService = {
       .innerJoin(schema.savingsGroups, eq(schema.groupInvitations.group_id, schema.savingsGroups.id))
       .where(eq(schema.groupInvitations.accepted, false));
 
+    const alreadyJoinedGroupIds = userId
+      ? new Set(
+          (await db.select({ group_id: schema.memberships.group_id }).from(schema.memberships)
+            .where(and(eq(schema.memberships.user_id, userId), inArray(schema.memberships.status, ['active', 'pending']))))
+            .map(row => row.group_id),
+        )
+      : new Set<string>();
+
     const now = new Date();
     const bestPerGroup = new Map<string, typeof rows[number] & { expired: boolean }>();
     for (const row of rows) {
       if ((row.email ?? '').trim().toLowerCase() !== normalized) continue;
       if (row.group_status === 'closed' || row.group_status === 'expired') continue;
+      if (alreadyJoinedGroupIds.has(row.group_id)) continue;
 
       const candidate = { ...row, expired: now > row.expires_at };
       const existing = bestPerGroup.get(row.group_id);

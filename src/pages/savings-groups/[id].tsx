@@ -287,7 +287,6 @@ export default function SavingsGroupDetailPage() {
   const [editPayoutDay, setEditPayoutDay] = useState('');
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState('');
-  const [editNotice, setEditNotice] = useState('');
   const [membershipActionId, setMembershipActionId] = useState<string | null>(null);
   const [membershipActionError, setMembershipActionError] = useState('');
   const [admissionVoteId, setAdmissionVoteId] = useState<string | null>(null);
@@ -316,6 +315,7 @@ export default function SavingsGroupDetailPage() {
   const [activating, setActivating] = useState(false);
   const [activateError, setActivateError] = useState('');
   const [activateNotice, setActivateNotice] = useState('');
+  const [groupUpdateNotice, setGroupUpdateNotice] = useState('');
 
   const loadData = useCallback(async () => {
     if (!id) {
@@ -715,7 +715,7 @@ export default function SavingsGroupDetailPage() {
     setEditContributionAmount(String(group.contribution_amount ?? ''));
     setEditPayoutDay(group.payout_day !== null && group.payout_day !== undefined ? String(group.payout_day) : '');
     setEditError('');
-    setEditNotice('');
+    setGroupUpdateNotice('');
     setEditOpen(true);
   };
 
@@ -723,7 +723,6 @@ export default function SavingsGroupDetailPage() {
     setEditOpen(false);
     setEditSaving(false);
     setEditError('');
-    setEditNotice('');
   };
 
   const handleSaveEdit = async () => {
@@ -737,7 +736,6 @@ export default function SavingsGroupDetailPage() {
 
     setEditSaving(true);
     setEditError('');
-    setEditNotice('');
 
     try {
       const response = await window.fetch(`/api/groups/${id}`, {
@@ -761,7 +759,8 @@ export default function SavingsGroupDetailPage() {
       }
 
       if (json.data) setGroup(json.data);
-      setEditNotice('Group settings saved. Active members have been notified.');
+      setGroupUpdateNotice('Group settings saved successfully. Active members have been notified.');
+      closeEditModal();
     } catch {
       setEditError('Network error. Please check your connection and try again.');
     } finally {
@@ -1182,11 +1181,7 @@ export default function SavingsGroupDetailPage() {
                       Waiting to start · {activeMembers.length} of {GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH} verified members
                     </span>
                   )
-                ) : (
-                  <Link to={`/savings-groups/${group.id}/contribute`} className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-sm font-bold text-white transition-all hover:opacity-90" style={{ background: `linear-gradient(135deg, ${groupColor}, ${groupColor}cc)` }}>
-                    <PiggyBank size={14} /> Make Payment
-                  </Link>
-                )}
+                ) : null}
               </div>
               {group.status === 'draft' && activateError && (
                 <div className="rounded-xl p-2.5 text-xs font-semibold flex items-center gap-2 mb-3" style={{ background: 'rgba(239,68,68,0.12)', color: '#FCA5A5' }}>
@@ -1196,6 +1191,11 @@ export default function SavingsGroupDetailPage() {
               {activateNotice && (
                 <div className="rounded-xl p-2.5 text-xs font-semibold flex items-center gap-2 mb-3" style={{ background: 'rgba(245,158,11,0.12)', color: '#B45309' }}>
                   <AlertTriangle size={13} /> {activateNotice}
+                </div>
+              )}
+              {groupUpdateNotice && (
+                <div className="rounded-xl p-2.5 text-xs font-semibold flex items-center gap-2 mb-3" style={{ background: 'rgba(46,175,111,0.14)', color: '#4ADE80' }}>
+                  <CheckCircle size={13} /> {groupUpdateNotice}
                 </div>
               )}
 
@@ -1937,11 +1937,6 @@ export default function SavingsGroupDetailPage() {
                 {editError && (
                   <div style={{ borderRadius: 16, padding: 16, fontSize: 14, fontWeight: 500, background: '#FEF2F2', color: '#DC2626', border: '1px solid #FECACA', marginBottom: 16 }}>
                     {editError}
-                  </div>
-                )}
-                {editNotice && (
-                  <div style={{ borderRadius: 16, padding: 16, fontSize: 14, fontWeight: 500, background: '#F0FDF4', color: '#15803D', border: '1px solid #BBF7D0', marginBottom: 16 }}>
-                    {editNotice}
                   </div>
                 )}
 

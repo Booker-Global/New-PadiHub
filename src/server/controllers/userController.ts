@@ -44,7 +44,7 @@ export const userController = {
     try {
       const [data, pendingInvitations] = await Promise.all([
         getOnboardingProgress(req.user!.userId),
-        groupService.getPendingInvitationsForEmail(req.user!.email),
+        groupService.getPendingInvitationsForEmail(req.user!.email, req.user!.userId),
       ]);
       res.json({ success: true, data: { ...data, pending_invitations: pendingInvitations } });
     } catch (e) { next(e); }

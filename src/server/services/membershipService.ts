@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { eq, and, inArray, gt, ne, asc, sql } from 'drizzle-orm';
+import { eq, and, or, inArray, gt, ne, asc, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -178,8 +178,22 @@ export const membershipService = {
     // Invited (by token or by matching email) — leader already vetted this
     // person, so they join as an active member immediately, no approval step.
     if (invitation) {
+      // Mark EVERY still-open invitation row for this exact email+group as
+      // accepted, not just the one token that was actually used to join —
+      // a leader re-sending an invite leaves the earlier row(s) behind with
+      // accepted=false, and those stale duplicates would otherwise keep
+      // showing this group as "pending invitation" on the member's
+      // dashboard even after they've successfully joined.
       await db.update(schema.groupInvitations)
-        .set({ accepted: true }).where(eq(schema.groupInvitations.token, invitation.token));
+        .set({ accepted: true })
+        .where(and(
+          eq(schema.groupInvitations.group_id, groupId),
+          eq(schema.groupInvitations.accepted, false),
+          or(
+            eq(schema.groupInvitations.token, invitation.token),
+            eq(schema.groupInvitations.email, user.email),
+          ),
+        ));
       await createAuditLog({ userId, action: 'INVITATION_ACCEPTED', entity: 'savings_groups', entityId: groupId, ipAddress });
 
       const rotationOrder = activeCount + 1;
