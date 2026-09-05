@@ -185,6 +185,21 @@ function describeRotationMethod(rotationMethod: SavingsGroup['rotation_method'])
     : titleCase(rotationMethod);
 }
 
+/** Mirrors src/server/lib/payoutSchedule.ts describePayoutSchedule() for client-side display. */
+function describePayoutSchedule(frequency: SavingsGroup['contribution_frequency'], payoutDay: number | null | undefined) {
+  if (frequency === 'daily') return 'Every day';
+  if (frequency === 'weekly') {
+    const names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const idx = payoutDay !== null && payoutDay !== undefined ? Math.min(6, Math.max(0, payoutDay)) : 0;
+    return `Every ${names[idx]}`;
+  }
+  const day = payoutDay !== null && payoutDay !== undefined ? Math.min(31, Math.max(1, payoutDay)) : 1;
+  const suffix = day % 10 === 1 && day !== 11 ? 'st'
+    : day % 10 === 2 && day !== 12 ? 'nd'
+    : day % 10 === 3 && day !== 13 ? 'rd' : 'th';
+  return `Monthly on the ${day}${suffix}`;
+}
+
 function shortId(value: string) {
   return `${value.slice(0, 8)}…`;
 }
@@ -300,6 +315,7 @@ export default function SavingsGroupDetailPage() {
   const [voteActionError, setVoteActionError] = useState('');
   const [activating, setActivating] = useState(false);
   const [activateError, setActivateError] = useState('');
+  const [activateNotice, setActivateNotice] = useState('');
 
   const loadData = useCallback(async () => {
     if (!id) {
@@ -529,6 +545,32 @@ export default function SavingsGroupDetailPage() {
     [contributions, currentUserId],
   );
 
+  // Group-wide next contribution date — the earliest not-yet-paid contribution
+  // due date across ALL members (not just the current user), so the Group
+  // Details card reflects the group's real, ground-truth next charge date.
+  const groupNextContributionDate = useMemo(
+    () => contributions
+      .filter(entry => entry.payment_status === 'due' || entry.payment_status === 'scheduled' || entry.payment_status === 'pending_default')
+      .map(entry => entry.due_date)
+      .sort((left, right) => new Date(left).getTime() - new Date(right).getTime())[0] ?? null,
+    [contributions],
+  );
+
+  // Group-wide next payout date — only ever real ground-truth data (the
+  // current cycle's scheduled_payout_date, if not already completed). We
+  // deliberately don't guess a date for the *next* rotation before its record
+  // exists, since rotationService.getNext() has no date field until that
+  // cycle's schedule has actually been generated.
+  const groupNextPayoutDate = useMemo(
+    () => (currentRotation && currentRotation.payout_status !== 'completed' ? currentRotation.scheduled_payout_date : null),
+    [currentRotation],
+  );
+
+  const contributionScheduleLabel = useMemo(
+    () => (group ? describePayoutSchedule(group.contribution_frequency, group.payout_day) : ''),
+    [group],
+  );
+
   const myCompletedPayouts = useMemo(
     () => rotationHistory.filter(entry => entry.recipient_id === currentUserId && entry.payout_status === 'completed'),
     [rotationHistory, currentUserId],
@@ -737,16 +779,27 @@ export default function SavingsGroupDetailPage() {
 
     setActivating(true);
     setActivateError('');
+    setActivateNotice('');
 
     try {
       const response = await window.fetch(`/api/groups/${id}/activate`, {
         method: 'POST',
         headers: { Authorization: 'Bearer ' + activeSession.token },
       });
-      const json = await response.json() as ApiResponse<null>;
+      const json = await response.json() as ApiResponse<{
+        first_charge_cutoff_applied?: boolean;
+        first_contribution_date?: string;
+        first_payout_date?: string;
+      }>;
       if (!response.ok) {
         setActivateError(getErrorMessage(json, 'Could not start this group.'));
         return;
+      }
+      if (json.data?.first_charge_cutoff_applied && json.data.first_contribution_date) {
+        setActivateNotice(
+          `Group started! Since it's after our 17:00 GMT same-day cut-off, the first contribution `
+          + `charge and payout are now scheduled for ${formatDate(json.data.first_contribution_date)} instead of today.`,
+        );
       }
       await loadData();
     } catch {
@@ -1140,6 +1193,11 @@ export default function SavingsGroupDetailPage() {
                   <AlertTriangle size={13} /> {activateError}
                 </div>
               )}
+              {activateNotice && (
+                <div className="rounded-xl p-2.5 text-xs font-semibold flex items-center gap-2 mb-3" style={{ background: 'rgba(245,158,11,0.12)', color: '#B45309' }}>
+                  <AlertTriangle size={13} /> {activateNotice}
+                </div>
+              )}
 
               {currentMembership?.status === 'pending' && (
                 <div className="rounded-xl p-3 mb-3 flex items-center gap-2" style={{ background: 'rgba(245,158,11,0.12)' }}>
@@ -1265,6 +1323,9 @@ export default function SavingsGroupDetailPage() {
                         { label: 'Description', value: group.description || 'No description added yet.' },
                         { label: 'Leader', value: getMemberDisplayName(group.leader_id) },
                         { label: 'Country', value: group.country === 'NG' ? 'Nigeria' : 'United Kingdom' },
+                        { label: 'Contribution schedule', value: contributionScheduleLabel },
+                        { label: 'Next contribution date', value: groupNextContributionDate ? formatDate(groupNextContributionDate) : 'Not yet scheduled' },
+                        { label: 'Next payout date', value: groupNextPayoutDate ? formatDate(groupNextPayoutDate) : 'Not yet scheduled' },
                         { label: 'Created', value: formatDate(group.created_at) },
                         { label: 'Last updated', value: formatDate(group.updated_at) },
                       ].map(row => (
