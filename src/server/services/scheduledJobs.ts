@@ -31,6 +31,7 @@ import {
   sendGroupExpiredEmail,
   sendGroupExpiryReminderEmail,
   sendSubscriptionPaymentFailedEmail,
+  sendSubscriptionRenewalChargedEmail,
   sendPendingChargeGroupJoinReminderEmail,
   sendPendingChargeExpiredEmail,
   sendIncompleteProfileReminderEmail,
@@ -752,6 +753,16 @@ export async function monthlySubscriptionRenewalCharge(): Promise<void> {
             .set({ billing_status: 'active', renewal_date: nextRenewalDate })
             .where(eq(schema.subscriptions.id, sub.id));
           await db.update(schema.users).set({ subscription_status: 'active' }).where(eq(schema.users.id, user.id));
+          // Item 8.d — confirm every successful renewal charge by email so
+          // it's traceable alongside its Billing History entry, matching
+          // the same guarantee now given to first-charges-on-join and
+          // Stripe renewals (see webhookStripeController.ts).
+          await sendSubscriptionRenewalChargedEmail(
+            user.email,
+            isSubscriptionTierKey(user.subscription_tier) ? SUBSCRIPTION_TIERS[user.subscription_tier].name : '',
+            isSubscriptionTierKey(user.subscription_tier) ? formatTierPrice(user.subscription_tier, user.country) : '',
+            nextRenewalDate.toLocaleDateString('en-GB'),
+          );
         } else {
           await db.update(schema.subscriptions).set({ billing_status: 'past_due' }).where(eq(schema.subscriptions.id, sub.id));
           await db.update(schema.users).set({ subscription_status: 'expired' }).where(eq(schema.users.id, user.id));

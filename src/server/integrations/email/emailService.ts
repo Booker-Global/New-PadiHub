@@ -773,6 +773,27 @@ export async function sendSubscriptionBillingResumedEmail(
   `));
 }
 
+/**
+ * Item 8.d — confirmation email sent every time a member's card is
+ * successfully charged for an ordinary (non-first) monthly subscription
+ * renewal, so the charge is always confirmed by email and traceable
+ * alongside the Billing History entry it corresponds to.
+ */
+export async function sendSubscriptionRenewalChargedEmail(
+  to: string, plan: string, amount: string, nextRenewalDate: string,
+): Promise<void> {
+  await send(to, 'Your PadiHub subscription was renewed', wrap(`
+    ${h2('Subscription renewed')}
+    ${p('Your PadiHub subscription was renewed successfully — your card has been charged.')}
+    ${table(
+      detail('Plan', plan) +
+      detail('Amount charged', amount) +
+      detail('Next renewal', nextRenewalDate),
+    )}
+    ${p('You can see this charge any time under Billing History on your Subscription & Billing page.')}
+  `));
+}
+
 export async function sendSubscriptionRenewalReminderEmail(
   to: string, amount: string, renewalDate: string,
 ): Promise<void> {
