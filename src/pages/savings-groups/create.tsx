@@ -944,6 +944,14 @@ export default function CreateGroupWizard() {
                         <span className="text-sm font-bold text-gray-900 text-right">{row.value}</span>
                       </div>
                     ))}
+                    <p className="text-xs text-gray-400 mt-1">
+                      Once this group is active (has at least 3 verified members), contributions are
+                      charged automatically and payouts are routed automatically — no manual
+                      "make a payment" step needed. Charges run at 07:00 GMT on the payout day, with
+                      an 18:00 GMT catch-up retry the same day. If the group only becomes active after
+                      17:00 GMT on a day matching its payout schedule, the first contribution charge and
+                      payout will instead run on the same date/day next week or month.
+                    </p>
                   </div>
                 )}
               </MotionDiv>

@@ -30,7 +30,6 @@ import {
   sendSubscriptionCancelledEmail,
   sendSubscriptionTierChangedEmail,
   sendSubscriptionPaymentFailedEmail,
-  sendSubscriptionBillingResumedEmail,
   sendPaymentProviderConfigErrorAlertEmail,
 } from '../integrations/email/emailService.js';
 
@@ -114,7 +113,9 @@ const BILLING_HISTORY_ACTIONS = [
   'SUBSCRIPTION_CREATED',
   'STRIPE_INVOICE_PAID',
   'STRIPE_INVOICE_FAILED',
+  'STRIPE_SUBSCRIPTION_FIRST_CHARGE',
   'FLW_SUBSCRIPTION_RENEWAL_CHARGED',
+  'FLW_SUBSCRIPTION_FIRST_CHARGE',
 ] as const;
 
 export type BillingHistoryEntry = {
@@ -792,7 +793,7 @@ export const subscriptionService = {
           ? 'flutterwave'
           : null;
       const status: 'paid' | 'failed' = row.action === 'STRIPE_INVOICE_FAILED'
-        || (row.action === 'FLW_SUBSCRIPTION_RENEWAL_CHARGED' && metadata.status !== 'succeeded')
+        || ((row.action === 'FLW_SUBSCRIPTION_RENEWAL_CHARGED' || row.action === 'FLW_SUBSCRIPTION_FIRST_CHARGE') && metadata.status !== 'succeeded')
         ? 'failed'
         : 'paid';
       const tier = isSubscriptionTierKey(metadata.tier) ? metadata.tier : null;
@@ -892,15 +893,11 @@ export const subscriptionService = {
 
       // Section 1/5 — a member is billed FROM THE DAY they become an
       // active group member (step f complete), then monthly afterwards.
-      // Stripe (GB) resumeBilling above already clears pause_collection,
-      // which makes Stripe itself charge the card immediately and fire the
-      // usual invoice.payment_succeeded/payment_failed webhooks (handled in
-      // webhookStripeController.ts) — so GB's outcome-dependent emails are
-      // already correctly deferred to those webhooks. Flutterwave (NG) has
-      // no such subscription engine to do this for us (pauseBilling/
-      // resumeBilling are no-ops there — see FlutterwaveProvider), so we
-      // must charge the saved card token here, synchronously, and only
-      // report success/failure once we actually know the real outcome.
+      // Flutterwave (NG) has no subscription engine to do this for us
+      // (pauseBilling/resumeBilling are no-ops there — see
+      // FlutterwaveProvider), so we must charge the saved card token here,
+      // synchronously, and only report success/failure once we actually
+      // know the real outcome.
       if (user.country === 'NG' && sub.provider === 'flutterwave') {
         if (!user.flutterwave_card_token) {
           await db.update(schema.subscriptions).set({ billing_status: 'past_due', first_charge_failed_at: new Date() }).where(eq(schema.subscriptions.user_id, userId));
@@ -974,22 +971,18 @@ export const subscriptionService = {
         return;
       }
 
-      await db.update(schema.subscriptions).set({ billing_status: 'active' }).where(eq(schema.subscriptions.user_id, userId));
-      await createAuditLog({ userId, action: 'SUBSCRIPTION_BILLING_RESUMED', entity: 'subscriptions', metadata: { activeGroupCount } });
-
-      if (isSubscriptionTierKey(user.subscription_tier)) {
-        await sendSubscriptionBillingResumedEmail(
-          user.email,
-          SUBSCRIPTION_TIERS[user.subscription_tier].name,
-          formatTierPrice(user.subscription_tier, user.country),
-          sub.renewal_date ? new Date(sub.renewal_date).toLocaleDateString('en-GB') : 'your next billing date',
-        );
-      }
-      await notificationService.create({
-        userId, type: 'subscription_billing_resumed',
-        title: 'Billing has started',
-        message: 'You\'re now an active member of a launched group — your PadiHub subscription billing has started.',
-      });
+      // Stripe (GB): resumeBilling() above clears pause_collection AND
+      // immediately creates+attempts to pay an out-of-cycle invoice for the
+      // current charge — but whether that charge actually SUCCEEDED is only
+      // known asynchronously via Stripe's invoice.payment_succeeded/
+      // invoice.payment_failed webhooks (webhookStripeController.ts), which
+      // already flip billing_status to 'active'/'past_due' and send the
+      // outcome email. Do NOT optimistically mark billing_status='active'
+      // or claim success here — that previously told members/dashboards
+      // billing had started before any card was actually charged. Leave
+      // billing_status as 'paused' (unchanged) until the webhook confirms
+      // the real outcome; audit-log only that an attempt was made.
+      await createAuditLog({ userId, action: 'SUBSCRIPTION_BILLING_RESUME_ATTEMPTED', entity: 'subscriptions', metadata: { activeGroupCount, provider: sub.provider } });
     }
   },
 

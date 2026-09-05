@@ -12,9 +12,9 @@ import { getStripeProvider } from '../integrations/payments/PaymentProviderFacto
 import { contributionService } from '../services/contributionService.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { notificationService } from '../services/notificationService.js';
-import { isSubscriptionTierKey, type SubscriptionTierKey } from '../lib/constants.js';
+import { isSubscriptionTierKey, SUBSCRIPTION_TIERS, formatTierPrice, type SubscriptionTierKey } from '../lib/constants.js';
 import { planCode, subscriptionService } from '../services/subscriptionService.js';
-import { sendSubscriptionPaymentFailedEmail } from '../integrations/email/emailService.js';
+import { sendSubscriptionPaymentFailedEmail, sendSubscriptionBillingResumedEmail, sendSubscriptionRenewalChargedEmail } from '../integrations/email/emailService.js';
 
 /** Recover the tier key ('basic'/'premium') from a stored plan code like 'gb_premium'. */
 function tierFromPlanCode(plan?: string | null): SubscriptionTierKey | null {
@@ -105,6 +105,7 @@ async function handleStripeEvent(event: Stripe.Event) {
 
       const userRows = await db.select({
         id: schema.users.id,
+        email: schema.users.email,
         country: schema.users.country,
         subscription_tier: schema.users.subscription_tier,
         stripe_customer_id: schema.users.stripe_customer_id,
@@ -116,11 +117,24 @@ async function handleStripeEvent(event: Stripe.Event) {
         break;
       }
 
+      // Section D.2/1/5 — if billing_status was 'paused' immediately before
+      // this event, this invoice IS the immediate first charge triggered by
+      // StripeProvider.resumeBilling() the moment the member joined an
+      // active (3+ member) group — as opposed to an ordinary monthly
+      // renewal invoice. Capture that BEFORE overwriting billing_status
+      // below, so the right confirmation email/renewal_date can be sent.
+      const wasFirstChargeOnJoin = sub.billing_status === 'paused';
+      const nextRenewalDate = wasFirstChargeOnJoin ? (() => {
+        const d = new Date();
+        d.setMonth(d.getMonth() + 1);
+        return d;
+      })() : null;
+
       await db.update(schema.users)
         .set({ subscription_status: 'active' })
         .where(eq(schema.users.id, sub.user_id));
       await db.update(schema.subscriptions)
-        .set({ billing_status: 'active' })
+        .set({ billing_status: 'active', ...(nextRenewalDate ? { renewal_date: nextRenewalDate } : {}) })
         .where(eq(schema.subscriptions.id, sub.id));
 
       // An upgrade's first invoice that needed 3D-Secure/extra confirmation
@@ -153,12 +167,46 @@ async function handleStripeEvent(event: Stripe.Event) {
       }
 
       await createAuditLog({
-        userId: sub?.user_id, action: 'STRIPE_INVOICE_PAID', entity: 'subscriptions',
+        userId: sub?.user_id, action: wasFirstChargeOnJoin ? 'STRIPE_SUBSCRIPTION_FIRST_CHARGE' : 'STRIPE_INVOICE_PAID', entity: 'subscriptions',
         metadata: {
           customerId, invoiceId: invoice.id,
           tier: tierFromPlanCode(sub?.plan),
           amount_display: formatInvoiceAmount(invoice.amount_paid, invoice.currency),
         },
+      });
+
+      // Item 8.d — every successful subscription charge (first charge on
+      // joining an active group, and every ordinary monthly renewal after
+      // it) must be confirmed by email so the member can see it reflected
+      // in their Billing History. See webhookFlutterwaveController.ts /
+      // scheduledJobs.ts's monthlySubscriptionRenewalCharge for the NG
+      // equivalent.
+      if (isSubscriptionTierKey(user.subscription_tier)) {
+        const tierName = SUBSCRIPTION_TIERS[user.subscription_tier].name;
+        const priceDisplay = formatInvoiceAmount(invoice.amount_paid, invoice.currency) || formatTierPrice(user.subscription_tier, user.country);
+        if (wasFirstChargeOnJoin) {
+          await sendSubscriptionBillingResumedEmail(
+            user.email,
+            tierName,
+            priceDisplay,
+            nextRenewalDate ? nextRenewalDate.toLocaleDateString('en-GB') : 'next month',
+          );
+        } else {
+          await sendSubscriptionRenewalChargedEmail(
+            user.email,
+            tierName,
+            priceDisplay,
+            sub.renewal_date ? new Date(sub.renewal_date).toLocaleDateString('en-GB') : 'next month',
+          );
+        }
+      }
+      await notificationService.create({
+        userId: sub.user_id,
+        type: wasFirstChargeOnJoin ? 'subscription_billing_resumed' : 'subscription_payment_succeeded',
+        title: wasFirstChargeOnJoin ? 'Billing has started' : 'Subscription renewed',
+        message: wasFirstChargeOnJoin
+          ? 'You\'re now an active member of a launched group — your PadiHub subscription billing has started.'
+          : 'Your PadiHub subscription was renewed successfully.',
       });
       break;
     }

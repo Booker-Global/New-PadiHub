@@ -162,10 +162,53 @@ export class StripeProvider implements IPaymentProvider {
     await stripe.subscriptions.update(subscriptionId, { pause_collection: { behavior: 'void' } });
   }
 
-  /** Section D.2 — resume real Stripe collection once the member is verified in an active (3+ member) group. */
+  /**
+   * Section D.2/1/5 — resume real Stripe collection once the member is
+   * verified in an active (3+ member) group, AND immediately charge the
+   * card now rather than waiting for whatever date the subscription's
+   * original (deferred, paused-at-creation) billing cycle anchor happens
+   * to land on. Clearing pause_collection alone only resumes Stripe's
+   * normal automatic billing at its existing cycle date — it does NOT
+   * trigger a charge today, which previously left billing_status stuck
+   * unset/paused indefinitely for anyone who joined an active group
+   * between billing cycle anchors. Creating + paying an out-of-cycle
+   * invoice for the current subscription forces that immediate charge.
+   * The actual success/failure is reported via Stripe's usual
+   * invoice.payment_succeeded/invoice.payment_failed webhooks (handled in
+   * webhookStripeController.ts) exactly like any other renewal charge, so
+   * this method deliberately does not update any local billing_status
+   * itself — callers must treat this as "charge attempted", not "charge
+   * confirmed".
+   */
   async resumeBilling(subscriptionId: string): Promise<void> {
     const stripe = getStripe();
     await stripe.subscriptions.update(subscriptionId, { pause_collection: null });
+
+    const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+    const customerId = typeof subscription.customer === 'string' ? subscription.customer : subscription.customer.id;
+
+    let invoice: Stripe.Invoice;
+    try {
+      invoice = await stripe.invoices.create({
+        customer: customerId,
+        subscription: subscriptionId,
+        collection_method: 'charge_automatically',
+        description: 'PadiHub monthly subscription — first charge on joining an active group',
+      }, { idempotencyKey: `sub-first-charge-invoice-${subscriptionId}` });
+    } catch (error) {
+      console.error(`[StripeProvider] Failed to create immediate first-charge invoice for subscription ${subscriptionId}:`, error);
+      return;
+    }
+    if (!invoice.id) return;
+
+    try {
+      await stripe.invoices.pay(invoice.id, undefined, { idempotencyKey: `sub-first-charge-pay-${subscriptionId}` });
+    } catch (error) {
+      // Card declined etc. — leave it to Stripe's invoice.payment_failed
+      // webhook (already wired to billing_status='past_due' + the
+      // payment-failed email/retry-suspension flow) to record the outcome.
+      console.error(`[StripeProvider] Immediate first-charge invoice ${invoice.id} for subscription ${subscriptionId} failed to pay:`, error);
+    }
   }
 
   async handleWebhook(params: { rawBody: Buffer; signature: string }): Promise<WebhookResult> {

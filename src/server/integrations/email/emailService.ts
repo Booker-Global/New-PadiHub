@@ -50,7 +50,7 @@ function btn(text: string, url: string): string {
   return `<a href="${url}" style="display:inline-block;margin-top:20px;padding:12px 28px;background:#2EAF6F;color:#FFFFFF;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;">${text}</a>`;
 }
 
-function p(text: string): string {
+export function p(text: string): string {
   return `<p style="margin:0 0 16px;font-size:15px;line-height:1.6;color:#374151;">${text}</p>`;
 }
 
@@ -58,18 +58,18 @@ function h2(text: string): string {
   return `<h2 style="margin:0 0 16px;font-size:20px;color:#1A1A2E;">${text}</h2>`;
 }
 
-function detail(label: string, value: string): string {
+export function detail(label: string, value: string): string {
   return `<tr>
     <td style="padding:8px 12px;font-size:14px;color:#6B7280;background:#F9FAFB;border-radius:4px;">${label}</td>
     <td style="padding:8px 12px;font-size:14px;color:#111827;font-weight:600;">${value}</td>
   </tr>`;
 }
 
-function table(rows: string): string {
+export function table(rows: string): string {
   return `<table style="width:100%;border-collapse:collapse;margin:16px 0;">${rows}</table>`;
 }
 
-function escapeHtml(text: string): string {
+export function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
@@ -259,6 +259,7 @@ export async function sendAccountDeletedEmail(
 
 export async function sendGroupInvitationEmail(
   to: string, groupName: string, inviteLink: string, expiresAt: string, inviterName?: string,
+  contributionDetail?: { amountDisplay: string; payoutScheduleLabel: string },
 ): Promise<void> {
   const appUrl = process.env.APP_URL ?? 'https://padihub.com';
   await send(to, `You've been invited to join ${groupName} on PadiHub`, wrap(`
@@ -266,6 +267,8 @@ export async function sendGroupInvitationEmail(
     ${p(`${inviterName ? `<strong>${escapeHtml(inviterName)}</strong> has invited you` : 'You have been invited'} to join <strong>${escapeHtml(groupName)}</strong> on PadiHub.`)}
     ${table(
       detail('Group', escapeHtml(groupName)) +
+      (contributionDetail ? detail('Contribution amount', contributionDetail.amountDisplay) : '') +
+      (contributionDetail ? detail('Payout schedule', contributionDetail.payoutScheduleLabel) : '') +
       detail('Invite expires', expiresAt),
     )}
     ${btn('Accept Invitation', inviteLink)}
@@ -277,6 +280,7 @@ export async function sendGroupInvitationEmail(
 
 export async function sendInvitationAcceptedEmail(
   to: string, groupName: string, memberName: string, leaderName: string,
+  newMemberTrustScore?: number, activeMemberCount?: number,
 ): Promise<void> {
   await send(to, `${memberName} joined ${groupName}`, wrap(`
     ${h2('New member joined your group')}
@@ -284,7 +288,9 @@ export async function sendInvitationAcceptedEmail(
     ${table(
       detail('Group', groupName) +
       detail('New member', memberName) +
-      detail('Group leader', leaderName),
+      detail('Group leader', leaderName) +
+      (newMemberTrustScore !== undefined ? detail('Trust Score', `${newMemberTrustScore}/100`) : '') +
+      (activeMemberCount !== undefined ? detail('Group now has', `${activeMemberCount} active member${activeMemberCount === 1 ? '' : 's'}`) : ''),
     )}
     ${btn('View Group', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
   `));
@@ -335,12 +341,51 @@ export async function sendGroupCreatedEmail(to: string, groupName: string, durat
   `));
 }
 
-/** Confirm to a brand-new member (invite-token immediate join) that they've joined, including the group's lifecycle length. */
-export async function sendMemberJoinedGroupEmail(to: string, groupName: string, durationSummary: string): Promise<void> {
+/**
+ * Item 9 — shared rich detail block for "you've joined"/"you've been
+ * approved" emails: every current active member's name + Trust Score, the
+ * leader, contribution amount, payout schedule, and the group's governance
+ * rules — so a new member knows exactly who they're saving with and what
+ * the rules are, not just that they've joined. See
+ * groupService.getGroupJoinSnapshot for how this is assembled.
+ */
+export type GroupJoinSnapshot = {
+  leaderName: string;
+  members: Array<{ name: string; trustScore: number; isLeader: boolean }>;
+  contributionAmountDisplay: string;
+  payoutScheduleLabel: string;
+  votingOutThresholdPercent: number;
+  maxDefaultsForSuspension: number;
+  allowPayoutSwaps: boolean;
+};
+
+function groupJoinSnapshotHtml(groupName: string, snapshot: GroupJoinSnapshot): string {
+  const membersList = snapshot.members
+    .map(m => `<li style="margin-bottom:4px;">${escapeHtml(m.name)}${m.isLeader ? ' <em>(Group Leader)</em>' : ''} — Trust Score ${m.trustScore}/100</li>`)
+    .join('');
+  return `
+    ${table(
+      detail('Group Leader', escapeHtml(snapshot.leaderName)) +
+      detail('Contribution amount', snapshot.contributionAmountDisplay) +
+      detail('Payout schedule', snapshot.payoutScheduleLabel) +
+      detail('Voting out a member requires', `${snapshot.votingOutThresholdPercent}% of members to agree`) +
+      detail('Suspension after', `${snapshot.maxDefaultsForSuspension} missed contribution${snapshot.maxDefaultsForSuspension === 1 ? '' : 's'}`) +
+      detail('Payout swaps between members', snapshot.allowPayoutSwaps ? 'Allowed (by mutual agreement)' : 'Not allowed'),
+    )}
+    <p style="margin:16px 0 8px;font-size:15px;font-weight:600;color:#1A1A2E;">Members of ${escapeHtml(groupName)} (${snapshot.members.length})</p>
+    <ul style="margin:0 0 16px;padding-left:20px;font-size:14px;line-height:1.6;color:#374151;">${membersList}</ul>
+  `;
+}
+
+/** Confirm to a brand-new member (invite-token immediate join) that they've joined, including the group's lifecycle length and full group detail. */
+export async function sendMemberJoinedGroupEmail(
+  to: string, groupName: string, durationSummary: string, snapshot?: GroupJoinSnapshot,
+): Promise<void> {
   await send(to, `You've joined ${groupName}`, wrap(`
     ${h2('You\'re in!')}
     ${p(`You've successfully joined <strong>${escapeHtml(groupName)}</strong>.`)}
     ${p(durationSummary)}
+    ${snapshot ? groupJoinSnapshotHtml(groupName, snapshot) : ''}
     ${btn('View Group', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
   `));
 }
@@ -371,13 +416,16 @@ export async function sendGroupJoinRequestSubmittedEmail(to: string, groupName: 
   `));
 }
 
-/** Notify the requester their join request was approved. */
-export async function sendGroupJoinApprovedEmail(to: string, groupName: string, durationSummary?: string): Promise<void> {
+/** Notify the requester their join request was approved, with full group detail. */
+export async function sendGroupJoinApprovedEmail(
+  to: string, groupName: string, durationSummary?: string, snapshot?: GroupJoinSnapshot,
+): Promise<void> {
   await send(to, `You've been accepted into ${groupName}`, wrap(`
     ${h2('Request approved')}
     ${p(`You've been accepted as a member of <strong>${groupName}</strong>.`)}
     ${p('The group\'s payout schedule has been updated to include you. Check the group page for your rotation position.')}
     ${durationSummary ? p(durationSummary) : ''}
+    ${snapshot ? groupJoinSnapshotHtml(groupName, snapshot) : ''}
     ${btn('View Group', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
   `));
 }
@@ -390,22 +438,28 @@ export async function sendGroupJoinRejectedEmail(to: string, groupName: string):
   `));
 }
 
-/** Notify the group leader and every existing member once a new member is accepted. */
+/** Notify the group leader and every existing member once a new member is accepted, including the new member's Trust Score and updated group size. */
 export async function sendGroupNewMemberJoinedEmail(
-  to: string, groupName: string, newMemberName: string,
+  to: string, groupName: string, newMemberName: string, newMemberTrustScore?: number, activeMemberCount?: number,
 ): Promise<void> {
   await send(to, `${newMemberName} joined ${groupName}`, wrap(`
     ${h2('New member joined your group')}
     ${p(`<strong>${newMemberName}</strong> has joined <strong>${groupName}</strong>. The payout schedule has been updated accordingly.`)}
+    ${table(
+      detail('New member', newMemberName) +
+      (newMemberTrustScore !== undefined ? detail('Trust Score', `${newMemberTrustScore}/100`) : '') +
+      (activeMemberCount !== undefined ? detail('Group now has', `${activeMemberCount} active member${activeMemberCount === 1 ? '' : 's'}`) : ''),
+    )}
     ${btn('View Group', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
   `));
 }
 
-/** Notify the group leader that "Start Group" launched the group (Draft → Active). */
-export async function sendGroupActivatedEmail(to: string, groupName: string): Promise<void> {
+/** Notify every member that "Start Group" launched the group (Draft → Active), with the full roster and rules now that it's live. */
+export async function sendGroupActivatedEmail(to: string, groupName: string, snapshot?: GroupJoinSnapshot): Promise<void> {
   await send(to, `${groupName} is now active`, wrap(`
     ${h2('Your group has started')}
     ${p(`<strong>${groupName}</strong> has reached its minimum member count and is now <strong>Active</strong>. Contributions and the payout rotation are live.`)}
+    ${snapshot ? groupJoinSnapshotHtml(groupName, snapshot) : ''}
     ${btn('View Group', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
   `));
 }
@@ -642,6 +696,25 @@ export async function sendPayoutCompleteEmail(
   `));
 }
 
+/**
+ * Generic "group activity" digest email sent ONLY to the group leader — a
+ * leader is the one person accountable for the whole group's health, so
+ * (per user request) they must be copied on EVERY significant activity
+ * event, not just member-joined/group-activated: contributions paid,
+ * payment failures/grace periods/defaults, missed contributions, upcoming
+ * and completed payouts, etc. `headline` is the email subject/H2, `bodyHtml`
+ * is the pre-built detail paragraph/table for that specific event.
+ */
+export async function sendGroupLeaderActivityEmail(
+  to: string, groupName: string, headline: string, bodyHtml: string,
+): Promise<void> {
+  await send(to, `${headline} — ${groupName}`, wrap(`
+    ${h2(headline)}
+    ${bodyHtml}
+    ${btn('View Group', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
+  `));
+}
+
 // ─── Vote emails ──────────────────────────────────────────────────────────────
 
 export async function sendVoteRequiredEmail(
@@ -751,6 +824,27 @@ export async function sendSubscriptionBillingResumedEmail(
       detail('Amount', amount) +
       detail('Next renewal', renewalDate),
     )}
+  `));
+}
+
+/**
+ * Item 8.d — confirmation email sent every time a member's card is
+ * successfully charged for an ordinary (non-first) monthly subscription
+ * renewal, so the charge is always confirmed by email and traceable
+ * alongside the Billing History entry it corresponds to.
+ */
+export async function sendSubscriptionRenewalChargedEmail(
+  to: string, plan: string, amount: string, nextRenewalDate: string,
+): Promise<void> {
+  await send(to, 'Your PadiHub subscription was renewed', wrap(`
+    ${h2('Subscription renewed')}
+    ${p('Your PadiHub subscription was renewed successfully — your card has been charged.')}
+    ${table(
+      detail('Plan', plan) +
+      detail('Amount charged', amount) +
+      detail('Next renewal', nextRenewalDate),
+    )}
+    ${p('You can see this charge any time under Billing History on your Subscription & Billing page.')}
   `));
 }
 
