@@ -22,7 +22,7 @@ import {
   sendGroupCreatedEmail,
   sendGroupSettingsUpdatedEmail,
 } from '../integrations/email/emailService.js';
-import { payoutDayBounds, CONTRIBUTION_SAME_DAY_CUTOFF_HOUR_UTC, resolveFirstScheduleDate } from '../lib/payoutSchedule.js';
+import { payoutDayBounds, CONTRIBUTION_SAME_DAY_CUTOFF_HOUR_UTC, resolveFirstScheduleDate, describePayoutSchedule } from '../lib/payoutSchedule.js';
 
 function assignProvider(country: string) {
   return country === 'NG' ? 'flutterwave' : 'stripe';
@@ -76,6 +76,47 @@ export const groupService = {
       // Every screen must show the leader's name, never their raw user ID —
       // see resolveUserDisplayName doc comment.
       leader_name: resolveUserDisplayName(leaderRows[0]),
+    };
+  },
+
+  /**
+   * Item 9 — everything a "you've joined"/"you've been approved" email
+   * needs to be genuinely informative rather than a one-line confirmation:
+   * every current active member's name + Trust Score (so a new joiner
+   * knows exactly who they're saving with), the leader, the contribution
+   * amount and payout schedule, and the group's governance rules (voting a
+   * member out, max missed contributions before suspension, payout swaps).
+   * Shared by membershipService's invited-join, approved-request and
+   * unanimous-admission-vote paths so all three send the same rich detail.
+   */
+  async getGroupJoinSnapshot(groupId: string) {
+    const group = await this.getById(groupId);
+    const memberRows = await db.select({
+      user_id:      schema.memberships.user_id,
+      display_name: schema.users.display_name,
+      first_name:   schema.users.first_name,
+      last_name:    schema.users.last_name,
+      email:        schema.users.email,
+      trust_score:  schema.users.trust_score,
+    })
+      .from(schema.memberships)
+      .innerJoin(schema.users, eq(schema.memberships.user_id, schema.users.id))
+      .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')));
+
+    const members = memberRows.map(m => ({
+      name: resolveUserDisplayName(m),
+      trustScore: m.trust_score,
+      isLeader: m.user_id === group.leader_id,
+    }));
+
+    return {
+      leaderName: group.leader_name,
+      members,
+      contributionAmountDisplay: `${group.currency} ${parseFloat(group.contribution_amount).toFixed(2)}`,
+      payoutScheduleLabel: describePayoutSchedule(group.contribution_frequency, group.payout_day),
+      votingOutThresholdPercent: group.voting_threshold,
+      maxDefaultsForSuspension: group.suspension_threshold,
+      allowPayoutSwaps: group.allow_payout_swaps,
     };
   },
 
@@ -620,13 +661,17 @@ export const groupService = {
     const cutoffNote = cutoffApplied && firstCycleDueDate
       ? ` Today's charging cut-off (${CONTRIBUTION_SAME_DAY_CUTOFF_HOUR_UTC}:00 GMT) has already passed, so the first contribution charge and payout will be on ${firstCycleDueDate.toLocaleDateString('en-GB', { timeZone: 'UTC' })} instead of today.`
       : '';
+    // Item 9 — the activation email is the first time everyone can see the
+    // full, final roster and rules together (payout day, contribution
+    // amount, voting-out threshold, suspension threshold, payout swaps).
+    const activationSnapshot = await this.getGroupJoinSnapshot(groupId);
     for (const u of memberUsers) {
       await notificationService.create({
         userId: u.id, type: 'group_activated',
         title: 'Group Started',
         message: `"${group.name}" has started — contributions and payout rotation are now live.${cutoffNote}`,
       });
-      await sendGroupActivatedEmail(u.email, group.name);
+      await sendGroupActivatedEmail(u.email, group.name, activationSnapshot);
     }
 
     // Section D.2 — every member just became verified in an active (3+
@@ -757,7 +802,10 @@ export const groupService = {
       const inviterRows = await db.select({ first_name: schema.users.first_name, last_name: schema.users.last_name })
         .from(schema.users).where(eq(schema.users.id, invitedBy)).limit(1);
       const inviterName = inviterRows.length ? `${inviterRows[0].first_name} ${inviterRows[0].last_name}` : 'A PadiHub member';
-      await sendGroupInvitationEmail(email, group.name, inviteLink, expiresAt, inviterName);
+      await sendGroupInvitationEmail(email, group.name, inviteLink, expiresAt, inviterName, {
+        amountDisplay: `${group.currency} ${parseFloat(group.contribution_amount).toFixed(2)}`,
+        payoutScheduleLabel: describePayoutSchedule(group.contribution_frequency, group.payout_day),
+      });
     }
     return { token, inviteLink: invitePath };
   },

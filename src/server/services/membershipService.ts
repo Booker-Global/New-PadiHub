@@ -224,14 +224,21 @@ export const membershipService = {
       });
 
       const durationSummary = describeGroupDuration(group.group_duration_type, group.group_duration_rotations);
-      await sendMemberJoinedGroupEmail(user.email, group.name, durationSummary);
+      // Item 9 — the join-confirmation email must be genuinely informative:
+      // who else is in the group and their Trust Score, the leader, the
+      // contribution amount/payout schedule, and the governance rules
+      // (voting-out threshold, suspension threshold, payout swaps) — not
+      // just a one-line "you're in". Snapshot is read AFTER the new member
+      // row above so they're included in their own "members of" list.
+      const joinSnapshot = await groupService.getGroupJoinSnapshot(groupId);
+      await sendMemberJoinedGroupEmail(user.email, group.name, durationSummary, joinSnapshot);
 
       const leaderRow = await db.select({ email: schema.users.email, first_name: schema.users.first_name, last_name: schema.users.last_name })
         .from(schema.users).where(eq(schema.users.id, group.leader_id)).limit(1);
       if (leaderRow.length) {
         const memberName = `${user.first_name} ${user.last_name}`;
         const leaderName = `${leaderRow[0].first_name} ${leaderRow[0].last_name}`;
-        await sendInvitationAcceptedEmail(leaderRow[0].email, group.name, memberName, leaderName);
+        await sendInvitationAcceptedEmail(leaderRow[0].email, group.name, memberName, leaderName, user.trust_score, joinSnapshot.members.length);
       }
 
       // A refill (suspended → active, back to >= min members) is handled
@@ -340,7 +347,7 @@ export const membershipService = {
     await createAuditLog({ userId: membership.user_id, action: 'MEMBERSHIP_APPROVED', entity: 'savings_groups', entityId: group.id, ipAddress, metadata: { membershipId, memberId: membership.user_id } });
 
     const [newMemberRow, leaderRow, otherMembersEmails] = await Promise.all([
-      db.select({ email: schema.users.email, first_name: schema.users.first_name, last_name: schema.users.last_name })
+      db.select({ email: schema.users.email, first_name: schema.users.first_name, last_name: schema.users.last_name, trust_score: schema.users.trust_score })
         .from(schema.users).where(eq(schema.users.id, membership.user_id)).limit(1),
       db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, group.leader_id)).limit(1),
       activeMembers.length
@@ -357,17 +364,22 @@ export const membershipService = {
       title: 'Join Request Approved',
       message: `Your request to join "${group.name}" has been approved.`,
     });
+    // Item 9 — full group detail (members + Trust Scores, leader,
+    // contribution/payout schedule, governance rules) on the approval
+    // email too, same as the invited-join path.
+    const joinSnapshot = await groupService.getGroupJoinSnapshot(group.id);
     await sendGroupJoinApprovedEmail(
       newMemberRow[0].email, group.name,
       describeGroupDuration(group.group_duration_type, group.group_duration_rotations),
+      joinSnapshot,
     );
 
     if (leaderRow.length) {
-      await sendGroupNewMemberJoinedEmail(leaderRow[0].email, group.name, newMemberName);
+      await sendGroupNewMemberJoinedEmail(leaderRow[0].email, group.name, newMemberName, newMemberRow[0].trust_score, joinSnapshot.members.length);
     }
     for (const other of otherMembersEmails) {
       if (other.id === membership.user_id) continue;
-      await sendGroupNewMemberJoinedEmail(other.email, group.name, newMemberName);
+      await sendGroupNewMemberJoinedEmail(other.email, group.name, newMemberName, newMemberRow[0].trust_score, joinSnapshot.members.length);
       await notificationService.create({
         userId: other.id, type: 'group_new_member',
         title: 'New Group Member',
