@@ -22,7 +22,7 @@ import {
   sendGroupCreatedEmail,
   sendGroupSettingsUpdatedEmail,
 } from '../integrations/email/emailService.js';
-import { payoutDayBounds } from '../lib/payoutSchedule.js';
+import { payoutDayBounds, CONTRIBUTION_SAME_DAY_CUTOFF_HOUR_UTC } from '../lib/payoutSchedule.js';
 
 function assignProvider(country: string) {
   return country === 'NG' ? 'flutterwave' : 'stripe';
@@ -537,13 +537,55 @@ export const groupService = {
 
     await createAuditLog({ userId: leaderId, action: 'GROUP_ACTIVATED', entity: 'savings_groups', entityId: groupId, ipAddress, metadata: { memberCount: activeMembers.length } });
 
+    // Section 7/10 — generate cycle 1's contribution schedule and rotation
+    // record synchronously, right now, instead of waiting for the nightly
+    // safety-net job (monthlyGenerateContributionSchedule) to pick it up —
+    // otherwise "Rotation — Who's Next"/"Membership Summary" show "Not yet
+    // scheduled" for up to a day after a group launches. resolveFirstScheduleDate
+    // applies the same-day charging cut-off (Section 10): if the group's
+    // payout day is today but CONTRIBUTION_SAME_DAY_CUTOFF_HOUR_UTC has
+    // already passed, the first cycle rolls to the next occurrence instead
+    // of (unrealistically) targeting today.
+    let cutoffApplied = false;
+    let firstCycleDueDate: Date | null = null;
+    try {
+      const { rotationService } = await import('./rotationService.js');
+      const { contributionService } = await import('./contributionService.js');
+      const { resolveFirstScheduleDate } = await import('../lib/payoutSchedule.js');
+
+      const reordered = await db.select().from(schema.memberships)
+        .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')));
+      const sorted = [...reordered].sort((a, b) => (a.rotation_order ?? 0) - (b.rotation_order ?? 0));
+      const recipient = sorted.find(m => m.rotation_order === 1) ?? sorted[0];
+
+      const resolved = resolveFirstScheduleDate(group.contribution_frequency, group.payout_day, new Date());
+      cutoffApplied = resolved.cutoffApplied;
+      firstCycleDueDate = resolved.dueDate;
+
+      await contributionService.generateCycleSchedule(
+        groupId, 1, resolved.dueDate,
+        sorted.map(m => ({ user_id: m.user_id, amount_due: group.contribution_amount })),
+      );
+      if (recipient) {
+        await rotationService.createForCycle(groupId, 1, recipient.user_id, resolved.dueDate);
+      }
+    } catch (error) {
+      // Never fail activation itself over schedule generation — the
+      // nightly safety-net job (monthlyGenerateContributionSchedule) will
+      // pick up any group whose current cycle still has no schedule.
+      console.error('[GroupService] Failed to synchronously generate cycle 1 schedule at activation:', error);
+    }
+
     const memberUsers = await db.select({ id: schema.users.id, email: schema.users.email })
       .from(schema.users).where(inArray(schema.users.id, memberUserIds));
+    const cutoffNote = cutoffApplied && firstCycleDueDate
+      ? ` Today's charging cut-off (${CONTRIBUTION_SAME_DAY_CUTOFF_HOUR_UTC}:00 GMT) has already passed, so the first contribution charge and payout will be on ${firstCycleDueDate.toLocaleDateString('en-GB', { timeZone: 'UTC' })} instead of today.`
+      : '';
     for (const u of memberUsers) {
       await notificationService.create({
         userId: u.id, type: 'group_activated',
         title: 'Group Started',
-        message: `"${group.name}" has started — contributions and payout rotation are now live.`,
+        message: `"${group.name}" has started — contributions and payout rotation are now live.${cutoffNote}`,
       });
       await sendGroupActivatedEmail(u.email, group.name);
     }
@@ -554,7 +596,7 @@ export const groupService = {
     // safety-net job.
     await this.reconcileMemberBilling(memberUserIds);
 
-    return this.getById(groupId);
+    return { ...await this.getById(groupId), first_charge_cutoff_applied: cutoffApplied, first_contribution_date: firstCycleDueDate, first_payout_date: firstCycleDueDate };
   },
 
   /**

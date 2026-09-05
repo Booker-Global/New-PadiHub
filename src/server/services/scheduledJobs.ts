@@ -16,7 +16,7 @@ import { groupService } from './groupService.js';
 import { chargeContributionForUser } from '../controllers/paymentController.js';
 import { getFlutterwaveProvider } from '../integrations/payments/PaymentProviderFactory.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
-import { computeNextPayoutDate } from '../lib/payoutSchedule.js';
+import { resolveFirstScheduleDate } from '../lib/payoutSchedule.js';
 import {
   SUBSCRIPTION_TIERS, isSubscriptionTierKey, getTierMonthlyPrice, formatTierPrice,
   GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH, GROUP_STUCK_BELOW_MIN_EXPIRY_DAYS, GROUP_STUCK_EXPIRY_REMINDER_DAYS_BEFORE,
@@ -153,6 +153,26 @@ export async function dailyTrustScoreUpdates(): Promise<void> {
         eq(schema.contributions.payment_status, 'scheduled'),
         lte(schema.contributions.due_date, now),
       ));
+  });
+}
+
+/**
+ * Idempotent catch-up run for the primary 07:00 UTC charge trigger.
+ *
+ * Runs a few hours later (18:00 UTC) purely to retry accounts that were not
+ * yet successfully charged in the morning — e.g. a transient provider outage,
+ * or a contribution that only became "due" mid-morning because its group was
+ * activated after the primary run. It simply re-invokes the same
+ * scheduled→due flip and charge-due-contributions logic, both of which are
+ * naturally idempotent (they only ever act on rows still in 'scheduled'/'due'
+ * status — a contribution already charged via markPaid/markFailed is no
+ * longer in that state), so re-running this later in the day can never
+ * double-charge a member who was already successfully charged this morning.
+ */
+export async function dailyChargeCatchUp(): Promise<void> {
+  await runJob('daily_charge_catch_up', async () => {
+    await dailyTrustScoreUpdates();
+    await dailyAutoChargeDueContributions();
   });
 }
 
@@ -604,7 +624,7 @@ export async function monthlyGenerateContributionSchedule(): Promise<void> {
         .limit(1);
       if (existing.length) continue;
 
-      const dueDate = computeNextPayoutDate(group.contribution_frequency, group.payout_day, new Date());
+      const { dueDate } = resolveFirstScheduleDate(group.contribution_frequency, group.payout_day, new Date());
       await contributionService.generateCycleSchedule(
         group.id,
         group.current_cycle,
