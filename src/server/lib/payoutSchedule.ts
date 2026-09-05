@@ -32,20 +32,35 @@ function monthlyDate(year: number, monthIndex: number, dayOfMonth: number): Date
 }
 
 /**
- * Compute the next payout date strictly after `from`, based on the group's
+ * Compute the next payout date on/after `from`, based on the group's
  * frequency and payout_day. Falls back to sane defaults if payout_day is
  * missing (shouldn't normally happen for weekly/monthly groups, since
  * groupController requires it at creation time).
+ *
+ * By default (allowToday: false — the historical behaviour, still used by
+ * rotationService.advance() to compute the *next* cycle's date, since the
+ * cycle that just completed already used up "today" as its due date), the
+ * returned date is strictly after `from`'s calendar day. Pass
+ * `{ allowToday: true }` when scheduling a cycle that hasn't started yet
+ * (first-cycle generation at group activation, or the safety-net job that
+ * generates a cycle's schedule when none exists) — otherwise a group whose
+ * payout day is today would incorrectly never get a contribution due today,
+ * rolling all the way to next month/week instead.
  */
 export function computeNextPayoutDate(
   frequency: ContributionFrequency,
   payoutDay: number | null | undefined,
   from: Date = new Date(),
+  options: { allowToday?: boolean } = {},
 ): Date {
+  const allowToday = options.allowToday ?? false;
+  const todayStart = new Date(from);
+  todayStart.setHours(0, 0, 0, 0);
+
   if (frequency === 'daily') {
-    const next = new Date(from);
+    if (allowToday) return todayStart;
+    const next = new Date(todayStart);
     next.setDate(next.getDate() + 1);
-    next.setHours(0, 0, 0, 0);
     return next;
   }
 
@@ -53,8 +68,8 @@ export function computeNextPayoutDate(
     const dayOfWeek = payoutDay !== null && payoutDay !== undefined
       ? Math.min(6, Math.max(0, payoutDay))
       : from.getDay();
-    const next = new Date(from);
-    next.setHours(0, 0, 0, 0);
+    if (allowToday && todayStart.getDay() === dayOfWeek) return todayStart;
+    const next = new Date(todayStart);
     do {
       next.setDate(next.getDate() + 1);
     } while (next.getDay() !== dayOfWeek);
@@ -65,10 +80,11 @@ export function computeNextPayoutDate(
   const dayOfMonth = payoutDay !== null && payoutDay !== undefined
     ? Math.min(31, Math.max(1, payoutDay))
     : from.getDate();
-  let candidate = monthlyDate(from.getFullYear(), from.getMonth(), dayOfMonth);
+  const candidate = monthlyDate(from.getFullYear(), from.getMonth(), dayOfMonth);
+  if (allowToday && candidate.getTime() === todayStart.getTime()) return candidate;
   if (candidate <= from) {
     const nextMonth = from.getMonth() + 1;
-    candidate = monthlyDate(from.getFullYear() + Math.floor(nextMonth / 12), nextMonth % 12, dayOfMonth);
+    return monthlyDate(from.getFullYear() + Math.floor(nextMonth / 12), nextMonth % 12, dayOfMonth);
   }
   return candidate;
 }
