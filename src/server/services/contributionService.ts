@@ -133,6 +133,20 @@ export const contributionService = {
         ${table(detail('Member', memberName) + detail('Cycle', String(c.cycle_number)) + detail('Amount', amount) + detail('Reference', providerReference))}
       `);
     }
+
+    // Section 7/10 — if this was the last unpaid contribution in the cycle,
+    // trigger the payout THE SAME DAY instead of waiting for tomorrow's
+    // monthlyAdvanceRotation safety-net sweep. Best-effort/never-throwing:
+    // a payout-advance failure must never undo or fail this contribution's
+    // own paid confirmation — rotationService.advanceIfCycleComplete is
+    // itself concurrency-safe and idempotent (see its doc comment), and any
+    // failure here is retried by tomorrow's daily job.
+    try {
+      const { rotationService } = await import('./rotationService.js');
+      await rotationService.advanceIfCycleComplete(c.group_id, c.cycle_number);
+    } catch (error) {
+      console.error('[ContributionService] advanceIfCycleComplete failed after markPaid:', error);
+    }
     return true;
   },
 

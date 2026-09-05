@@ -333,4 +333,55 @@ export const rotationService = {
     await createAuditLog({ userId: actorId, action: 'ROTATION_ADVANCED', entity: 'savings_groups', entityId: groupId, ipAddress, metadata: { nextCycle, nextRecipient: nextRecipient.user_id } });
     return { nextCycle, nextRecipient: nextRecipient.user_id };
   },
+
+  /**
+   * Section 7/10 — trigger the payout the SAME DAY every member's
+   * contribution for a cycle is collected, instead of waiting for the next
+   * calendar day's monthlyAdvanceRotation safety-net sweep. Called inline,
+   * right after contributionService.markPaid() marks what may be the last
+   * unpaid contribution in a cycle — so a group whose payout day is "today"
+   * gets both the charge AND the payout confirmed today, matching what the
+   * group leader is told to expect.
+   *
+   * Concurrency-safe: contributionService.markPaid() can call this from
+   * several near-simultaneous charge confirmations (webhook + auto-charge
+   * job, or two members' cards clearing within milliseconds of each other),
+   * and monthlyAdvanceRotation's daily cron can ALSO call this for the same
+   * group/cycle as a safety net. The conditional UPDATE below
+   * (payout_status: 'pending' -> 'processing') is an atomic claim — only
+   * the caller whose UPDATE actually matches a row proceeds to call
+   * advance(), so the cycle can never be advanced/paid out twice. If the
+   * payout transfer itself fails, the claim is released back to 'pending'
+   * so the next attempt (daily catch-up) can retry it.
+   */
+  async advanceIfCycleComplete(groupId: string, cycleNumber: number, actorId = 'system') {
+    const cycleContributions = await db.select().from(schema.contributions)
+      .where(and(eq(schema.contributions.group_id, groupId), eq(schema.contributions.cycle_number, cycleNumber)));
+    const allPaid = cycleContributions.length > 0 && cycleContributions.every(c => c.payment_status === 'paid');
+    if (!allPaid) return null;
+
+    const claimResult = await db.update(schema.rotations)
+      .set({ payout_status: 'processing' })
+      .where(and(
+        eq(schema.rotations.group_id, groupId),
+        eq(schema.rotations.cycle_number, cycleNumber),
+        eq(schema.rotations.payout_status, 'pending'),
+      ));
+    const claimedRows = (claimResult as unknown as { affectedRows?: number }[])[0]?.affectedRows
+      ?? (claimResult as unknown as { affectedRows?: number }).affectedRows ?? 0;
+    if (!claimedRows) return null;
+
+    try {
+      const result = await this.advance(groupId, actorId);
+      if (result.transferFailed) {
+        await db.update(schema.rotations).set({ payout_status: 'pending' })
+          .where(and(eq(schema.rotations.group_id, groupId), eq(schema.rotations.cycle_number, cycleNumber)));
+      }
+      return result;
+    } catch (error) {
+      await db.update(schema.rotations).set({ payout_status: 'pending' })
+        .where(and(eq(schema.rotations.group_id, groupId), eq(schema.rotations.cycle_number, cycleNumber)));
+      throw error;
+    }
+  },
 };

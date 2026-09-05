@@ -649,7 +649,18 @@ export async function monthlyGenerateContributionSchedule(): Promise<void> {
   });
 }
 
-/** Advance rotation for groups whose current cycle is fully paid. */
+/**
+ * Safety-net sweep for groups whose current cycle is fully paid but haven't
+ * been advanced/paid out yet. Section 7/10: the PRIMARY trigger is now
+ * inline — contributionService.markPaid() calls
+ * rotationService.advanceIfCycleComplete() itself the moment the last
+ * contribution in a cycle clears, so the payout goes out the SAME DAY as
+ * the charge in the normal case. This daily run only catches the cases that
+ * inline trigger could have missed (a transient error right after the last
+ * charge, a process restart mid-request, etc.) — advanceIfCycleComplete is
+ * idempotent/concurrency-safe, so calling it again here for an
+ * already-advanced or already-in-flight cycle is always a safe no-op.
+ */
 export async function monthlyAdvanceRotation(): Promise<void> {
   await runJob('monthly_advance_rotation', async () => {
     const activeGroups = await db.select().from(schema.savingsGroups)
@@ -657,19 +668,8 @@ export async function monthlyAdvanceRotation(): Promise<void> {
 
     let advanced = 0;
     for (const group of activeGroups) {
-      const cycleContributions = await db.select().from(schema.contributions)
-        .where(and(
-          eq(schema.contributions.group_id, group.id),
-          eq(schema.contributions.cycle_number, group.current_cycle),
-        ));
-
-      const allPaid = cycleContributions.length > 0 &&
-        cycleContributions.every(c => c.payment_status === 'paid');
-
-      if (allPaid) {
-        await rotationService.advance(group.id, 'system');
-        advanced++;
-      }
+      const result = await rotationService.advanceIfCycleComplete(group.id, group.current_cycle);
+      if (result) advanced++;
     }
     console.log(`[Job] Rotation advance: ${advanced}/${activeGroups.length} active groups advanced.`);
   });

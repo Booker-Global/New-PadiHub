@@ -3,7 +3,12 @@
  *
  * Schedules (UTC):
  *   05:45  generate contribution schedules (idempotent — also covers daily/weekly groups)
- *   05:50  advance rotations whose current cycle is fully paid
+ *   05:50  SAFETY-NET rotation advance — the PRIMARY trigger is now inline
+ *          (contributionService.markPaid calls rotationService.advanceIfCycleComplete the
+ *          instant a cycle's last contribution clears, so payout goes out the SAME DAY as the
+ *          charge). This run only catches cycles the inline trigger missed; it's idempotent and
+ *          concurrency-safe (see advanceIfCycleComplete's doc comment), so re-running it here is
+ *          always a safe no-op for cycles already advanced.
  *   06:00  contribution reminders
  *   06:50  overdue check (still only touches contributions due from PRIOR days)
  *   07:00  PRIMARY charge trigger: trust-score status flip (scheduled → due)
