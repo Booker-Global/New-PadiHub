@@ -22,7 +22,7 @@ import {
   sendGroupCreatedEmail,
   sendGroupSettingsUpdatedEmail,
 } from '../integrations/email/emailService.js';
-import { payoutDayBounds, CONTRIBUTION_SAME_DAY_CUTOFF_HOUR_UTC } from '../lib/payoutSchedule.js';
+import { payoutDayBounds, CONTRIBUTION_SAME_DAY_CUTOFF_HOUR_UTC, resolveFirstScheduleDate } from '../lib/payoutSchedule.js';
 
 function assignProvider(country: string) {
   return country === 'NG' ? 'flutterwave' : 'stripe';
@@ -442,6 +442,45 @@ export const groupService = {
 
     await db.update(schema.savingsGroups).set(data).where(eq(schema.savingsGroups.id, groupId));
     await createAuditLog({ userId: leaderId, action: 'GROUP_UPDATED', entity: 'savings_groups', entityId: groupId, ipAddress });
+
+    // Item 7 — changing an ACTIVE group's payout_day/contribution_amount
+    // must actually reschedule the current cycle's still-pending charges,
+    // not just be stored for future cycles. Without this, a leader who
+    // moves payout_day to "today" (as documented in Section 7) would see
+    // no charge/payout activity at all, because every member's contribution
+    // row for the current cycle was already created with the OLD due_date
+    // back when the cycle started, and nothing ever re-reads payout_day
+    // afterwards. Only 'scheduled' rows are touched — once a contribution
+    // has flipped to 'due' (the 07:00 UTC charge run has picked it up
+    // today) or beyond, it's already in flight and must not be silently
+    // rewritten.
+    if (group.status === 'active' && (data.payout_day !== undefined || data.contribution_amount !== undefined)) {
+      const newPayoutDay = data.payout_day !== undefined ? data.payout_day : group.payout_day;
+      const { dueDate } = resolveFirstScheduleDate(group.contribution_frequency, newPayoutDay, new Date());
+      const pendingContributions = await db.select({ id: schema.contributions.id })
+        .from(schema.contributions)
+        .where(and(
+          eq(schema.contributions.group_id, groupId),
+          eq(schema.contributions.cycle_number, group.current_cycle),
+          eq(schema.contributions.payment_status, 'scheduled'),
+        ));
+      if (pendingContributions.length) {
+        await db.update(schema.contributions)
+          .set({
+            ...(data.payout_day !== undefined ? { due_date: dueDate } : {}),
+            ...(data.contribution_amount !== undefined ? { amount_due: data.contribution_amount } : {}),
+          })
+          .where(and(
+            eq(schema.contributions.group_id, groupId),
+            eq(schema.contributions.cycle_number, group.current_cycle),
+            eq(schema.contributions.payment_status, 'scheduled'),
+          ));
+        await createAuditLog({
+          userId: leaderId, action: 'GROUP_CYCLE_RESCHEDULED', entity: 'savings_groups', entityId: groupId,
+          metadata: { newPayoutDay, newDueDate: dueDate.toISOString(), affectedContributions: pendingContributions.length },
+        });
+      }
+    }
 
     // A permanent contribution-amount or payout-date change materially
     // affects every member's expectations going forward — notify everyone,
