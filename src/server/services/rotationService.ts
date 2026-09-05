@@ -9,12 +9,14 @@ import { trustScoreService } from './trustScoreService.js';
 import { monitoringService } from './monitoringService.js';
 import { groupService } from './groupService.js';
 import { getStripeProvider } from '../integrations/payments/PaymentProviderFactory.js';
-import { TRUST_SCORE_DELTA_CYCLE_COMPLETED, clampGroupMaximumMembers } from '../lib/constants.js';
+import { TRUST_SCORE_DELTA_CYCLE_COMPLETED, clampGroupMaximumMembers, resolveUserDisplayName } from '../lib/constants.js';
 import { computeNextPayoutDate } from '../lib/payoutSchedule.js';
 import {
   sendUpcomingPayoutEmail,
   sendPayoutCompleteEmail,
   sendGroupClosedEmail,
+  sendGroupLeaderActivityEmail,
+  p, table, detail,
 } from '../integrations/email/emailService.js';
 
 type SavingsGroupRow = typeof schema.savingsGroups.$inferSelect;
@@ -230,13 +232,27 @@ export const rotationService = {
       await trustScoreService.increase(current.recipient_id, TRUST_SCORE_DELTA_CYCLE_COMPLETED, 'CYCLE_COMPLETED');
 
       // Email payout complete
-      const recipientRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, current.recipient_id)).limit(1);
-      const groupRow2 = await db.select({ name: schema.savingsGroups.name, contribution_amount: schema.savingsGroups.contribution_amount, currency: schema.savingsGroups.currency, maximum_members: schema.savingsGroups.maximum_members })
+      const recipientRow = await db.select({ email: schema.users.email, display_name: schema.users.display_name, first_name: schema.users.first_name, last_name: schema.users.last_name })
+        .from(schema.users).where(eq(schema.users.id, current.recipient_id)).limit(1);
+      const groupRow2 = await db.select({ name: schema.savingsGroups.name, contribution_amount: schema.savingsGroups.contribution_amount, currency: schema.savingsGroups.currency, maximum_members: schema.savingsGroups.maximum_members, leader_id: schema.savingsGroups.leader_id })
         .from(schema.savingsGroups).where(eq(schema.savingsGroups.id, groupId)).limit(1);
       if (recipientRow.length && groupRow2.length) {
         const g2 = groupRow2[0];
+        const reference = transferReference ?? current.provider_transfer_reference ?? current.id;
         const potAmount = `${g2.currency} ${(parseFloat(g2.contribution_amount) * clampGroupMaximumMembers(g2.maximum_members)).toFixed(2)}`;
-        await sendPayoutCompleteEmail(recipientRow[0].email, g2.name, potAmount, transferReference ?? current.provider_transfer_reference ?? current.id);
+        await sendPayoutCompleteEmail(recipientRow[0].email, g2.name, potAmount, reference);
+
+        // Leader must know every payout as it happens, unless they're the recipient.
+        if (g2.leader_id !== current.recipient_id) {
+          const leaderRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, g2.leader_id)).limit(1);
+          if (leaderRow.length) {
+            const recipientName = resolveUserDisplayName(recipientRow[0]);
+            await sendGroupLeaderActivityEmail(leaderRow[0].email, g2.name, 'Payout completed', `
+              ${p(`The cycle ${current.cycle_number} payout for <strong>${g2.name}</strong> has been sent to <strong>${recipientName}</strong>.`)}
+              ${table(detail('Recipient', recipientName) + detail('Cycle', String(current.cycle_number)) + detail('Amount', potAmount) + detail('Reference', reference))}
+            `);
+          }
+        }
       }
     }
 

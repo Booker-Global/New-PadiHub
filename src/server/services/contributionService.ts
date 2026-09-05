@@ -7,13 +7,44 @@ import { createAuditLog } from '../middleware/auditLogger.js';
 import { notificationService } from './notificationService.js';
 import { trustScoreService } from './trustScoreService.js';
 import { membershipService } from './membershipService.js';
-import { TRUST_SCORE_DELTA_CONTRIBUTION_PAID, TRUST_SCORE_DELTA_CONTRIBUTION_MISSED, CONTRIBUTION_DEFAULT_GRACE_PERIOD_MS } from '../lib/constants.js';
+import { TRUST_SCORE_DELTA_CONTRIBUTION_PAID, TRUST_SCORE_DELTA_CONTRIBUTION_MISSED, CONTRIBUTION_DEFAULT_GRACE_PERIOD_MS, resolveUserDisplayName } from '../lib/constants.js';
 import {
   sendContributionSuccessEmail,
   sendContributionOverdueEmail,
   sendPaymentGracePeriodStartedEmail,
   sendMemberDefaultSuspensionEmail,
+  sendGroupLeaderActivityEmail,
+  p, table, detail,
 } from '../integrations/email/emailService.js';
+
+/**
+ * Section: a group leader is accountable for the whole group's health, so
+ * they must be copied on every significant contribution activity event for
+ * groups they lead — unless the event is about the leader's OWN
+ * contribution (they already get the member-facing email for that).
+ * Best-effort/never-throwing: a failed leader-notification email must never
+ * block the underlying contribution state transition.
+ */
+async function notifyGroupLeaderOfContributionActivity(
+  groupId: string, memberId: string, headline: string, bodyBuilder: (memberName: string, groupName: string) => string,
+): Promise<void> {
+  try {
+    const groupRow = await db.select({ name: schema.savingsGroups.name, leader_id: schema.savingsGroups.leader_id })
+      .from(schema.savingsGroups).where(eq(schema.savingsGroups.id, groupId)).limit(1);
+    if (!groupRow.length || groupRow[0].leader_id === memberId) return;
+
+    const [leaderRow, memberRow] = await Promise.all([
+      db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, groupRow[0].leader_id)).limit(1),
+      db.select({ display_name: schema.users.display_name, first_name: schema.users.first_name, last_name: schema.users.last_name, email: schema.users.email })
+        .from(schema.users).where(eq(schema.users.id, memberId)).limit(1),
+    ]);
+    if (!leaderRow.length) return;
+    const memberName = resolveUserDisplayName(memberRow[0]);
+    await sendGroupLeaderActivityEmail(leaderRow[0].email, groupRow[0].name, headline, bodyBuilder(memberName, groupRow[0].name));
+  } catch (error) {
+    console.error('[ContributionService] Failed to notify group leader of contribution activity:', error);
+  }
+}
 
 export const contributionService = {
   async getForGroup(groupId: string, cycleNumber?: number) {
@@ -97,6 +128,10 @@ export const contributionService = {
       const amount = `${groupRow[0].currency} ${parseFloat(c.amount_due).toFixed(2)}`;
       const date = new Date().toLocaleDateString('en-GB');
       await sendContributionSuccessEmail(userRow[0].email, groupRow[0].name, amount, date, providerReference);
+      await notifyGroupLeaderOfContributionActivity(c.group_id, c.member_id, 'Member contribution paid', (memberName, groupName) => `
+        ${p(`<strong>${memberName}</strong>'s contribution for cycle ${c.cycle_number} in <strong>${groupName}</strong> has been successfully paid.`)}
+        ${table(detail('Member', memberName) + detail('Cycle', String(c.cycle_number)) + detail('Amount', amount) + detail('Reference', providerReference))}
+      `);
     }
     return true;
   },
@@ -159,6 +194,10 @@ export const contributionService = {
 
       if (userRow.length && groupRow.length) {
         await sendPaymentGracePeriodStartedEmail(userRow[0].email, groupRow[0].name, amount, graceEndsAt.toLocaleString('en-GB'));
+        await notifyGroupLeaderOfContributionActivity(c.group_id, c.member_id, 'Member payment failed — grace period started', (memberName, groupName) => `
+          ${p(`<strong>${memberName}</strong>'s contribution for cycle ${c.cycle_number} in <strong>${groupName}</strong> failed. A 72-hour grace period has started before a single automatic retry.`)}
+          ${table(detail('Member', memberName) + detail('Cycle', String(c.cycle_number)) + detail('Amount', amount) + detail('Retry by', graceEndsAt.toLocaleString('en-GB')))}
+        `);
       }
       return true;
     }
@@ -180,6 +219,10 @@ export const contributionService = {
 
     if (userRow.length && groupRow.length) {
       await sendMemberDefaultSuspensionEmail(userRow[0].email, groupRow[0].name, amount);
+      await notifyGroupLeaderOfContributionActivity(c.group_id, c.member_id, 'Member contribution defaulted', (memberName, groupName) => `
+        ${p(`<strong>${memberName}</strong>'s contribution for cycle ${c.cycle_number} in <strong>${groupName}</strong> is now in default after the automatic retry also failed. This may affect the group's rotation order and payout schedule.`)}
+        ${table(detail('Member', memberName) + detail('Cycle', String(c.cycle_number)) + detail('Amount', amount))}
+      `);
     }
 
     await membershipService.flagDefault(c.member_id, c.group_id, contributionId, ipAddress);
@@ -213,6 +256,10 @@ export const contributionService = {
     if (userRow.length && groupRow.length) {
       const amount = `${groupRow[0].currency} ${parseFloat(c.amount_due).toFixed(2)}`;
       await sendContributionOverdueEmail(userRow[0].email, groupRow[0].name, amount);
+      await notifyGroupLeaderOfContributionActivity(c.group_id, c.member_id, 'Member missed a contribution', (memberName, groupName) => `
+        ${p(`<strong>${memberName}</strong> missed their contribution for cycle ${c.cycle_number} in <strong>${groupName}</strong>. This affects their Trust Score and strike count.`)}
+        ${table(detail('Member', memberName) + detail('Cycle', String(c.cycle_number)) + detail('Amount', amount))}
+      `);
     }
     return true;
   },

@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { eq, and, or, inArray, gt, ne, asc, sql } from 'drizzle-orm';
+import { eq, and, or, inArray, gt, ne, asc, sql, count } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -196,11 +196,24 @@ export const membershipService = {
         ));
       await createAuditLog({ userId, action: 'INVITATION_ACCEPTED', entity: 'savings_groups', entityId: groupId, ipAddress });
 
-      const rotationOrder = activeCount + 1;
-      await db.insert(schema.memberships).values({
-        id: uuidv4(), user_id: userId, group_id: groupId,
-        role: 'member', rotation_order: rotationOrder,
-        status: 'active', strike_count: 0,
+      // Assign the next rotation slot and insert the membership atomically,
+      // inside a transaction that row-locks the group — otherwise two people
+      // accepting invites to the same group at nearly the same instant could
+      // both read the same pre-transaction activeCount and both be assigned
+      // the SAME rotation_order, which then shows two different members as
+      // "next in rotation" simultaneously (Section 15.C requires a single,
+      // factual next recipient at all times).
+      await db.transaction(async (tx) => {
+        await tx.select({ id: schema.savingsGroups.id }).from(schema.savingsGroups)
+          .where(eq(schema.savingsGroups.id, groupId)).for('update');
+        const [activeNow] = await tx.select({ value: count() }).from(schema.memberships)
+          .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')));
+        const nextOrder = (activeNow?.value ?? 0) + 1;
+        await tx.insert(schema.memberships).values({
+          id: uuidv4(), user_id: userId, group_id: groupId,
+          role: 'member', rotation_order: nextOrder,
+          status: 'active', strike_count: 0,
+        });
       });
 
       await createAuditLog({ userId, action: 'MEMBER_JOINED', entity: 'savings_groups', entityId: groupId, ipAddress });
@@ -306,10 +319,23 @@ export const membershipService = {
       );
     }
 
-    const nextRotationOrder = activeMembers.length + 1;
-    await db.update(schema.memberships)
-      .set({ status: 'active', rotation_order: nextRotationOrder })
-      .where(eq(schema.memberships.id, membershipId));
+    // Assign the next rotation slot and flip the membership to active
+    // atomically, inside a transaction that row-locks the group — same
+    // concurrency guard as the invited-join path above, so two pending
+    // memberships approved at nearly the same instant (e.g. leader approval
+    // racing a unanimous admission vote resolving) can never both land on
+    // the same rotation_order and be shown as "next" simultaneously.
+    const nextRotationOrder = await db.transaction(async (tx) => {
+      await tx.select({ id: schema.savingsGroups.id }).from(schema.savingsGroups)
+        .where(eq(schema.savingsGroups.id, group.id)).for('update');
+      const [activeNow] = await tx.select({ value: count() }).from(schema.memberships)
+        .where(and(eq(schema.memberships.group_id, group.id), eq(schema.memberships.status, 'active')));
+      const order = (activeNow?.value ?? 0) + 1;
+      await tx.update(schema.memberships)
+        .set({ status: 'active', rotation_order: order })
+        .where(eq(schema.memberships.id, membershipId));
+      return order;
+    });
 
     await createAuditLog({ userId: membership.user_id, action: 'MEMBERSHIP_APPROVED', entity: 'savings_groups', entityId: group.id, ipAddress, metadata: { membershipId, memberId: membership.user_id } });
 

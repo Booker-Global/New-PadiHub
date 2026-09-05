@@ -50,7 +50,7 @@ function btn(text: string, url: string): string {
   return `<a href="${url}" style="display:inline-block;margin-top:20px;padding:12px 28px;background:#2EAF6F;color:#FFFFFF;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;">${text}</a>`;
 }
 
-function p(text: string): string {
+export function p(text: string): string {
   return `<p style="margin:0 0 16px;font-size:15px;line-height:1.6;color:#374151;">${text}</p>`;
 }
 
@@ -58,18 +58,18 @@ function h2(text: string): string {
   return `<h2 style="margin:0 0 16px;font-size:20px;color:#1A1A2E;">${text}</h2>`;
 }
 
-function detail(label: string, value: string): string {
+export function detail(label: string, value: string): string {
   return `<tr>
     <td style="padding:8px 12px;font-size:14px;color:#6B7280;background:#F9FAFB;border-radius:4px;">${label}</td>
     <td style="padding:8px 12px;font-size:14px;color:#111827;font-weight:600;">${value}</td>
   </tr>`;
 }
 
-function table(rows: string): string {
+export function table(rows: string): string {
   return `<table style="width:100%;border-collapse:collapse;margin:16px 0;">${rows}</table>`;
 }
 
-function escapeHtml(text: string): string {
+export function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
@@ -639,6 +639,25 @@ export async function sendPayoutCompleteEmail(
       detail('Reference', reference),
     )}
     ${p('Please allow 1–3 business days for the funds to appear in your account.')}
+  `));
+}
+
+/**
+ * Generic "group activity" digest email sent ONLY to the group leader — a
+ * leader is the one person accountable for the whole group's health, so
+ * (per user request) they must be copied on EVERY significant activity
+ * event, not just member-joined/group-activated: contributions paid,
+ * payment failures/grace periods/defaults, missed contributions, upcoming
+ * and completed payouts, etc. `headline` is the email subject/H2, `bodyHtml`
+ * is the pre-built detail paragraph/table for that specific event.
+ */
+export async function sendGroupLeaderActivityEmail(
+  to: string, groupName: string, headline: string, bodyHtml: string,
+): Promise<void> {
+  await send(to, `${headline} — ${groupName}`, wrap(`
+    ${h2(headline)}
+    ${bodyHtml}
+    ${btn('View Group', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
   `));
 }
 
