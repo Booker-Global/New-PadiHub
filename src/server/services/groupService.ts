@@ -278,6 +278,10 @@ export const groupService = {
       .where(and(
         eq(schema.savingsGroups.status, 'active'),
         eq(schema.savingsGroups.country, country),
+        // Private groups (is_public=false) are invite-only — never surfaced
+        // in search, and self-service "request to join" is separately
+        // blocked in membershipService.join() as defense in depth.
+        eq(schema.savingsGroups.is_public, true),
       ));
 
     const memberCounts = await db.select({
@@ -308,7 +312,7 @@ export const groupService = {
     maximum_members: number; rotation_method: 'manual' | 'random';
     strike_threshold?: number; suspension_threshold?: number;
     voting_threshold?: number; allow_payout_swaps?: boolean;
-    min_trust_score?: number;
+    min_trust_score?: number; is_public?: boolean;
     group_duration_type?: 'fixed' | 'indefinite'; group_duration_rotations?: number;
   }, ipAddress?: string) {
     // Production payment frequency is Weekly/Monthly only — Daily exists
@@ -407,6 +411,7 @@ export const groupService = {
       payout_day:               data.payout_day ?? null,
       maximum_members:          clampGroupMaximumMembers(data.maximum_members),
       min_trust_score:          data.min_trust_score ?? GROUP_DEFAULT_MIN_TRUST_SCORE,
+      is_public:                data.is_public ?? true,
       rotation_method:          data.rotation_method,
       current_rotation_position: 1,
       current_cycle:            1,
@@ -448,7 +453,7 @@ export const groupService = {
     name: string; description: string; maximum_members: number; min_trust_score: number;
     contribution_amount: string; payout_day: number;
     strike_threshold: number; suspension_threshold: number;
-    voting_threshold: number; allow_payout_swaps: boolean;
+    voting_threshold: number; allow_payout_swaps: boolean; is_public: boolean;
   }>, ipAddress?: string) {
     
     const group = await this.getById(groupId);

@@ -143,6 +143,7 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
     { column: 'group_duration_rotations', sqlType: 'INT NULL' },
     { column: 'full_rotations_completed', sqlType: 'INT NOT NULL DEFAULT 0' },
     { column: 'closure_scheduled',        sqlType: 'BOOLEAN NOT NULL DEFAULT false' },
+    { column: 'is_public',                sqlType: 'BOOLEAN NOT NULL DEFAULT true' },
   ],
   contributions: [
     { column: 'amount_paid',        sqlType: 'DECIMAL(12,2) NULL' },

@@ -474,7 +474,7 @@ export default function HomePage() {
             {[
               { icon: Shield,      label: 'Trust Score™ System' },
               { icon: Users,       label: 'Rotating Savings Groups' },
-              { icon: Globe,       label: 'Multi-Currency Support' },
+              { icon: Globe,       label: 'Local Payment Capabilities Supported' },
               { icon: Zap,         label: 'Instant Contributions' },
               { icon: CheckCircle, label: 'Secure Payouts' },
             ].map(({ icon: Icon, label }) => (

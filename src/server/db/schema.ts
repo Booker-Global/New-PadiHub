@@ -151,6 +151,13 @@ export const savingsGroups = mysqlTable('savings_groups', {
   // this group — set by the creator at group-creation time (0 = no minimum).
   // Enforced in membershipService.requestToJoin().
   min_trust_score:          int('min_trust_score').notNull().default(0),
+  // "Available to public" toggle, set at creation and editable by the
+  // Creator afterwards. true (default): the group appears in group search
+  // results and strangers can submit a self-service "request to join" (see
+  // groupService.search() and membershipService.join()). false: the group
+  // is private — it's hidden from search and self-service join requests are
+  // rejected; the ONLY way to join is a direct invite from the Creator.
+  is_public:                boolean('is_public').notNull().default(true),
   rotation_method:          mysqlEnum('rotation_method', ['manual', 'random']).notNull().default('manual'),
   current_rotation_position: int('current_rotation_position').notNull().default(1),
   current_cycle:            int('current_cycle').notNull().default(1),

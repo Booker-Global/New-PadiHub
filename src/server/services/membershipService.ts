@@ -161,6 +161,19 @@ export const membershipService = {
       invitation = await groupService.findOpenInvitationForEmail(groupId, user.email);
     }
 
+    // "Available to public" toggle — a private group (is_public=false) only
+    // ever accepts members the leader invites directly; self-service
+    // "request to join" is rejected outright, same reasoning as the Trust
+    // Score gate below (an invite means the leader already vetted them, so
+    // it bypasses this too).
+    if (!invitation && !group.is_public) {
+      throw new AppError(
+        'This group is private — you can only join if the group leader invites you directly.',
+        403,
+        'GROUP_NOT_PUBLIC',
+      );
+    }
+
     // Enforce the group's minimum Trust Score, set by its creator — but ONLY
     // for users requesting to join themselves (e.g. found the group via
     // search). A leader-issued invite means the leader already vetted this

@@ -18,6 +18,10 @@ const baseGroupSchema = z.object({
   // members to ever launch, so a smaller group size can never be valid.
   maximum_members:        z.number().int().min(GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH).max(GROUP_MAX_MEMBERS),
   min_trust_score:        z.number().int().min(0).max(100).optional(),
+  // "Available to public" toggle — see schema.ts savingsGroups.is_public
+  // doc comment. Optional at both create (defaults to true in
+  // groupService.create) and update (only changes when explicitly sent).
+  is_public:              z.boolean().optional(),
   rotation_method:        z.enum(['trust_score', 'random']).transform(value => value === 'trust_score' ? 'manual' : value),
   strike_threshold:       z.number().int().min(1).optional(),
   suspension_threshold:   z.number().int().min(1).optional(),
