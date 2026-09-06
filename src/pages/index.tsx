@@ -13,27 +13,24 @@ const _jsonLd = "{\"@context\":\"https://schema.org\",\"@graph\":[{\"@type\":\"W
 
 type Region = 'UK' | 'NG' | 'BOTH';
 
-const regionCopy: Record<Region, { hero: string; illustration: string; trustBar: string; pricing: string; finalCta: string; }> = {
+const regionCopy: Record<Region, { hero: string; illustration: string; pricing: string; finalCta: string; }> = {
   UK: {
     hero: 'Built for members saving together in the United Kingdom.',
     illustration: 'Built for members in the United Kingdom',
-    trustBar: 'United Kingdom pricing',
     pricing: 'Showing monthly-only membership options for the United Kingdom. Cancel anytime.',
-    finalCta: 'Monthly-only plans · United Kingdom pricing shown',
+    finalCta: 'Monthly-only plans · Cancel anytime',
   },
   NG: {
     hero: 'Built for members saving together in Nigeria.',
     illustration: 'Built for members in Nigeria',
-    trustBar: 'Nigeria pricing',
     pricing: 'Showing monthly-only membership options for Nigeria. Cancel anytime.',
-    finalCta: 'Monthly-only plans · Nigeria pricing shown',
+    finalCta: 'Monthly-only plans · Cancel anytime',
   },
   BOTH: {
     hero: 'Built for members saving together in community circles of all kinds.',
     illustration: 'Built for community savings groups',
-    trustBar: 'Region-aware pricing',
     pricing: 'Choose the monthly-only membership option that fits your region. Cancel anytime.',
-    finalCta: 'Monthly-only plans · Choose the region that fits your group',
+    finalCta: 'Monthly-only plans · Cancel anytime',
   },
 };
 
@@ -477,7 +474,7 @@ export default function HomePage() {
             {[
               { icon: Shield,      label: 'Trust Score™ System' },
               { icon: Users,       label: 'Rotating Savings Groups' },
-              { icon: Globe,       label: regionalCopy.trustBar },
+              { icon: Globe,       label: 'Multi-Currency Support' },
               { icon: Zap,         label: 'Instant Contributions' },
               { icon: CheckCircle, label: 'Secure Payouts' },
             ].map(({ icon: Icon, label }) => (

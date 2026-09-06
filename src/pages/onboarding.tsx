@@ -41,14 +41,14 @@ const countryCards = [
     key: 'UK',
     flag: '🇬🇧',
     name: 'United Kingdom',
-    desc: 'Show UK pricing, billing guidance and Stripe Identity verification.',
+    desc: 'Local pricing, billing guidance and identity verification steps.',
     color: '#2EAF6F',
   },
   {
     key: 'NG',
     flag: '🇳🇬',
     name: 'Nigeria',
-    desc: 'Show Nigerian pricing, billing guidance and Account Resolve bank-account validation steps.',
+    desc: 'Local pricing, billing guidance and bank-account verification steps.',
     color: '#F59E0B',
   },
 ] as const;

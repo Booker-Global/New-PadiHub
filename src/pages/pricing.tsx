@@ -39,25 +39,14 @@ const commonFeatures = [
   'Group management tools and notifications',
 ];
 
-const verificationNotesByRegion: Record<PricingRegion, { title: string; body: string; bullets: string[] }> = {
-  UK: {
-    title: 'Verification before the first UK charge',
-    body: 'Save your card first, then complete Stripe Identity inside an embedded PadiHub dashboard modal. Your profile stays Pending until verification succeeds.',
-    bullets: [
-      'Your subscription is set up only after identity verification succeeds, and billing starts once you\'re a verified member of an active group with at least 3 members',
-      'A verification fee may apply to your first subscription charge — see our Terms & Conditions for details',
-      'If verification fails, no charge is taken and you receive a try-again email',
-    ],
-  },
-  NG: {
-    title: 'Verification before the first Nigeria charge',
-    body: 'Save your bank details first, then complete Flutterwave Account Resolve — a free preliminary bank-account name match, not full KYC. Your profile stays Pending until resolve succeeds.',
-    bullets: [
-      'Your subscription is set up only after Account Resolve succeeds, and billing starts once you\'re a verified member of an active group with at least 3 members',
-      'There is no fee for the Account Resolve check',
-      'If the check fails, no charge is taken and you receive a try-again email',
-    ],
-  },
+const verificationNote: { title: string; body: string; bullets: string[] } = {
+  title: 'Verification before contribution charge',
+  body: 'You\'ll need to successfully complete verification on your PadiHub profile before you start making monthly contributions to your assigned groups.',
+  bullets: [
+    'Your subscription is set up only after verification succeeds, and billing starts once you\'re a verified member of an active group with at least 3 members',
+    'A verification fee may apply to your first subscription charge — see our Terms & Conditions for details',
+    'If verification fails, no charge is taken and you receive a try-again email',
+  ],
 };
 
 const plansByRegion: Record<PricingRegion, PlanCard[]> = {
@@ -149,9 +138,7 @@ export default function PricingPage() {
   }, []);
 
   const visiblePlans = plansByRegion[region];
-  const regionLabel = region === 'NG' ? 'Nigeria' : 'United Kingdom';
   const currencyLabel = region === 'NG' ? 'NGN (₦)' : 'GBP (£)';
-  const verificationNote = verificationNotesByRegion[region];
 
   return (
     <>
@@ -198,9 +185,7 @@ export default function PricingPage() {
             Pick the PadiHub membership that matches how many savings groups you want to create and how many communities you want to join.
           </p>
           <div style={{ display: 'inline-flex', flexWrap: 'wrap', justifyContent: 'center', gap: 10, padding: '10px 16px', borderRadius: 999, background: 'rgba(255,255,255,0.06)', color: '#E5E7EB', fontSize: 13, fontWeight: 600 }}>
-            <span>Showing {regionLabel} pricing</span>
-            <span style={{ color: 'rgba(255,255,255,0.35)' }}>•</span>
-            <span>{currencyLabel}</span>
+            <span>Prices shown in {currencyLabel}</span>
           </div>
         </div>
       </section>
@@ -391,7 +376,7 @@ export default function PricingPage() {
             </Link>
           </div>
           <p style={{ color: '#6B7280', fontSize: 13, marginTop: 24 }}>
-            {regionLabel} pricing shown · Cancel anytime
+            Cancel anytime
           </p>
         </div>
       </section>
