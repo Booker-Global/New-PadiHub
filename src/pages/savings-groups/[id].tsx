@@ -58,6 +58,7 @@ interface SavingsGroup {
   payout_day?: number | null;
   maximum_members: number;
   min_trust_score: number;
+  is_public: boolean;
   rotation_method: 'manual' | 'random' | 'trust_score';
   current_rotation_position: number;
   current_cycle: number;
@@ -283,6 +284,7 @@ export default function SavingsGroupDetailPage() {
   const [editOpen, setEditOpen] = useState(false);
   const [editMaxMembers, setEditMaxMembers] = useState('');
   const [editMinTrustScore, setEditMinTrustScore] = useState('');
+  const [editIsPublic, setEditIsPublic] = useState(true);
   const [editContributionAmount, setEditContributionAmount] = useState('');
   const [editPayoutDay, setEditPayoutDay] = useState('');
   const [editSaving, setEditSaving] = useState(false);
@@ -712,6 +714,7 @@ export default function SavingsGroupDetailPage() {
     if (!group) return;
     setEditMaxMembers(String(group.maximum_members));
     setEditMinTrustScore(String(group.min_trust_score ?? 0));
+    setEditIsPublic(group.is_public ?? true);
     setEditContributionAmount(String(group.contribution_amount ?? ''));
     setEditPayoutDay(group.payout_day !== null && group.payout_day !== undefined ? String(group.payout_day) : '');
     setEditError('');
@@ -749,6 +752,7 @@ export default function SavingsGroupDetailPage() {
           min_trust_score: Number(editMinTrustScore),
           contribution_amount: editContributionAmount,
           payout_day: editPayoutDay !== '' ? Number(editPayoutDay) : undefined,
+          is_public: editIsPublic,
         }),
       });
 
@@ -1323,6 +1327,7 @@ export default function SavingsGroupDetailPage() {
                         { label: 'Description', value: group.description || 'No description added yet.' },
                         { label: 'Leader', value: getMemberDisplayName(group.leader_id) },
                         { label: 'Country', value: group.country === 'NG' ? 'Nigeria' : 'United Kingdom' },
+                        { label: 'Visibility', value: group.is_public ? 'Public — shown in group search' : 'Private — invite only' },
                         { label: 'Contribution schedule', value: contributionScheduleLabel },
                         { label: 'Next contribution date', value: groupNextContributionDate ? formatDate(groupNextContributionDate) : 'Not yet scheduled' },
                         { label: 'Next payout date', value: groupNextPayoutDate ? formatDate(groupNextPayoutDate) : 'Not yet scheduled' },
@@ -1958,6 +1963,29 @@ export default function SavingsGroupDetailPage() {
                 <label className="block text-sm font-bold text-gray-700 mb-1.5">Minimum Trust Score™ for new join requests</label>
                 <p className="text-xs text-gray-400 mb-1.5">Only applies to members who request to join themselves — never to people you invite directly.</p>
                 <input value={editMinTrustScore} onChange={event => setEditMinTrustScore(event.target.value)} type="number" min={0} max={100} className="w-full px-4 py-3 rounded-2xl border border-gray-200 text-sm focus:outline-none focus:border-green-400 transition-colors mb-4" />
+
+                <div className="flex items-center justify-between gap-4 rounded-2xl p-4 mb-4" style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
+                  <div>
+                    <p className="text-sm font-bold text-gray-700">Available to public</p>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      {editIsPublic
+                        ? 'Shown in group search — anyone in your country can request to join'
+                        : 'Private — hidden from search, only people you invite directly can join'}
+                    </p>
+                  </div>
+                  <button
+                    role="switch"
+                    aria-checked={editIsPublic}
+                    onClick={() => setEditIsPublic(current => !current)}
+                    className="relative w-11 h-6 rounded-full transition-colors duration-200 flex-shrink-0"
+                    style={{ background: editIsPublic ? '#2EAF6F' : '#D1D5DB' }}
+                  >
+                    <span
+                      className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200"
+                      style={{ transform: editIsPublic ? 'translateX(20px)' : 'translateX(0)' }}
+                    />
+                  </button>
+                </div>
 
                 <div className="flex gap-3">
                   <Button variant="outline" onClick={closeEditModal} className="flex-1 rounded-2xl font-semibold">Close</Button>

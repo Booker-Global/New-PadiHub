@@ -15,6 +15,7 @@ import {
   Mail,
   Eye,
   Sparkles,
+  Globe,
 } from 'lucide-react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { Button } from '@/components/ui/button';
@@ -56,6 +57,7 @@ interface GroupData {
   votingRequired: boolean;
   allowSwaps: boolean;
   minTrustScore: number;
+  isPublic: boolean;
   inviteEmails: string;
   durationType: 'fixed' | 'indefinite';
   durationRotations: number;
@@ -105,6 +107,7 @@ const defaultData: GroupData = {
   votingRequired: false,
   allowSwaps: true,
   minTrustScore: 0,
+  isPublic: true,
   inviteEmails: '',
   durationType: 'indefinite',
   durationRotations: 6,
@@ -390,6 +393,7 @@ export default function CreateGroupWizard() {
           suspension_threshold: data.maxMissed,
           allow_payout_swaps: data.allowSwaps,
           min_trust_score: data.minTrustScore || undefined,
+          is_public: data.isPublic,
           group_duration_type: data.durationType,
           group_duration_rotations: data.durationType === 'fixed' ? data.durationRotations : undefined,
         }),
@@ -849,6 +853,19 @@ export default function CreateGroupWizard() {
                           </div>
                         </div>
                       </OptionCard>
+                      <OptionCard selected={data.isPublic} onClick={() => set('isPublic', !data.isPublic)}>
+                        <div className="flex items-center gap-3">
+                          <Globe size={16} style={{ color: '#2eafaf' }} />
+                          <div>
+                            <p className="font-bold text-sm text-gray-900">Available to public</p>
+                            <p className="text-xs text-gray-400">
+                              {data.isPublic
+                                ? 'Shown in group search — anyone in your country can request to join'
+                                : 'Private — hidden from search, only people you invite directly can join'}
+                            </p>
+                          </div>
+                        </div>
+                      </OptionCard>
                     </div>
                     <div>
                       <label className="text-sm font-bold text-gray-700 block mb-2">Minimum Trust Score™ to join</label>
@@ -934,6 +951,7 @@ export default function CreateGroupWizard() {
                       { icon: Shield, label: 'Max missed payments', value: `${data.maxMissed} missed` },
                       { icon: Eye, label: 'Grace period', value: `${FIXED_GRACE_PERIOD_HOURS} hours (fixed)` },
                       { icon: Shield, label: 'Minimum Trust Score™ to join', value: data.minTrustScore > 0 ? `${data.minTrustScore}+ (${minTrustTierLabel})` : 'None' },
+                      { icon: Globe, label: 'Available to public', value: data.isPublic ? 'Yes — shown in search' : 'No — invite only' },
                       { icon: RotateCcw, label: 'Group lifecycle', value: data.durationType === 'fixed' ? `Closes after ${data.durationRotations} complete rotation(s)` : 'Indefinite (until you close it)' },
                     ].map(row => (
                       <div key={row.label} className="flex items-center justify-between py-2.5 border-b border-gray-50 last:border-0 gap-4">
