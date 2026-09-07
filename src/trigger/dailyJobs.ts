@@ -22,6 +22,14 @@
  *   07:40  Pending Charge → no active group joined: 7-day reminders / 30-day expiry (Section 1)
  *   07:45  incomplete profile (steps a-e): 7-day reminders / 60-day account deletion (Section 2)
  *   07:50  cancelled subscription: 7-day re-subscribe reminders / 60-day account deletion (Section 3)
+ *   07:55  subscription renewal charge (Flutterwave) — runs DAILY (not just monthly-jobs.ts's
+ *          1st-of-month run) because each subscriber's renewal_date lands on their own join day
+ *          of the month, not the 1st; a monthly-only cron left everyone but 1st-of-month joiners
+ *          uncharged for up to ~30 days past their actual due date. This mirrors the existing
+ *          "run the monthly job daily too" pattern already used for contribution-schedule
+ *          generation/rotation-advance above — the underlying query only ever acts on
+ *          subscriptions whose renewal_date has actually passed, so it's a safe idempotent no-op
+ *          for everyone else.
  *   18:00  CATCH-UP charge trigger: idempotent re-run of the flip + auto-charge above, purely to
  *          retry contributions/members not yet successfully charged by the 07:00 primary run
  *          (e.g. a transient provider outage, or a group activated mid-morning). Never
@@ -55,6 +63,7 @@ import {
   dailyPendingChargeGroupJoinFollowUp,
   dailyIncompleteProfileFollowUp,
   dailyResubscribeFollowUp,
+  monthlySubscriptionRenewalCharge,
 } from '../server/services/scheduledJobs.js';
 
 export const dailyGenerateContributionScheduleTask = schedules.task({
@@ -207,5 +216,14 @@ export const dailyResubscribeFollowUpTask = schedules.task({
   run: async () => {
     await dailyResubscribeFollowUp();
     return { ok: true, task: 'daily-resubscribe-follow-up' };
+  },
+});
+
+export const dailySubscriptionRenewalChargeTask = schedules.task({
+  id: 'daily-subscription-renewal-charge',
+  cron: '55 7 * * *',
+  run: async () => {
+    await monthlySubscriptionRenewalCharge();
+    return { ok: true, task: 'daily-subscription-renewal-charge' };
   },
 });
