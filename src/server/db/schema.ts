@@ -312,6 +312,13 @@ export const contributions = mysqlTable('contributions', {
   grace_period_ends_at: timestamp('grace_period_ends_at'),
   retry_attempted:    boolean('retry_attempted').notNull().default(false),
   provider_reference: varchar('provider_reference', { length: 255 }),
+  // Dedicated throttle/dedup column (never a generic onUpdateNow() column —
+  // see contributionService.markPaid/markFailed which also touch this row)
+  // for dailyContributionReminders: guarantees the "contribution due soon"
+  // email is sent at most ONCE per contribution, instead of re-sending it
+  // every day the cron runs for as long as due_date stays within the
+  // reminder window.
+  reminder_sent_at:   timestamp('reminder_sent_at'),
   created_at:         timestamp('created_at').notNull().defaultNow(),
   updated_at:         timestamp('updated_at').notNull().defaultNow().onUpdateNow(),
 }, (t) => ({
@@ -329,6 +336,13 @@ export const rotations = mysqlTable('rotations', {
   payout_status:             mysqlEnum('payout_status', ['pending', 'processing', 'completed', 'failed']).notNull().default('pending'),
   provider_transfer_reference: varchar('provider_transfer_reference', { length: 255 }),
   completed_date:            timestamp('completed_date'),
+  // Dedicated throttle/dedup column: the "you're scheduled to receive a
+  // payout" email must only go out once, ~1 week before scheduled_payout_date
+  // (see scheduledJobs.dailyUpcomingPayoutReminders) — never immediately at
+  // rotation-record creation time, which can be a full cycle length before
+  // the actual payout and previously caused members to be emailed about a
+  // payout that was "way too early".
+  upcoming_payout_reminder_sent_at: timestamp('upcoming_payout_reminder_sent_at'),
   created_at:                timestamp('created_at').notNull().defaultNow(),
   updated_at:                timestamp('updated_at').notNull().defaultNow().onUpdateNow(),
 }, (t) => ({

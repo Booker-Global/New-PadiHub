@@ -52,6 +52,7 @@ const SCHEDULE: ScheduleEntry[] = [
   { jobName: 'monthly_generate_contribution_schedule', hourUtc: 5, minuteUtc: 45, cadence: 'daily', run: jobs.monthlyGenerateContributionSchedule },
   { jobName: 'monthly_advance_rotation', hourUtc: 5, minuteUtc: 50, cadence: 'daily', run: jobs.monthlyAdvanceRotation },
   { jobName: 'daily_contribution_reminders', hourUtc: 6, minuteUtc: 0, cadence: 'daily', run: jobs.dailyContributionReminders },
+  { jobName: 'daily_upcoming_payout_reminders', hourUtc: 6, minuteUtc: 5, cadence: 'daily', run: jobs.dailyUpcomingPayoutReminders },
   { jobName: 'daily_overdue_check', hourUtc: 6, minuteUtc: 50, cadence: 'daily', run: jobs.dailyOverdueCheck },
   { jobName: 'daily_trust_score_updates', hourUtc: 7, minuteUtc: 0, cadence: 'daily', run: jobs.dailyTrustScoreUpdates },
   { jobName: 'daily_auto_charge_due_contributions', hourUtc: 7, minuteUtc: 5, cadence: 'daily', run: jobs.dailyAutoChargeDueContributions },

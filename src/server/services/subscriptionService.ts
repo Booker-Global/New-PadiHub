@@ -282,16 +282,34 @@ export const subscriptionService = {
     if (existingSub && (existingSub.billing_status === 'active' || existingSub.billing_status === 'paused')) return;
 
     // Every member-controlled onboarding input is already on file and
-    // verified (see hasFullyVerifiedSubscriptionSetup) — a live provider
-    // charge attempt has already proven it won't succeed for accounts in
-    // this state (retroactively diagnosed for abdulwahabyakubu@yahoo.com,
-    // abdulwahabyakubu17@gmail.com and tounsitraveller@gmail.com — see
-    // PR #33-36). Self-heal `subscription_status` directly instead of
-    // attempting (and re-failing) yet another charge — this is what stops
-    // the recurring "subscription payment failed" email for a member who
-    // has done everything they can do, regardless of which onboarding step
-    // happened to trigger this call.
-    if (hasFullyVerifiedSubscriptionSetup(user)) {
+    // verified (see hasFullyVerifiedSubscriptionSetup) AND a `subscriptions`
+    // row already exists (i.e. a real provider attempt genuinely happened
+    // for this account) — a live provider charge attempt has already proven
+    // it won't succeed for accounts in this state (retroactively diagnosed
+    // for abdulwahabyakubu@yahoo.com, abdulwahabyakubu17@gmail.com and
+    // tounsitraveller@gmail.com — see PR #33-36). Self-heal
+    // `subscription_status` directly instead of attempting (and re-failing)
+    // yet another charge — this is what stops the recurring "subscription
+    // payment failed" email for a member who has done everything they can
+    // do, regardless of which onboarding step happened to trigger this call.
+    //
+    // Requiring `existingSub` here (Section D.2 follow-up) matters: a member
+    // who has NEVER had a `subscriptions` row created (the common case —
+    // simply hasn't gone through activateSubscription() yet) must NOT take
+    // this shortcut, or they're marked "subscribed" forever with no
+    // `subscriptions` row at all — which means reconcileBillingForActive
+    // GroupMembership's `if (!subRows.length) return;` guard permanently
+    // no-ops for them, so they're never actually billed even after joining
+    // an active 3+ member group. That silent gap is exactly what left
+    // abdulyakubu99@gmail.com's premium subscription never charged once
+    // London Savers Club activated. Falling through to activateSubscription()
+    // below for these members is safe: createSubscription() computes
+    // deferBilling from their real active-group-membership count, so it
+    // either creates a genuinely-paused (uncharged) row or a real charge
+    // attempt — never a silent no-op — and any failure is already
+    // throttled (last_activation_attempt_at / shouldNotifyActivationFailureByEmail)
+    // so it can't recreate the PR #33-36 email-storm/stuck-at-80% bug.
+    if (existingSub && hasFullyVerifiedSubscriptionSetup(user)) {
       if (user.subscription_status !== 'active' && user.subscription_status !== 'trial') {
         await db.update(schema.users).set({ subscription_status: 'active' as const }).where(eq(schema.users.id, userId));
       }

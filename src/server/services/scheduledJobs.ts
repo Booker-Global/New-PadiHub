@@ -5,7 +5,7 @@
  *
  * These are named exports ready for Trigger.dev or any cron runner.
  */
-import { eq, lt, lte, and, inArray, isNotNull, ne } from 'drizzle-orm';
+import { eq, lt, lte, gt, and, inArray, isNotNull, isNull, ne } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { contributionService } from './contributionService.js';
@@ -22,6 +22,7 @@ import {
   GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH, GROUP_STUCK_BELOW_MIN_EXPIRY_DAYS, GROUP_STUCK_EXPIRY_REMINDER_DAYS_BEFORE,
   ACCOUNT_LIFECYCLE_REMINDER_INTERVAL_DAYS, PENDING_CHARGE_GROUP_JOIN_EXPIRY_DAYS,
   INCOMPLETE_PROFILE_EXPIRY_DAYS, CANCELLED_SUBSCRIPTION_EXPIRY_DAYS,
+  CONTRIBUTION_REMINDER_ADVANCE_DAYS,
 } from '../lib/constants.js';
 import { planCode, subscriptionService } from './subscriptionService.js';
 import { getOnboardingProgress } from './paymentEligibilityService.js';
@@ -71,15 +72,29 @@ async function runJob(name: string, fn: () => Promise<void>): Promise<void> {
 
 // ─── Daily Jobs ───────────────────────────────────────────────────────────────
 
-/** Send contribution reminders for contributions due in 3 days */
+/**
+ * Send a one-time "contribution due soon" reminder, no earlier than
+ * CONTRIBUTION_REMINDER_ADVANCE_DAYS before due_date. Deduplicated via
+ * reminder_sent_at (a dedicated throttle column — see contributions schema
+ * comment) and restricted to `due_date > now` so a contribution that's
+ * already due today (or overdue) never gets this "coming up soon" email —
+ * previously, this job re-sent the same reminder every single day it ran
+ * for as long as `due_date <= in3Days` stayed true (no lower bound, no
+ * dedup), which is exactly what caused members of a group whose payout was
+ * due TODAY to receive a "your contribution is due soon" email that should
+ * have gone out days earlier.
+ */
 export async function dailyContributionReminders(): Promise<void> {
   await runJob('daily_contribution_reminders', async () => {
-    const in3Days = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+    const now = new Date();
+    const reminderWindowEnd = new Date(now.getTime() + CONTRIBUTION_REMINDER_ADVANCE_DAYS * 24 * 60 * 60 * 1000);
 
     const due = await db.select().from(schema.contributions)
       .where(and(
         eq(schema.contributions.payment_status, 'scheduled'),
-        lte(schema.contributions.due_date, in3Days),
+        gt(schema.contributions.due_date, now),
+        lte(schema.contributions.due_date, reminderWindowEnd),
+        isNull(schema.contributions.reminder_sent_at),
       ));
 
     for (const c of due) {
@@ -97,7 +112,22 @@ export async function dailyContributionReminders(): Promise<void> {
           message: `Your contribution of ${amount} to ${groupRow[0].name} is due on ${dueDate}.`,
         });
       }
+      await db.update(schema.contributions).set({ reminder_sent_at: new Date() }).where(eq(schema.contributions.id, c.id));
     }
+  });
+}
+
+/**
+ * Section 22 follow-up — send the "you're scheduled to receive a payout"
+ * email exactly once per rotation, no earlier than
+ * UPCOMING_PAYOUT_REMINDER_ADVANCE_DAYS before scheduled_payout_date. See
+ * rotationService.sendDueUpcomingPayoutReminders (the actual query/send
+ * logic lives there since it needs rotationService's cycle-pot-amount
+ * helper wiring).
+ */
+export async function dailyUpcomingPayoutReminders(): Promise<void> {
+  await runJob('daily_upcoming_payout_reminders', async () => {
+    await rotationService.sendDueUpcomingPayoutReminders();
   });
 }
 
@@ -824,6 +854,7 @@ export const dailyJobs = [
   monthlyGenerateContributionSchedule,
   monthlyAdvanceRotation,
   dailyContributionReminders,
+  dailyUpcomingPayoutReminders,
   // Flip scheduled → due *before* auto-charging so a contribution that
   // becomes due today gets charged today, not delayed until tomorrow's run.
   dailyTrustScoreUpdates,

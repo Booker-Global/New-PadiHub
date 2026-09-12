@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { eq, and, desc, inArray } from 'drizzle-orm';
+import { eq, and, desc, inArray, lte, isNull } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -9,7 +9,7 @@ import { trustScoreService } from './trustScoreService.js';
 import { monitoringService } from './monitoringService.js';
 import { groupService } from './groupService.js';
 import { getStripeProvider } from '../integrations/payments/PaymentProviderFactory.js';
-import { TRUST_SCORE_DELTA_CYCLE_COMPLETED, clampGroupMaximumMembers, resolveUserDisplayName } from '../lib/constants.js';
+import { TRUST_SCORE_DELTA_CYCLE_COMPLETED, resolveUserDisplayName, UPCOMING_PAYOUT_REMINDER_ADVANCE_DAYS } from '../lib/constants.js';
 import { computeNextPayoutDate } from '../lib/payoutSchedule.js';
 import {
   sendUpcomingPayoutEmail,
@@ -106,7 +106,14 @@ export const rotationService = {
         eq(schema.rotations.group_id, groupId),
         eq(schema.rotations.cycle_number, group[0].current_cycle),
       )).limit(1);
-    return rows[0] ?? null;
+    if (!rows.length) return null;
+
+    // Section 22 follow-up — the real payout pot for THIS cycle (sum of
+    // what currently-active/contributing members owe or paid), never the
+    // group's maximum_members capacity. See contributionService.getCyclePotAmount.
+    const { contributionService } = await import('./contributionService.js');
+    const pot_amount = await contributionService.getCyclePotAmount(groupId, rows[0].cycle_number, parseFloat(group[0].contribution_amount));
+    return { ...rows[0], pot_amount };
   },
 
   async getNext(groupId: string) {
@@ -148,10 +155,22 @@ export const rotationService = {
   },
 
   async getHistory(groupId: string) {
-    
-    return db.select().from(schema.rotations)
+    const groupRow = await db.select({ contribution_amount: schema.savingsGroups.contribution_amount })
+      .from(schema.savingsGroups).where(eq(schema.savingsGroups.id, groupId)).limit(1);
+    const contributionAmount = groupRow.length ? parseFloat(groupRow[0].contribution_amount) : 0;
+
+    const rows = await db.select().from(schema.rotations)
       .where(eq(schema.rotations.group_id, groupId))
       .orderBy(desc(schema.rotations.cycle_number));
+
+    // Section 22 follow-up — attach each cycle's real pot amount (never
+    // maximum_members capacity) so the history/timeline views on the
+    // frontend never have to (mis)compute it themselves.
+    const { contributionService } = await import('./contributionService.js');
+    return Promise.all(rows.map(async (row) => ({
+      ...row,
+      pot_amount: await contributionService.getCyclePotAmount(groupId, row.cycle_number, contributionAmount),
+    })));
   },
 
   /** Every rotation payout a user has ever been the recipient of, across all
@@ -160,9 +179,21 @@ export const rotationService = {
    * contributionService.getForMember()'s member-scoped (not group-scoped)
    * query shape. */
   async getForUser(userId: string) {
-    return db.select().from(schema.rotations)
+    const rows = await db.select().from(schema.rotations)
       .where(eq(schema.rotations.recipient_id, userId))
       .orderBy(desc(schema.rotations.cycle_number));
+    if (!rows.length) return [];
+
+    const groupIds = [...new Set(rows.map(r => r.group_id))];
+    const groupRows = await db.select({ id: schema.savingsGroups.id, contribution_amount: schema.savingsGroups.contribution_amount })
+      .from(schema.savingsGroups).where(inArray(schema.savingsGroups.id, groupIds));
+    const contributionAmountByGroup = Object.fromEntries(groupRows.map(g => [g.id, parseFloat(g.contribution_amount)]));
+
+    const { contributionService } = await import('./contributionService.js');
+    return Promise.all(rows.map(async (row) => ({
+      ...row,
+      pot_amount: await contributionService.getCyclePotAmount(row.group_id, row.cycle_number, contributionAmountByGroup[row.group_id] ?? 0),
+    })));
   },
 
   async createForCycle(groupId: string, cycleNumber: number, recipientId: string, payoutDate: Date) {
@@ -180,16 +211,54 @@ export const rotationService = {
       message: `You are scheduled to receive the payout for cycle ${cycleNumber}.`,
     });
 
-    // Email the upcoming payout recipient
-    const userRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, recipientId)).limit(1);
-    const groupRow = await db.select({ name: schema.savingsGroups.name, contribution_amount: schema.savingsGroups.contribution_amount, currency: schema.savingsGroups.currency, maximum_members: schema.savingsGroups.maximum_members })
-      .from(schema.savingsGroups).where(eq(schema.savingsGroups.id, groupId)).limit(1);
-    if (userRow.length && groupRow.length) {
-      const g = groupRow[0];
-      const potAmount = `${g.currency} ${(parseFloat(g.contribution_amount) * clampGroupMaximumMembers(g.maximum_members)).toFixed(2)}`;
-      await sendUpcomingPayoutEmail(userRow[0].email, g.name, potAmount, payoutDate.toLocaleDateString('en-GB'));
-    }
+    // The "you're scheduled to receive a payout" EMAIL is deliberately NOT
+    // sent here — this rotation record is created right when the PRIOR
+    // cycle completes, which can be up to a full contribution cycle before
+    // this one's actual scheduled_payout_date (e.g. a month, for a monthly
+    // group). Emailing immediately previously told members about a payout
+    // "due" weeks/months out. See scheduledJobs.dailyUpcomingPayoutReminders,
+    // which sends this same email exactly once, ~7 days before
+    // scheduled_payout_date (or immediately if that job runs and the date is
+    // already within that window).
     return id;
+  },
+
+  /**
+   * Send the "you're scheduled to receive a payout" email exactly once per
+   * rotation, no earlier than UPCOMING_PAYOUT_REMINDER_ADVANCE_DAYS before
+   * its scheduled_payout_date — never immediately at rotation-record
+   * creation (see createForCycle above), which could be a full cycle length
+   * in advance. Deduplicated via upcoming_payout_reminder_sent_at, mirroring
+   * contributions.reminder_sent_at's dedicated-column pattern (never a
+   * generic onUpdateNow() column — see the schema comment for why). Called
+   * daily by scheduledJobs.dailyUpcomingPayoutReminders.
+   */
+  async sendDueUpcomingPayoutReminders(): Promise<void> {
+    const windowEnd = new Date(Date.now() + UPCOMING_PAYOUT_REMINDER_ADVANCE_DAYS * 24 * 60 * 60 * 1000);
+
+    const due = await db.select().from(schema.rotations)
+      .where(and(
+        eq(schema.rotations.payout_status, 'pending'),
+        lte(schema.rotations.scheduled_payout_date, windowEnd),
+        isNull(schema.rotations.upcoming_payout_reminder_sent_at),
+      ));
+
+    for (const rotation of due) {
+      const [userRow, groupRow] = await Promise.all([
+        db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, rotation.recipient_id)).limit(1),
+        db.select({ name: schema.savingsGroups.name, contribution_amount: schema.savingsGroups.contribution_amount, currency: schema.savingsGroups.currency })
+          .from(schema.savingsGroups).where(eq(schema.savingsGroups.id, rotation.group_id)).limit(1),
+      ]);
+      if (userRow.length && groupRow.length) {
+        const g = groupRow[0];
+        const { contributionService } = await import('./contributionService.js');
+        const potAmountValue = await contributionService.getCyclePotAmount(rotation.group_id, rotation.cycle_number, parseFloat(g.contribution_amount));
+        const potAmount = `${g.currency} ${potAmountValue.toFixed(2)}`;
+        await sendUpcomingPayoutEmail(userRow[0].email, g.name, potAmount, rotation.scheduled_payout_date.toLocaleDateString('en-GB'));
+      }
+      await db.update(schema.rotations).set({ upcoming_payout_reminder_sent_at: new Date() })
+        .where(eq(schema.rotations.id, rotation.id));
+    }
   },
 
   async advance(groupId: string, actorId: string, ipAddress?: string) {
@@ -234,12 +303,14 @@ export const rotationService = {
       // Email payout complete
       const recipientRow = await db.select({ email: schema.users.email, display_name: schema.users.display_name, first_name: schema.users.first_name, last_name: schema.users.last_name })
         .from(schema.users).where(eq(schema.users.id, current.recipient_id)).limit(1);
-      const groupRow2 = await db.select({ name: schema.savingsGroups.name, contribution_amount: schema.savingsGroups.contribution_amount, currency: schema.savingsGroups.currency, maximum_members: schema.savingsGroups.maximum_members, leader_id: schema.savingsGroups.leader_id })
+      const groupRow2 = await db.select({ name: schema.savingsGroups.name, contribution_amount: schema.savingsGroups.contribution_amount, currency: schema.savingsGroups.currency, leader_id: schema.savingsGroups.leader_id })
         .from(schema.savingsGroups).where(eq(schema.savingsGroups.id, groupId)).limit(1);
       if (recipientRow.length && groupRow2.length) {
         const g2 = groupRow2[0];
         const reference = transferReference ?? current.provider_transfer_reference ?? current.id;
-        const potAmount = `${g2.currency} ${(parseFloat(g2.contribution_amount) * clampGroupMaximumMembers(g2.maximum_members)).toFixed(2)}`;
+        const { contributionService } = await import('./contributionService.js');
+        const potAmountValue = await contributionService.getCyclePotAmount(groupId, current.cycle_number, parseFloat(g2.contribution_amount));
+        const potAmount = `${g2.currency} ${potAmountValue.toFixed(2)}`;
         await sendPayoutCompleteEmail(recipientRow[0].email, g2.name, potAmount, reference);
 
         // Leader must know every payout as it happens, unless they're the recipient.

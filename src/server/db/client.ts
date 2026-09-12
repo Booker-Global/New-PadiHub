@@ -163,6 +163,7 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
     { column: 'provider_reference', sqlType: 'VARCHAR(255) NULL' },
     { column: 'grace_period_ends_at', sqlType: 'TIMESTAMP NULL' },
     { column: 'retry_attempted',      sqlType: 'BOOLEAN NOT NULL DEFAULT false' },
+    { column: 'reminder_sent_at',     sqlType: 'TIMESTAMP NULL' },
   ],
   memberships: [
     { column: 'rotation_order', sqlType: 'INT NULL' },
@@ -171,6 +172,7 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
   rotations: [
     { column: 'provider_transfer_reference', sqlType: 'VARCHAR(255) NULL' },
     { column: 'completed_date',              sqlType: 'TIMESTAMP NULL' },
+    { column: 'upcoming_payout_reminder_sent_at', sqlType: 'TIMESTAMP NULL' },
   ],
   subscriptions: [
     { column: 'provider_subscription_id', sqlType: 'VARCHAR(255) NULL' },

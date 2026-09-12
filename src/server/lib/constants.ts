@@ -83,6 +83,15 @@ export const PENDING_CHARGE_GROUP_JOIN_EXPIRY_DAYS    = 30;
 export const INCOMPLETE_PROFILE_EXPIRY_DAYS           = 60;
 export const CANCELLED_SUBSCRIPTION_EXPIRY_DAYS       = 60;
 
+/**
+ * Payout/contribution reminder lead times — how far in advance of the real
+ * event date each reminder email is sent, exactly once per event (see
+ * contributions.reminder_sent_at / rotations.upcoming_payout_reminder_sent_at
+ * and scheduledJobs.dailyContributionReminders / dailyUpcomingPayoutReminders).
+ */
+export const CONTRIBUTION_REMINDER_ADVANCE_DAYS    = 3;
+export const UPCOMING_PAYOUT_REMINDER_ADVANCE_DAYS = 7;
+
 /** Section 4 — a member voted out of groups this many times has their account deleted outright. */
 export const VOTE_REMOVED_ACCOUNT_DELETION_THRESHOLD = 3;
 
