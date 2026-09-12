@@ -8,7 +8,7 @@ import * as schema from '../db/schema.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { notificationService } from '../services/notificationService.js';
 import { pp, qs, ip } from '../lib/reqHelpers.js';
-import { isSubscriptionTierKey, getTierMonthlyPrice } from '../lib/constants.js';
+import { isSubscriptionTierKey, getTierMonthlyPrice, resolveUserDisplayName } from '../lib/constants.js';
 import { BILLING_HISTORY_ACTIONS } from '../services/subscriptionService.js';
 import {
   notifySupportTicketUpdated,
@@ -34,6 +34,31 @@ const DB_USAGE_TABLES = [
 const REVENUE_ACTIONS = BILLING_HISTORY_ACTIONS.filter(
   (action) => action !== 'SUBSCRIPTION_CREATED' && action !== 'STRIPE_INVOICE_FAILED',
 );
+
+/**
+ * Batch-resolves a display name/email for a list of rows carrying a
+ * `user_id` column, so admin list views never show a raw user ID (matching
+ * the same resolveUserDisplayName() convention used member-facing).
+ */
+async function attachUserDisplay<T extends { user_id: string | null }>(
+  rows: T[],
+): Promise<(T & { user_display_name: string; user_email: string | null })[]> {
+  const userIds = [...new Set(rows.map((r) => r.user_id).filter((id): id is string => !!id))];
+  const users = userIds.length
+    ? await db.select({
+        id: schema.users.id,
+        email: schema.users.email,
+        first_name: schema.users.first_name,
+        last_name: schema.users.last_name,
+        display_name: schema.users.display_name,
+      }).from(schema.users).where(inArray(schema.users.id, userIds))
+    : [];
+  const userById = new Map(users.map((u) => [u.id, u]));
+  return rows.map((r) => {
+    const user = r.user_id ? userById.get(r.user_id) : undefined;
+    return { ...r, user_display_name: resolveUserDisplayName(user), user_email: user?.email ?? null };
+  });
+}
 
 export const adminController = {
   // ── Dashboard Metrics ───────────────────────────────────────────────────────
@@ -360,7 +385,21 @@ export const adminController = {
         ? await query.where(eq(schema.savingsGroups.status, statusFilter as 'active')).limit(limit).offset(offset).orderBy(desc(schema.savingsGroups.created_at))
         : await query.limit(limit).offset(offset).orderBy(desc(schema.savingsGroups.created_at));
 
-      res.json({ success: true, data, meta: { page, limit } });
+      // Active member count per group, for the admin Groups table — avoids a
+      // more invasive join on the paginated query above.
+      const groupIds = data.map((g) => g.id);
+      const memberCounts = groupIds.length
+        ? await db.select({
+            group_id: schema.memberships.group_id,
+            count: sql<number>`count(*)`,
+          }).from(schema.memberships)
+            .where(and(inArray(schema.memberships.group_id, groupIds), eq(schema.memberships.status, 'active')))
+            .groupBy(schema.memberships.group_id)
+        : [];
+      const memberCountByGroup = Object.fromEntries(memberCounts.map((r) => [r.group_id, Number(r.count)]));
+      const dataWithMemberCount = data.map((g) => ({ ...g, member_count: memberCountByGroup[g.id] ?? 0 }));
+
+      res.json({ success: true, data: dataWithMemberCount, meta: { page, limit } });
     } catch (e) { next(e); }
   },
 
@@ -416,7 +455,7 @@ export const adminController = {
         ? await query.where(eq(schema.subscriptions.billing_status, statusFilter as 'active')).limit(limit).offset(offset).orderBy(desc(schema.subscriptions.created_at))
         : await query.limit(limit).offset(offset).orderBy(desc(schema.subscriptions.created_at));
 
-      res.json({ success: true, data, meta: { page, limit } });
+      res.json({ success: true, data: await attachUserDisplay(data), meta: { page, limit } });
     } catch (e) { next(e); }
   },
 
@@ -444,7 +483,7 @@ export const adminController = {
         ? await query.where(eq(schema.supportTickets.status, statusFilter as 'open')).limit(limit).offset(offset).orderBy(desc(schema.supportTickets.created_at))
         : await query.limit(limit).offset(offset).orderBy(desc(schema.supportTickets.created_at));
 
-      res.json({ success: true, data, meta: { page, limit } });
+      res.json({ success: true, data: await attachUserDisplay(data), meta: { page, limit } });
     } catch (e) { next(e); }
   },
 
@@ -513,7 +552,7 @@ export const adminController = {
         ? await query.where(and(...conditions)).limit(limit).offset(offset).orderBy(desc(schema.auditLogs.created_at))
         : await query.limit(limit).offset(offset).orderBy(desc(schema.auditLogs.created_at));
 
-      res.json({ success: true, data, meta: { page, limit } });
+      res.json({ success: true, data: await attachUserDisplay(data), meta: { page, limit } });
     } catch (e) { next(e); }
   },
 };
