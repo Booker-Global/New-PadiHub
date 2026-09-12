@@ -996,4 +996,47 @@ export const membershipService = {
       console.error('[PadiHub] Retroactive vote-kick migration failed:', err instanceof Error ? err.message : err);
     }
   },
+
+  /**
+   * Retroactive self-heal, run once at boot (see entry.ts). Before this
+   * change, turning on "Require voting for new members" on a group with
+   * join requests already pending — or a leader declining/approving such a
+   * request — never actually opened a member_admission vote, leaving the
+   * membership stuck 'pending' with no vote for other members to respond
+   * to. approveJoinRequest now auto-starts the vote, but only when the
+   * leader next clicks approve; this catches every already-pending
+   * membership sitting in a requires_admission_vote group with no open
+   * vote and starts one now. Idempotent: only memberships still 'pending'
+   * with no open vote are ever selected, so once a vote exists (or the
+   * membership is decided) it's never picked up again.
+   */
+  async startMissingAdmissionVotesRetroactively(): Promise<void> {
+    try {
+      const rows = await db.select({
+        membership: schema.memberships,
+        group: schema.savingsGroups,
+      }).from(schema.memberships)
+        .innerJoin(schema.savingsGroups, eq(schema.memberships.group_id, schema.savingsGroups.id))
+        .where(and(
+          eq(schema.memberships.status, 'pending'),
+          eq(schema.savingsGroups.requires_admission_vote, true),
+        ));
+      if (!rows.length) return;
+
+      const { voteService } = await import('./voteService.js');
+      console.log(`[PadiHub] Retroactive admission-vote migration: checking ${rows.length} pending join request(s) in vote-required groups.`);
+      for (const { membership, group } of rows) {
+        try {
+          const existingVote = await voteService.getOpenAdmissionVoteForMembership(membership.id);
+          if (existingVote) continue;
+          await voteService.proposeMemberAdmission(group.id, group.leader_id, membership.id);
+          console.log(`[PadiHub] Retroactive admission-vote migration: started vote for membership ${membership.id} in group ${group.id}.`);
+        } catch (err) {
+          console.error(`[PadiHub] Retroactive admission-vote migration failed for membership ${membership.id}:`, err instanceof Error ? err.message : err);
+        }
+      }
+    } catch (err) {
+      console.error('[PadiHub] Retroactive admission-vote migration failed:', err instanceof Error ? err.message : err);
+    }
+  },
 };

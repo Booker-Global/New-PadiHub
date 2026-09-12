@@ -25,9 +25,15 @@ type RotationRow = typeof schema.rotations.$inferSelect;
 /**
  * Move a completed cycle's collected pot from the platform's provider balance
  * to that cycle's recipient using the group's configured payout provider.
+ * `onFailure` defaults to flipping the rotation to payout_status:'failed' (the
+ * live advance() path, so the daily catch-up job retries it) — the
+ * retroactive migration below overrides this, since by the time it runs the
+ * rotation is already 'completed' and the cycle has moved on, so silently
+ * reverting it to 'failed' would be actively wrong/confusing.
  */
 async function transferCyclePotToRecipient(
   group: SavingsGroupRow, rotation: RotationRow,
+  onFailure: (message: string) => Promise<void> = (message) => recordTransferFailure(group, rotation, message),
 ): Promise<{ success: boolean; reference?: string }> {
   const recipientRows = await db.select({
     stripe_connected_account_id: schema.users.stripe_connected_account_id,
@@ -51,14 +57,14 @@ async function transferCyclePotToRecipient(
   ) * 100);
 
   if (potMinorUnits <= 0) {
-    await recordTransferFailure(group, rotation, 'Cycle pot total was zero — nothing to transfer.');
+    await onFailure('Cycle pot total was zero — nothing to transfer.');
     return { success: false };
   }
 
   try {
     if (group.payment_provider === 'stripe') {
       if (!recipient?.stripe_connected_account_id || !recipient.payout_verified_at) {
-        await recordTransferFailure(group, rotation, 'Recipient has no verified Stripe Express payout account.');
+        await onFailure('Recipient has no verified Stripe Express payout account.');
         return { success: false };
       }
 
@@ -77,7 +83,7 @@ async function transferCyclePotToRecipient(
       || !recipient.flutterwave_payout_account_number
       || !recipient.payout_verified_at
     ) {
-      await recordTransferFailure(group, rotation, 'Recipient has no verified Flutterwave payout bank account.');
+      await onFailure('Recipient has no verified Flutterwave payout bank account.');
       return { success: false };
     }
 
@@ -94,7 +100,7 @@ async function transferCyclePotToRecipient(
     return { success: true, reference: result.providerTransferReference };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    await recordTransferFailure(group, rotation, message);
+    await onFailure(message);
     return { success: false };
   }
 }
@@ -476,6 +482,68 @@ export const rotationService = {
       await db.update(schema.rotations).set({ payout_status: 'pending' })
         .where(and(eq(schema.rotations.group_id, groupId), eq(schema.rotations.cycle_number, cycleNumber)));
       throw error;
+    }
+  },
+
+  /**
+   * Retroactive self-heal, run once at boot (see entry.ts). Before this
+   * fix, `advance()` marked every Flutterwave (NG) group's payout
+   * 'completed' — and told the recipient they'd been paid — WITHOUT ever
+   * calling FlutterwaveProvider.createTransfer(); only Stripe (GB) payouts
+   * actually moved money. Finds every NG rotation already marked
+   * 'completed' with no `provider_transfer_reference` (the exact
+   * fingerprint of that gap) and attempts the real transfer now. Unlike the
+   * live `advance()` path, a failure here must NOT flip payout_status back
+   * to 'failed' — the cycle has already moved on (a later cycle may already
+   * exist) — so failures are just logged/alerted for manual follow-up and
+   * retried again on the next boot (idempotent: only rows still missing a
+   * reference are ever selected).
+   */
+  async retroactivelyCompleteMissingFlutterwaveTransfers(): Promise<void> {
+    try {
+      const rows = await db.select({ rotation: schema.rotations, group: schema.savingsGroups })
+        .from(schema.rotations)
+        .innerJoin(schema.savingsGroups, eq(schema.rotations.group_id, schema.savingsGroups.id))
+        .where(and(
+          eq(schema.savingsGroups.payment_provider, 'flutterwave'),
+          eq(schema.rotations.payout_status, 'completed'),
+          isNull(schema.rotations.provider_transfer_reference),
+        ));
+      if (!rows.length) return;
+
+      console.log(`[PadiHub] Retroactive Flutterwave payout migration: found ${rows.length} completed NG payout(s) never actually transferred — attempting the real transfer now.`);
+      for (const { rotation, group } of rows) {
+        try {
+          const transfer = await transferCyclePotToRecipient(group, rotation, async (message) => {
+            await monitoringService.logError({
+              type: 'payment_error', endpoint: 'rotationService.retroactivelyCompleteMissingFlutterwaveTransfers',
+              message: `Retroactive Flutterwave payout transfer failed for group ${group.id} cycle ${rotation.cycle_number}: ${message}`,
+            });
+            await createAuditLog({
+              action: 'FLW_PAYOUT_RETRO_TRANSFER_FAILED', entity: 'rotations', entityId: rotation.id,
+              metadata: { groupId: group.id, cycleNumber: rotation.cycle_number, message },
+            });
+          });
+          if (transfer.success && transfer.reference) {
+            await db.update(schema.rotations)
+              .set({ provider_transfer_reference: transfer.reference })
+              .where(eq(schema.rotations.id, rotation.id));
+            await notificationService.create({
+              userId: rotation.recipient_id, type: 'payout_completed',
+              title: 'Payout Sent',
+              message: `Your payout for cycle ${rotation.cycle_number} in "${group.name}" has now been transferred to your bank account.`,
+            });
+            await createAuditLog({
+              userId: rotation.recipient_id, action: 'FLW_PAYOUT_RETRO_TRANSFER_COMPLETED', entity: 'rotations', entityId: rotation.id,
+              metadata: { groupId: group.id, cycleNumber: rotation.cycle_number, reference: transfer.reference },
+            });
+          }
+        } catch (err) {
+          console.error(`[PadiHub] Retroactive Flutterwave payout transfer failed for rotation ${rotation.id}:`, err instanceof Error ? err.message : err);
+        }
+      }
+    } catch (err) {
+      console.error('[PadiHub] Retroactive Flutterwave payout migration failed:', err instanceof Error ? err.message : err);
     }
   },
 };

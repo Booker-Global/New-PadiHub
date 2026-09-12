@@ -657,6 +657,17 @@ if (import.meta.env.PROD) {
 				await subscriptionService.backfillCancelledAtRetroactively();
 				const { membershipService } = await import('./services/membershipService.js');
 				await membershipService.reconcileVoteRemovedAccountsRetroactively();
+				// Post-PR#39 follow-up fixes (#1-#4) — retroactive self-heals so
+				// every existing account/group is caught up on boot, not just new
+				// activity going forward. See each function's own doc comment for
+				// exactly what gap it's closing.
+				await membershipService.startMissingAdmissionVotesRetroactively();
+				const { dailyBillingActiveGroupReconciliation } = await import('./services/scheduledJobs.js');
+				await dailyBillingActiveGroupReconciliation();
+				const { rotationService } = await import('./services/rotationService.js');
+				await rotationService.retroactivelyCompleteMissingFlutterwaveTransfers();
+				const { voteService } = await import('./services/voteService.js');
+				await voteService.retroactivelySyncApprovedPayoutSwaps();
 				const { startInProcessScheduler } = await import('./lib/inProcessScheduler.js');
 				startInProcessScheduler();
 			} else {
