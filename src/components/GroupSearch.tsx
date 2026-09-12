@@ -103,7 +103,10 @@ export default function GroupSearch({ compact = false }: { compact?: boolean }) 
     try {
       const params = new window.URLSearchParams({ country });
       if (query.trim()) params.set('query', query.trim());
-      const response = await window.fetch(`/api/groups/search?${params.toString()}`);
+      const session = getValidSession();
+      const response = await window.fetch(`/api/groups/search?${params.toString()}`, {
+        headers: session?.token ? { Authorization: 'Bearer ' + session.token } : undefined,
+      });
       const json = await response.json().catch(() => null) as ApiResponse<SearchGroup[]> | null;
       if (!response.ok) {
         setError(getErrorMessage(json, 'Could not search for groups right now.'));
