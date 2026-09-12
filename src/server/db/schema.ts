@@ -58,6 +58,19 @@ export const users = mysqlTable('users', {
   // Resolve carries no member-facing fee).
   identity_verification_fee_amount: decimal('identity_verification_fee_amount', { precision: 12, scale: 2 }),
   stripe_identity_session_id:  varchar('stripe_identity_session_id', { length: 255 }),
+  // Verified name/DOB/address captured from Stripe Identity's completed
+  // VerificationSession (verified_outputs — GB only). Used SOLELY to
+  // pre-fill the member's Stripe Connect Express payout account via the API
+  // (see StripeProvider.createConnectedAccount/syncIndividualDetails) so
+  // Stripe's hosted onboarding page has fewer/no personal-detail questions
+  // left to ask — never displayed back to the member and never used in
+  // place of the identity verification result itself.
+  verified_date_of_birth:      varchar('verified_date_of_birth', { length: 10 }),
+  verified_address_line1:      varchar('verified_address_line1', { length: 255 }),
+  verified_address_line2:      varchar('verified_address_line2', { length: 255 }),
+  verified_address_city:       varchar('verified_address_city', { length: 100 }),
+  verified_address_postal_code: varchar('verified_address_postal_code', { length: 20 }),
+  verified_address_state:      varchar('verified_address_state', { length: 100 }),
   // TODO(NG paid KYC tier): reserved for a future PAID full BVN identity-
   // verification tier for Nigeria (distinct from the free interim
   // Flutterwave Account Resolve bank-account-validation check — see

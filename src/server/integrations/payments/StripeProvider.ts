@@ -250,6 +250,13 @@ export class StripeProvider implements IPaymentProvider {
   async createConnectedAccount(params: {
     userId: string; email: string; country?: string;
     firstName?: string; lastName?: string;
+    // Optional verified DOB/address (from Stripe Identity's verified_outputs
+    // — see identityVerificationService.completeIdentityVerification) to
+    // pre-fill the individual's personal details at account-creation time, so
+    // Stripe's hosted onboarding page has fewer of these questions left to
+    // ask, without changing what data is collected or who collects it.
+    dob?: { day: number; month: number; year: number };
+    address?: { line1?: string; line2?: string; city?: string; postalCode?: string; state?: string };
   }): Promise<{ accountId: string }> {
     const stripe = getStripe();
     const account = await stripe.accounts.create({
@@ -261,6 +268,17 @@ export class StripeProvider implements IPaymentProvider {
         email:      params.email,
         first_name: params.firstName,
         last_name:  params.lastName,
+        ...(params.dob ? { dob: params.dob } : {}),
+        ...(params.address ? {
+          address: {
+            line1:       params.address.line1,
+            line2:       params.address.line2,
+            city:        params.address.city,
+            postal_code: params.address.postalCode,
+            state:       params.address.state,
+            country:     params.country || 'GB',
+          },
+        } : {}),
       },
       // Pre-fill the business website with PadiHub's own site — Stripe's
       // hosted "Business details" step only asks for this when it's
@@ -272,6 +290,44 @@ export class StripeProvider implements IPaymentProvider {
     });
 
     return { accountId: account.id };
+  }
+
+  /**
+   * Push already-verified DOB/address (captured from Stripe Identity's
+   * verified_outputs) onto an EXISTING connected account, so an account
+   * created before this data was available (or before the member's identity
+   * was verified) still gets pre-filled before the next Account Link is
+   * generated — same self-heal pattern as the business_profile.url fix in
+   * getOutstandingRequirements below. Best-effort: swallows errors (e.g. the
+   * account already has different values on file and Stripe rejects the
+   * update) rather than blocking payout setup on it.
+   */
+  async syncIndividualDetails(accountId: string, params: {
+    dob?: { day: number; month: number; year: number };
+    address?: { line1?: string; line2?: string; city?: string; postalCode?: string; state?: string };
+    country?: string;
+  }): Promise<void> {
+    if (!params.dob && !params.address) return;
+    const stripe = getStripe();
+    try {
+      await stripe.accounts.update(accountId, {
+        individual: {
+          ...(params.dob ? { dob: params.dob } : {}),
+          ...(params.address ? {
+            address: {
+              line1:       params.address.line1,
+              line2:       params.address.line2,
+              city:        params.address.city,
+              postal_code: params.address.postalCode,
+              state:       params.address.state,
+              country:     params.country || 'GB',
+            },
+          } : {}),
+        },
+      });
+    } catch (err) {
+      console.warn('[StripeProvider] Could not pre-fill individual details on connected account:', err instanceof Error ? err.message : err);
+    }
   }
 
   /**

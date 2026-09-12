@@ -31,6 +31,34 @@ async function getUserOrThrow(userId: string) {
   return userRows[0];
 }
 
+/**
+ * Turn a user's Stripe-Identity-verified DOB/address (captured in
+ * identityVerificationService.completeIdentityVerification) into the shape
+ * StripeProvider.createConnectedAccount/syncIndividualDetails expects, so
+ * Stripe's hosted Connect onboarding page has fewer personal-detail
+ * questions left to ask. Returns `{}` (both fields undefined) when nothing
+ * verified is on file yet — callers treat that as "nothing to pre-fill".
+ */
+function buildVerifiedIndividualParams(user: Awaited<ReturnType<typeof getUserOrThrow>>): {
+  dob?: { day: number; month: number; year: number };
+  address?: { line1?: string; line2?: string; city?: string; postalCode?: string; state?: string };
+} {
+  let dob: { day: number; month: number; year: number } | undefined;
+  if (user.verified_date_of_birth) {
+    const [year, month, day] = user.verified_date_of_birth.split('-').map(Number);
+    if (year && month && day) dob = { day, month, year };
+  }
+  const hasAddress = user.verified_address_line1 || user.verified_address_city || user.verified_address_postal_code;
+  const address = hasAddress ? {
+    line1:      user.verified_address_line1 ?? undefined,
+    line2:      user.verified_address_line2 ?? undefined,
+    city:       user.verified_address_city ?? undefined,
+    postalCode: user.verified_address_postal_code ?? undefined,
+    state:      user.verified_address_state ?? undefined,
+  } : undefined;
+  return { dob, address };
+}
+
 async function getContributionContext(userId: string, contributionId: string) {
   const contribRows = await db.select().from(schema.contributions)
     .where(eq(schema.contributions.id, contributionId)).limit(1);
@@ -599,18 +627,26 @@ export const paymentController = {
 
       const stripeProvider = getStripeProvider();
       let accountId = user.stripe_connected_account_id;
+      const verifiedIndividual = buildVerifiedIndividualParams(user);
 
       try {
         if (!accountId) {
           const created = await stripeProvider.createConnectedAccount({
             userId, email: user.email, country: user.country,
             firstName: user.first_name, lastName: user.last_name,
+            dob: verifiedIndividual.dob, address: verifiedIndividual.address,
           });
           accountId = created.accountId;
           await db.update(schema.users)
             .set({ stripe_connected_account_id: accountId })
             .where(eq(schema.users.id, userId));
           await createAuditLog({ userId, action: 'STRIPE_CONNECT_ACCOUNT_CREATED', entity: 'users', entityId: userId });
+        } else if (verifiedIndividual.dob || verifiedIndividual.address) {
+          // Existing account (e.g. created before identity verification
+          // completed, or before this pre-fill existed) — push the
+          // now-available verified details onto it before generating the
+          // next Account Link.
+          await stripeProvider.syncIndividualDetails(accountId, { ...verifiedIndividual, country: user.country });
         }
 
         await stripeProvider.attachExternalBankAccount({

@@ -345,11 +345,20 @@ export async function sendGroupMemberSuspendedNotificationEmail(
   `));
 }
 
-export async function sendGroupClosedEmail(to: string, groupName: string): Promise<void> {
+export type GroupClosedReason = 'leader_closed' | 'lifecycle_complete' | 'leader_left_draft';
+
+export async function sendGroupClosedEmail(to: string, groupName: string, reason: GroupClosedReason = 'leader_closed', fullRotationsCompleted?: number): Promise<void> {
+  const reasonCopy: Record<GroupClosedReason, string> = {
+    leader_closed:      `The savings group <strong>${escapeHtml(groupName)}</strong> has been closed by the group leader.`,
+    lifecycle_complete: `<strong>${escapeHtml(groupName)}</strong> has completed its planned ${fullRotationsCompleted ?? 'full'} payout rotation${fullRotationsCompleted === 1 ? '' : 's'} and is now closed — every member has received their payout.`,
+    leader_left_draft:  `<strong>${escapeHtml(groupName)}</strong> never launched (it was still a draft, below the minimum member count) and has been closed because the group leader left.`,
+  };
   await send(to, `${groupName} has been closed`, wrap(`
     ${h2('Your savings group has been closed')}
-    ${p(`The savings group <strong>${groupName}</strong> has been closed by the group leader.`)}
-    ${p('Any pending contributions or payouts will be handled according to your group\'s rules. If you have questions, contact the group leader or PadiHub support.')}
+    ${p(reasonCopy[reason])}
+    ${reason !== 'leader_left_draft' ? p('Any pending contributions or payouts will be handled according to your group\'s rules.') : ''}
+    ${p('If you have questions, contact the group leader or PadiHub support.')}
+    ${btn('View Your Groups', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
   `));
 }
 
@@ -743,35 +752,15 @@ export async function sendGroupLeaderActivityEmail(
 }
 
 // ─── Vote emails ──────────────────────────────────────────────────────────────
-
-export async function sendVoteRequiredEmail(
-  to: string, groupName: string, voteDescription: string, deadline: string,
-): Promise<void> {
-  await send(to, `Vote required — ${groupName}`, wrap(`
-    ${h2('Your vote is needed')}
-    ${p(`A vote has been created in <strong>${groupName}</strong> that requires your input.`)}
-    ${table(
-      detail('Group', groupName) +
-      detail('Proposal', voteDescription) +
-      detail('Voting deadline', deadline),
-    )}
-    ${btn('Cast Your Vote', `${process.env.APP_URL ?? 'https://padihub.com'}/dashboard`)}
-  `));
-}
-
-export async function sendVoteResultEmail(
-  to: string, groupName: string, outcome: string, voteCounts: string,
-): Promise<void> {
-  await send(to, `Vote result — ${groupName}`, wrap(`
-    ${h2('Vote result')}
-    ${p(`The vote in <strong>${groupName}</strong> has closed.`)}
-    ${table(
-      detail('Group', groupName) +
-      detail('Outcome', outcome) +
-      detail('Vote counts', voteCounts),
-    )}
-  `));
-}
+//
+// NOTE: an earlier, more generic pair of functions (sendVoteRequiredEmail /
+// sendVoteResultEmail) used to live here but were never wired up to any
+// caller — they were superseded before launch by the richer functions below,
+// which ARE the ones actually sent for every vote-required/vote-resolved
+// situation (member admission, contribution "claim", and payout-swap
+// proposals): sendGovernanceVoteEmail (vote required — with working
+// one-click accept/decline links, no login needed) and sendVoteOutcomeEmail
+// (vote result). Removed as dead code rather than kept "just in case".
 
 /**
  * Governance vote notice with working single-click accept/decline links
@@ -897,7 +886,7 @@ export async function sendSubscriptionPaymentFailedEmail(
     ${h2('Subscription payment failed')}
     ${p('We were unable to process your PadiHub subscription payment.')}
     ${table(detail('Amount', amount))}
-    ${p('Please update your payment method to restore full access to your account.')}
+    ${p('Your account access is currently restricted until this is resolved. Please update your payment method as soon as possible to restore full access — depending on your account status, PadiHub may automatically retry the charge once your card is updated.')}
     ${btn('Update Payment Method', `${process.env.APP_URL ?? 'https://padihub.com'}/dashboard`)}
   `));
 }

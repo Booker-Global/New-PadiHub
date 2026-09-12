@@ -300,7 +300,7 @@ export const rotationService = {
               ? `"${group.name}" has completed its planned ${group.group_duration_rotations} payout rotation(s) and is now closed.`
               : `"${group.name}" has closed as scheduled, now that the current payout rotation has finished.`,
           });
-          await sendGroupClosedEmail(u.email, group.name);
+          await sendGroupClosedEmail(u.email, group.name, shouldCloseFixed ? 'lifecycle_complete' : 'leader_closed', fullRotationsCompleted);
         }
 
         return { nextCycle: group.current_cycle, nextRecipient: null, groupClosed: true };

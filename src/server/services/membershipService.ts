@@ -588,7 +588,7 @@ export const membershipService = {
           .from(schema.users)
           .where(inArray(schema.users.id, joinedMembers.map(member => member.user_id)));
         for (const row of emailRows) {
-          await sendGroupClosedEmail(row.email, group.name);
+          await sendGroupClosedEmail(row.email, group.name, 'leader_left_draft');
         }
       }
 

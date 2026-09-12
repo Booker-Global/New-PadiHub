@@ -126,6 +126,46 @@ export class StripeIdentityProvider implements IIdentityVerificationProvider {
     return { handled: true, event: event.type, userId };
   }
 
+  /**
+   * Retrieve verified name/DOB/address from a completed VerificationSession
+   * (Stripe's `verified_outputs`, only populated once `status: 'verified'`).
+   * Used ONLY to pre-fill the member's Stripe Connect Express payout account
+   * via the API — see StripeProvider.createConnectedAccount/
+   * syncIndividualDetails — so Stripe's own hosted onboarding page has fewer
+   * personal-detail questions left to ask. Never throws; returns null if the
+   * session can't be retrieved or has no verified_outputs yet.
+   */
+  async getVerifiedOutputs(sessionId: string): Promise<{
+    firstName?: string; lastName?: string;
+    dob?: { day: number; month: number; year: number };
+    address?: { line1?: string; line2?: string; city?: string; postalCode?: string; state?: string };
+  } | null> {
+    try {
+      const session = await getStripe().identity.verificationSessions.retrieve(sessionId, {
+        expand: ['verified_outputs'],
+      });
+      const outputs = session.verified_outputs;
+      if (!outputs) return null;
+      return {
+        firstName: outputs.first_name ?? undefined,
+        lastName:  outputs.last_name ?? undefined,
+        dob: outputs.dob && outputs.dob.day && outputs.dob.month && outputs.dob.year
+          ? { day: outputs.dob.day, month: outputs.dob.month, year: outputs.dob.year }
+          : undefined,
+        address: outputs.address ? {
+          line1:      outputs.address.line1 ?? undefined,
+          line2:      outputs.address.line2 ?? undefined,
+          city:       outputs.address.city ?? undefined,
+          postalCode: outputs.address.postal_code ?? undefined,
+          state:      outputs.address.state ?? undefined,
+        } : undefined,
+      };
+    } catch (err) {
+      console.warn('[StripeIdentityProvider] Could not retrieve verified_outputs:', err instanceof Error ? err.message : err);
+      return null;
+    }
+  }
+
   async addVerificationFeeToFirstInvoice(userId: string, amountPence: number): Promise<void> {
     if (amountPence <= 0) return;
 
