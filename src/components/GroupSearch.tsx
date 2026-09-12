@@ -15,6 +15,7 @@ interface SearchGroup {
   member_count: number;
   spots_remaining: number;
   min_trust_score: number;
+  viewer_membership_status?: 'active' | 'pending' | null;
 }
 
 interface ApiResponse<T> {
@@ -102,7 +103,10 @@ export default function GroupSearch({ compact = false }: { compact?: boolean }) 
     try {
       const params = new window.URLSearchParams({ country });
       if (query.trim()) params.set('query', query.trim());
-      const response = await window.fetch(`/api/groups/search?${params.toString()}`);
+      const session = getValidSession();
+      const response = await window.fetch(`/api/groups/search?${params.toString()}`, {
+        headers: session?.token ? { Authorization: 'Bearer ' + session.token } : undefined,
+      });
       const json = await response.json().catch(() => null) as ApiResponse<SearchGroup[]> | null;
       if (!response.ok) {
         setError(getErrorMessage(json, 'Could not search for groups right now.'));
@@ -215,6 +219,21 @@ export default function GroupSearch({ compact = false }: { compact?: boolean }) 
               <p className="text-xs font-semibold flex items-center gap-1.5" style={{ color: '#2EAF6F' }}>
                 <CheckCircle size={13} /> {joinNotice[group.id]}
               </p>
+            ) : group.viewer_membership_status === 'active' ? (
+              <Link
+                to={`/savings-groups/${group.id}`}
+                className="mt-1 px-4 py-2 rounded-xl text-xs font-bold self-start"
+                style={{ background: 'rgba(46,175,111,0.1)', color: '#2EAF6F' }}
+              >
+                Already a member · View group
+              </Link>
+            ) : group.viewer_membership_status === 'pending' ? (
+              <span
+                className="mt-1 px-4 py-2 rounded-xl text-xs font-bold self-start"
+                style={{ background: '#F3F4F6', color: '#6B7280' }}
+              >
+                Request pending approval
+              </span>
             ) : (
               <button
                 onClick={() => void handleRequestToJoin(group.id)}

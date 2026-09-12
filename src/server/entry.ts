@@ -657,6 +657,8 @@ if (import.meta.env.PROD) {
 				await subscriptionService.backfillCancelledAtRetroactively();
 				const { membershipService } = await import('./services/membershipService.js');
 				await membershipService.reconcileVoteRemovedAccountsRetroactively();
+				const { startInProcessScheduler } = await import('./lib/inProcessScheduler.js');
+				startInProcessScheduler();
 			} else {
 				console.error(
 					`[PadiHub] ✗ Database connection FAILED after all retries. ` +

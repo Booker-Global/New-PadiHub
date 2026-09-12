@@ -170,11 +170,14 @@ export default function NotificationsPage() {
 
   const unread = notifications.filter(n => !n.is_read).length;
 
+  // Each category card must reflect UNREAD notifications in that category,
+  // not the total ever received — otherwise marking a notification as read
+  // never changes the card, which looked like the cards "don't update".
   const kpis = useMemo(() => ([
     { label: 'Unread', value: unread, color: '#EF4444', icon: Bell },
-    { label: 'Payments', value: notifications.filter(n => getMeta(n.type).category === 'Payments').length, color: '#2EAF6F', icon: CreditCard },
-    { label: 'Groups', value: notifications.filter(n => getMeta(n.type).category === 'Groups').length, color: '#8B5CF6', icon: Users },
-    { label: 'Governance', value: notifications.filter(n => getMeta(n.type).category === 'Governance').length, color: '#F59E0B', icon: Vote },
+    { label: 'Payments', value: notifications.filter(n => !n.is_read && getMeta(n.type).category === 'Payments').length, color: '#2EAF6F', icon: CreditCard },
+    { label: 'Groups', value: notifications.filter(n => !n.is_read && getMeta(n.type).category === 'Groups').length, color: '#8B5CF6', icon: Users },
+    { label: 'Governance', value: notifications.filter(n => !n.is_read && getMeta(n.type).category === 'Governance').length, color: '#F59E0B', icon: Vote },
   ]), [notifications, unread]);
 
   if (loading) {

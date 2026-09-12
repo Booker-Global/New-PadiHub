@@ -6,6 +6,7 @@ import { ChevronLeft, PiggyBank, Shield, AlertTriangle, CheckCircle, RefreshCw }
 import DashboardLayout from '@/components/DashboardLayout';
 import { SkeletonPage } from '@/components/ui/loading-skeleton';
 import { getValidSession } from '@/lib/session';
+import { getGroupStatusLabel } from '@/lib/groupStatus';
 
 interface SavingsGroup {
   id: string;
@@ -215,7 +216,7 @@ export default function LeaveSavingsGroupPage() {
             <CheckCircle size={28} style={{ color: '#2EAF6F' }} />
           </div>
           <h2 className="text-xl font-extrabold text-gray-900 mb-2" style={{ fontFamily: 'Nunito, sans-serif' }}>You&apos;ve left the group</h2>
-          <p className="text-gray-500 mb-2">Your contribution history remains part of your <strong>PadiHub Passport™</strong>.</p>
+          <p className="text-gray-500 mb-2">Your <strong>Contribution History</strong> remains on your PadiHub profile.</p>
           <p className="text-sm text-gray-400 mb-8">Your Trust Score™ is preserved.</p>
           <Link to="/savings-groups" className="px-6 py-3 rounded-2xl font-bold text-white inline-block hover:opacity-90 transition-all" style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}>
             Back to savings groups
@@ -269,7 +270,7 @@ export default function LeaveSavingsGroupPage() {
               <div>
                 <p className="font-extrabold text-white" style={{ fontFamily: 'Nunito, sans-serif' }}>{group.name}</p>
                 <p className="text-xs" style={{ color: 'rgba(255,255,255,0.4)' }}>
-                  {formatCurrency(group.contribution_amount, group.currency)} {titleCase(group.contribution_frequency)} · {titleCase(group.status)}
+                  {formatCurrency(group.contribution_amount, group.currency)} {titleCase(group.contribution_frequency)} · {getGroupStatusLabel(group.status)}
                 </p>
               </div>
             </div>
@@ -292,7 +293,7 @@ export default function LeaveSavingsGroupPage() {
             <h2 className="font-extrabold text-gray-900 mb-3" style={{ fontFamily: 'Nunito, sans-serif' }}>What stays with you</h2>
             <div className="flex flex-col gap-2">
               {[
-                { text: 'Your full contribution history is preserved in your Passport™', icon: Shield, color: '#2EAF6F' },
+                { text: 'Your full contribution history is preserved on your PadiHub profile', icon: Shield, color: '#2EAF6F' },
                 { text: 'Your Trust Score™ reflects all contributions made', icon: Shield, color: '#2EAF6F' },
               ].map(item => (
                 <div key={item.text} className="flex items-start gap-3 p-3 rounded-2xl" style={{ background: 'rgba(46,175,111,0.05)' }}>

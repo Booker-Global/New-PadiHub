@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { eq, and, inArray, gt, ne, asc, sql } from 'drizzle-orm';
+import { eq, and, or, inArray, gt, ne, asc, sql, count } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -161,6 +161,19 @@ export const membershipService = {
       invitation = await groupService.findOpenInvitationForEmail(groupId, user.email);
     }
 
+    // "Available to public" toggle — a private group (is_public=false) only
+    // ever accepts members the leader invites directly; self-service
+    // "request to join" is rejected outright, same reasoning as the Trust
+    // Score gate below (an invite means the leader already vetted them, so
+    // it bypasses this too).
+    if (!invitation && !group.is_public) {
+      throw new AppError(
+        'This group is private — you can only join if the group leader invites you directly.',
+        403,
+        'GROUP_NOT_PUBLIC',
+      );
+    }
+
     // Enforce the group's minimum Trust Score, set by its creator — but ONLY
     // for users requesting to join themselves (e.g. found the group via
     // search). A leader-issued invite means the leader already vetted this
@@ -178,15 +191,42 @@ export const membershipService = {
     // Invited (by token or by matching email) — leader already vetted this
     // person, so they join as an active member immediately, no approval step.
     if (invitation) {
+      // Mark EVERY still-open invitation row for this exact email+group as
+      // accepted, not just the one token that was actually used to join —
+      // a leader re-sending an invite leaves the earlier row(s) behind with
+      // accepted=false, and those stale duplicates would otherwise keep
+      // showing this group as "pending invitation" on the member's
+      // dashboard even after they've successfully joined.
       await db.update(schema.groupInvitations)
-        .set({ accepted: true }).where(eq(schema.groupInvitations.token, invitation.token));
+        .set({ accepted: true })
+        .where(and(
+          eq(schema.groupInvitations.group_id, groupId),
+          eq(schema.groupInvitations.accepted, false),
+          or(
+            eq(schema.groupInvitations.token, invitation.token),
+            eq(schema.groupInvitations.email, user.email),
+          ),
+        ));
       await createAuditLog({ userId, action: 'INVITATION_ACCEPTED', entity: 'savings_groups', entityId: groupId, ipAddress });
 
-      const rotationOrder = activeCount + 1;
-      await db.insert(schema.memberships).values({
-        id: uuidv4(), user_id: userId, group_id: groupId,
-        role: 'member', rotation_order: rotationOrder,
-        status: 'active', strike_count: 0,
+      // Assign the next rotation slot and insert the membership atomically,
+      // inside a transaction that row-locks the group — otherwise two people
+      // accepting invites to the same group at nearly the same instant could
+      // both read the same pre-transaction activeCount and both be assigned
+      // the SAME rotation_order, which then shows two different members as
+      // "next in rotation" simultaneously (Section 15.C requires a single,
+      // factual next recipient at all times).
+      await db.transaction(async (tx) => {
+        await tx.select({ id: schema.savingsGroups.id }).from(schema.savingsGroups)
+          .where(eq(schema.savingsGroups.id, groupId)).for('update');
+        const [activeNow] = await tx.select({ value: count() }).from(schema.memberships)
+          .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')));
+        const nextOrder = (activeNow?.value ?? 0) + 1;
+        await tx.insert(schema.memberships).values({
+          id: uuidv4(), user_id: userId, group_id: groupId,
+          role: 'member', rotation_order: nextOrder,
+          status: 'active', strike_count: 0,
+        });
       });
 
       await createAuditLog({ userId, action: 'MEMBER_JOINED', entity: 'savings_groups', entityId: groupId, ipAddress });
@@ -197,14 +237,21 @@ export const membershipService = {
       });
 
       const durationSummary = describeGroupDuration(group.group_duration_type, group.group_duration_rotations);
-      await sendMemberJoinedGroupEmail(user.email, group.name, durationSummary);
+      // Item 9 — the join-confirmation email must be genuinely informative:
+      // who else is in the group and their Trust Score, the leader, the
+      // contribution amount/payout schedule, and the governance rules
+      // (voting-out threshold, suspension threshold, payout swaps) — not
+      // just a one-line "you're in". Snapshot is read AFTER the new member
+      // row above so they're included in their own "members of" list.
+      const joinSnapshot = await groupService.getGroupJoinSnapshot(groupId);
+      await sendMemberJoinedGroupEmail(user.email, group.name, durationSummary, joinSnapshot);
 
       const leaderRow = await db.select({ email: schema.users.email, first_name: schema.users.first_name, last_name: schema.users.last_name })
         .from(schema.users).where(eq(schema.users.id, group.leader_id)).limit(1);
       if (leaderRow.length) {
         const memberName = `${user.first_name} ${user.last_name}`;
         const leaderName = `${leaderRow[0].first_name} ${leaderRow[0].last_name}`;
-        await sendInvitationAcceptedEmail(leaderRow[0].email, group.name, memberName, leaderName);
+        await sendInvitationAcceptedEmail(leaderRow[0].email, group.name, memberName, leaderName, user.trust_score, joinSnapshot.members.length);
       }
 
       // A refill (suspended → active, back to >= min members) is handled
@@ -218,7 +265,11 @@ export const membershipService = {
       return { success: true, status: 'active' as const, message: 'You have joined the group.' };
     }
 
-    // Self-service request-to-join — requires leader approval.
+    // Self-service request-to-join — requires leader approval, UNLESS the
+    // group's "Require voting for key decisions" toggle is on, in which
+    // case admission is never decided unilaterally: a unanimous
+    // member_admission vote opens automatically (see requires_admission_vote
+    // doc comment in schema.ts).
     const membershipId = uuidv4();
     await db.insert(schema.memberships).values({
       id: membershipId, user_id: userId, group_id: groupId,
@@ -230,16 +281,23 @@ export const membershipService = {
     await notificationService.create({
       userId, type: 'join_request_submitted',
       title: 'Join Request Submitted',
-      message: `Your request to join "${group.name}" has been sent to the group leader.`,
+      message: group.requires_admission_vote
+        ? `Your request to join "${group.name}" has opened a group vote — every active member must agree before you can join.`
+        : `Your request to join "${group.name}" has been sent to the group leader.`,
     });
 
-    const [requesterEmailRow, leaderRow] = await Promise.all([
-      db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, userId)).limit(1),
-      db.select({ id: schema.users.id, email: schema.users.email }).from(schema.users).where(eq(schema.users.id, group.leader_id)).limit(1),
-    ]);
+    const requesterEmailRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
     if (requesterEmailRow.length) {
       await sendGroupJoinRequestSubmittedEmail(requesterEmailRow[0].email, group.name);
     }
+
+    if (group.requires_admission_vote) {
+      const { voteService } = await import('./voteService.js');
+      await voteService.proposeMemberAdmission(groupId, group.leader_id, membershipId, ipAddress);
+      return { success: true, status: 'pending' as const, message: 'Your request to join has opened a group vote — every active member must agree before you can join.' };
+    }
+
+    const leaderRow = await db.select({ id: schema.users.id, email: schema.users.email }).from(schema.users).where(eq(schema.users.id, group.leader_id)).limit(1);
     if (leaderRow.length) {
       await notificationService.create({
         userId: leaderRow[0].id, type: 'join_request_received',
@@ -265,6 +323,13 @@ export const membershipService = {
 
     const group = await groupService.getById(membership.group_id);
     if (group.leader_id !== leaderId) throw new AppError('Only the group leader can approve join requests.', 403);
+    if (group.requires_admission_vote) {
+      throw new AppError(
+        'This group requires a unanimous member vote for new admissions — use "Start admission vote" instead of approving directly.',
+        403,
+        'ADMISSION_VOTE_REQUIRED',
+      );
+    }
 
     return this._activatePendingMembership(membershipId, ipAddress);
   },
@@ -292,15 +357,28 @@ export const membershipService = {
       );
     }
 
-    const nextRotationOrder = activeMembers.length + 1;
-    await db.update(schema.memberships)
-      .set({ status: 'active', rotation_order: nextRotationOrder })
-      .where(eq(schema.memberships.id, membershipId));
+    // Assign the next rotation slot and flip the membership to active
+    // atomically, inside a transaction that row-locks the group — same
+    // concurrency guard as the invited-join path above, so two pending
+    // memberships approved at nearly the same instant (e.g. leader approval
+    // racing a unanimous admission vote resolving) can never both land on
+    // the same rotation_order and be shown as "next" simultaneously.
+    const nextRotationOrder = await db.transaction(async (tx) => {
+      await tx.select({ id: schema.savingsGroups.id }).from(schema.savingsGroups)
+        .where(eq(schema.savingsGroups.id, group.id)).for('update');
+      const [activeNow] = await tx.select({ value: count() }).from(schema.memberships)
+        .where(and(eq(schema.memberships.group_id, group.id), eq(schema.memberships.status, 'active')));
+      const order = (activeNow?.value ?? 0) + 1;
+      await tx.update(schema.memberships)
+        .set({ status: 'active', rotation_order: order })
+        .where(eq(schema.memberships.id, membershipId));
+      return order;
+    });
 
     await createAuditLog({ userId: membership.user_id, action: 'MEMBERSHIP_APPROVED', entity: 'savings_groups', entityId: group.id, ipAddress, metadata: { membershipId, memberId: membership.user_id } });
 
     const [newMemberRow, leaderRow, otherMembersEmails] = await Promise.all([
-      db.select({ email: schema.users.email, first_name: schema.users.first_name, last_name: schema.users.last_name })
+      db.select({ email: schema.users.email, first_name: schema.users.first_name, last_name: schema.users.last_name, trust_score: schema.users.trust_score })
         .from(schema.users).where(eq(schema.users.id, membership.user_id)).limit(1),
       db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, group.leader_id)).limit(1),
       activeMembers.length
@@ -317,17 +395,22 @@ export const membershipService = {
       title: 'Join Request Approved',
       message: `Your request to join "${group.name}" has been approved.`,
     });
+    // Item 9 — full group detail (members + Trust Scores, leader,
+    // contribution/payout schedule, governance rules) on the approval
+    // email too, same as the invited-join path.
+    const joinSnapshot = await groupService.getGroupJoinSnapshot(group.id);
     await sendGroupJoinApprovedEmail(
       newMemberRow[0].email, group.name,
       describeGroupDuration(group.group_duration_type, group.group_duration_rotations),
+      joinSnapshot,
     );
 
     if (leaderRow.length) {
-      await sendGroupNewMemberJoinedEmail(leaderRow[0].email, group.name, newMemberName);
+      await sendGroupNewMemberJoinedEmail(leaderRow[0].email, group.name, newMemberName, newMemberRow[0].trust_score, joinSnapshot.members.length);
     }
     for (const other of otherMembersEmails) {
       if (other.id === membership.user_id) continue;
-      await sendGroupNewMemberJoinedEmail(other.email, group.name, newMemberName);
+      await sendGroupNewMemberJoinedEmail(other.email, group.name, newMemberName, newMemberRow[0].trust_score, joinSnapshot.members.length);
       await notificationService.create({
         userId: other.id, type: 'group_new_member',
         title: 'New Group Member',
@@ -352,6 +435,13 @@ export const membershipService = {
 
     const group = await groupService.getById(membership.group_id);
     if (group.leader_id !== leaderId) throw new AppError('Only the group leader can reject join requests.', 403);
+    if (group.requires_admission_vote) {
+      throw new AppError(
+        'This group requires a unanimous member vote for new admissions — the group vote already in progress will reject this request if any member declines.',
+        403,
+        'ADMISSION_VOTE_REQUIRED',
+      );
+    }
 
     return this._invalidatePendingMembership(membershipId, ipAddress, leaderId);
   },
@@ -414,7 +504,20 @@ export const membershipService = {
     return { success: true, vote_id: voteId };
   },
 
-  async leave(userId: string, groupId: string, ipAddress?: string) {
+  /**
+   * `DELETE /api/memberships/:id` — `:id` here is the MEMBERSHIP row id (the
+   * same convention as approve/reject), not the group id. Resolve it to its
+   * group first; previously this value was passed straight through as a
+   * group id, so `groupService.getById()` always threw "Group not found."
+   * whenever a member tried to leave.
+   */
+  async leave(userId: string, membershipId: string, ipAddress?: string) {
+    const [membership] = await db.select().from(schema.memberships).where(eq(schema.memberships.id, membershipId)).limit(1);
+    if (!membership || membership.user_id !== userId || membership.status === 'removed') {
+      throw new AppError('Membership not found.', 404);
+    }
+
+    const groupId = membership.group_id;
     const group = await groupService.getById(groupId);
     if (group.leader_id === userId) {
       return this.departGroupOwner(userId, groupId, 'voluntary', ipAddress);
@@ -485,7 +588,7 @@ export const membershipService = {
           .from(schema.users)
           .where(inArray(schema.users.id, joinedMembers.map(member => member.user_id)));
         for (const row of emailRows) {
-          await sendGroupClosedEmail(row.email, group.name);
+          await sendGroupClosedEmail(row.email, group.name, 'leader_left_draft');
         }
       }
 

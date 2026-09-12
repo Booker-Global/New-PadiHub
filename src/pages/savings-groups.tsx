@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { Link } from 'react-router-dom';
 import { MotionDiv } from '@/lib/motion-safe';
+import { getGroupStatusLabel, getGroupStatusColor } from '@/lib/groupStatus';
 import {
   PiggyBank,
   Plus,
@@ -95,18 +96,7 @@ function titleCase(value: string) {
 }
 
 function getGroupStatusMeta(status: SavingsGroup['status']) {
-  switch (status) {
-    case 'active':
-      return { label: 'Active', color: '#2EAF6F' };
-    case 'suspended':
-      return { label: 'Suspended', color: '#F59E0B' };
-    case 'draft':
-      return { label: 'Not started yet', color: '#8B5CF6' };
-    case 'expired':
-      return { label: 'Expired', color: '#EF4444' };
-    default:
-      return { label: 'Closed', color: '#6B7280' };
-  }
+  return { label: getGroupStatusLabel(status), color: getGroupStatusColor(status) };
 }
 
 function getTimelineMeta(status: Contribution['payment_status']) {

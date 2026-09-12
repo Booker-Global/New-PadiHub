@@ -22,7 +22,7 @@ import {
   sendGroupCreatedEmail,
   sendGroupSettingsUpdatedEmail,
 } from '../integrations/email/emailService.js';
-import { payoutDayBounds } from '../lib/payoutSchedule.js';
+import { payoutDayBounds, CONTRIBUTION_SAME_DAY_CUTOFF_HOUR_UTC, resolveFirstScheduleDate, describePayoutSchedule } from '../lib/payoutSchedule.js';
 
 function assignProvider(country: string) {
   return country === 'NG' ? 'flutterwave' : 'stripe';
@@ -45,10 +45,36 @@ function normalizeRotationMethod(rotationMethod: 'manual' | 'random') {
 }
 
 export const groupService = {
-  async list(filters?: { status?: string; country?: string }) {
-    
-    const rows = await db.select().from(schema.savingsGroups)
-      .where(filters?.status ? eq(schema.savingsGroups.status, filters.status as 'draft' | 'active' | 'closed' | 'suspended' | 'expired') : undefined);
+  /**
+   * GET /api/groups — always authenticated (see entry.ts), and every caller
+   * (homepage widget, dashboard, "My Groups") expects ONLY the groups the
+   * signed-in user actually belongs to. Previously this returned literally
+   * every group in the system regardless of the caller, which is why a
+   * brand-new user could see themselves listed as a member of a group
+   * they'd never joined. Scoped via an INNER JOIN through the user's own
+   * memberships — 'active' and 'suspended' memberships count (the user IS
+   * still part of that group, even if it's currently below the launch
+   * threshold), but 'pending' (an unapproved join request) and 'removed'
+   * do not. The group's own lifecycle status (draft/active/suspended/
+   * closed/expired) is NOT used to filter here — a closed/expired group the
+   * user was part of should still show up (with that status badge) so its
+   * history remains visible; only the viewer's own membership status
+   * determines whether the group appears at all.
+   */
+  async list(viewerId: string, filters?: { status?: string; country?: string }) {
+    const membershipRows = await db.select({ group_id: schema.memberships.group_id })
+      .from(schema.memberships)
+      .where(and(
+        eq(schema.memberships.user_id, viewerId),
+        inArray(schema.memberships.status, ['active', 'suspended']),
+      ));
+    const memberGroupIds = membershipRows.map(row => row.group_id);
+    if (!memberGroupIds.length) return [];
+
+    const conditions = [inArray(schema.savingsGroups.id, memberGroupIds)];
+    if (filters?.status) conditions.push(eq(schema.savingsGroups.status, filters.status as 'draft' | 'active' | 'closed' | 'suspended' | 'expired'));
+
+    const rows = await db.select().from(schema.savingsGroups).where(and(...conditions));
     return rows.map(row => ({
       ...row,
       maximum_members: clampGroupMaximumMembers(row.maximum_members),
@@ -76,6 +102,47 @@ export const groupService = {
       // Every screen must show the leader's name, never their raw user ID —
       // see resolveUserDisplayName doc comment.
       leader_name: resolveUserDisplayName(leaderRows[0]),
+    };
+  },
+
+  /**
+   * Item 9 — everything a "you've joined"/"you've been approved" email
+   * needs to be genuinely informative rather than a one-line confirmation:
+   * every current active member's name + Trust Score (so a new joiner
+   * knows exactly who they're saving with), the leader, the contribution
+   * amount and payout schedule, and the group's governance rules (voting a
+   * member out, max missed contributions before suspension, payout swaps).
+   * Shared by membershipService's invited-join, approved-request and
+   * unanimous-admission-vote paths so all three send the same rich detail.
+   */
+  async getGroupJoinSnapshot(groupId: string) {
+    const group = await this.getById(groupId);
+    const memberRows = await db.select({
+      user_id:      schema.memberships.user_id,
+      display_name: schema.users.display_name,
+      first_name:   schema.users.first_name,
+      last_name:    schema.users.last_name,
+      email:        schema.users.email,
+      trust_score:  schema.users.trust_score,
+    })
+      .from(schema.memberships)
+      .innerJoin(schema.users, eq(schema.memberships.user_id, schema.users.id))
+      .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')));
+
+    const members = memberRows.map(m => ({
+      name: resolveUserDisplayName(m),
+      trustScore: m.trust_score,
+      isLeader: m.user_id === group.leader_id,
+    }));
+
+    return {
+      leaderName: group.leader_name,
+      members,
+      contributionAmountDisplay: `${group.currency} ${parseFloat(group.contribution_amount).toFixed(2)}`,
+      payoutScheduleLabel: describePayoutSchedule(group.contribution_frequency, group.payout_day),
+      votingOutThresholdPercent: group.voting_threshold,
+      maxDefaultsForSuspension: group.suspension_threshold,
+      allowPayoutSwaps: group.allow_payout_swaps,
     };
   },
 
@@ -200,7 +267,7 @@ export const groupService = {
         message: `"${group.name}" is back to ${activeCount} active members and collection has resumed.`,
       });
       const leaderRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, group.leader_id)).limit(1);
-      if (leaderRow.length) await sendGroupReactivatedEmail(leaderRow[0].email, group.name);
+      if (leaderRow.length) await sendGroupReactivatedEmail(leaderRow[0].email, group.name, activeCount);
 
       const memberUserIds = (await db.select({ user_id: schema.memberships.user_id }).from(schema.memberships)
         .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')))).map(m => m.user_id);
@@ -220,13 +287,13 @@ export const groupService = {
     return rows.length ? rows[0].country : null;
   },
 
-  async search(country: string, query?: string) {
+  async search(country: string, query?: string, viewerId?: string) {
     const rows = await db.select({
       id:                     schema.savingsGroups.id,
       name:                   schema.savingsGroups.name,
       description:            schema.savingsGroups.description,
       country:                schema.savingsGroups.country,
-      currency:               schema.savingsGroups.currency,
+      currency:                schema.savingsGroups.currency,
       contribution_amount:    schema.savingsGroups.contribution_amount,
       contribution_frequency: schema.savingsGroups.contribution_frequency,
       maximum_members:        schema.savingsGroups.maximum_members,
@@ -237,6 +304,10 @@ export const groupService = {
       .where(and(
         eq(schema.savingsGroups.status, 'active'),
         eq(schema.savingsGroups.country, country),
+        // Private groups (is_public=false) are invite-only — never surfaced
+        // in search, and self-service "request to join" is separately
+        // blocked in membershipService.join() as defense in depth.
+        eq(schema.savingsGroups.is_public, true),
       ));
 
     const memberCounts = await db.select({
@@ -247,6 +318,23 @@ export const groupService = {
       .groupBy(schema.memberships.group_id);
     const memberCountByGroup = Object.fromEntries(memberCounts.map(m => [m.group_id, m.value]));
 
+    // The signed-in viewer's own membership status per group — so the
+    // frontend never shows "Request to join" for a group they've already
+    // joined (or already have a pending request for). Never shown to
+    // anonymous visitors since there's no viewerId to check.
+    const viewerStatusByGroup: Record<string, 'active' | 'pending'> = {};
+    if (viewerId) {
+      const viewerMemberships = await db.select({
+        group_id: schema.memberships.group_id,
+        status:   schema.memberships.status,
+      }).from(schema.memberships)
+        .where(and(
+          eq(schema.memberships.user_id, viewerId),
+          inArray(schema.memberships.status, ['active', 'pending']),
+        ));
+      for (const m of viewerMemberships) viewerStatusByGroup[m.group_id] = m.status as 'active' | 'pending';
+    }
+
     const normalizedQuery = query?.trim().toLowerCase();
     return rows
       .filter(g => !normalizedQuery || g.name.toLowerCase().includes(normalizedQuery))
@@ -255,8 +343,9 @@ export const groupService = {
         maximum_members: clampGroupMaximumMembers(g.maximum_members),
         member_count:    memberCountByGroup[g.id] ?? 0,
         spots_remaining: Math.max(0, clampGroupMaximumMembers(g.maximum_members) - (memberCountByGroup[g.id] ?? 0)),
+        viewer_membership_status: viewerStatusByGroup[g.id] ?? null,
       }))
-      .filter(g => g.spots_remaining > 0);
+      .filter(g => g.spots_remaining > 0 || g.viewer_membership_status);
   },
 
   async create(data: {
@@ -267,7 +356,8 @@ export const groupService = {
     maximum_members: number; rotation_method: 'manual' | 'random';
     strike_threshold?: number; suspension_threshold?: number;
     voting_threshold?: number; allow_payout_swaps?: boolean;
-    min_trust_score?: number;
+    min_trust_score?: number; is_public?: boolean;
+    requires_admission_vote?: boolean;
     group_duration_type?: 'fixed' | 'indefinite'; group_duration_rotations?: number;
   }, ipAddress?: string) {
     // Production payment frequency is Weekly/Monthly only — Daily exists
@@ -366,6 +456,7 @@ export const groupService = {
       payout_day:               data.payout_day ?? null,
       maximum_members:          clampGroupMaximumMembers(data.maximum_members),
       min_trust_score:          data.min_trust_score ?? GROUP_DEFAULT_MIN_TRUST_SCORE,
+      is_public:                data.is_public ?? true,
       rotation_method:          data.rotation_method,
       current_rotation_position: 1,
       current_cycle:            1,
@@ -373,6 +464,7 @@ export const groupService = {
       suspension_threshold:     data.suspension_threshold ?? GROUP_DEFAULT_SUSPENSION_THRESHOLD,
       voting_threshold:         data.voting_threshold ?? GROUP_DEFAULT_VOTING_THRESHOLD,
       allow_payout_swaps:       data.allow_payout_swaps ?? true,
+      requires_admission_vote:  data.requires_admission_vote ?? false,
       payment_provider:         payment_provider as 'stripe' | 'flutterwave',
       status:                   'draft',
       group_duration_type:      durationType,
@@ -407,7 +499,8 @@ export const groupService = {
     name: string; description: string; maximum_members: number; min_trust_score: number;
     contribution_amount: string; payout_day: number;
     strike_threshold: number; suspension_threshold: number;
-    voting_threshold: number; allow_payout_swaps: boolean;
+    voting_threshold: number; allow_payout_swaps: boolean; is_public: boolean;
+    requires_admission_vote: boolean;
   }>, ipAddress?: string) {
     
     const group = await this.getById(groupId);
@@ -442,6 +535,45 @@ export const groupService = {
 
     await db.update(schema.savingsGroups).set(data).where(eq(schema.savingsGroups.id, groupId));
     await createAuditLog({ userId: leaderId, action: 'GROUP_UPDATED', entity: 'savings_groups', entityId: groupId, ipAddress });
+
+    // Item 7 — changing an ACTIVE group's payout_day/contribution_amount
+    // must actually reschedule the current cycle's still-pending charges,
+    // not just be stored for future cycles. Without this, a leader who
+    // moves payout_day to "today" (as documented in Section 7) would see
+    // no charge/payout activity at all, because every member's contribution
+    // row for the current cycle was already created with the OLD due_date
+    // back when the cycle started, and nothing ever re-reads payout_day
+    // afterwards. Only 'scheduled' rows are touched — once a contribution
+    // has flipped to 'due' (the 07:00 UTC charge run has picked it up
+    // today) or beyond, it's already in flight and must not be silently
+    // rewritten.
+    if (group.status === 'active' && (data.payout_day !== undefined || data.contribution_amount !== undefined)) {
+      const newPayoutDay = data.payout_day !== undefined ? data.payout_day : group.payout_day;
+      const { dueDate } = resolveFirstScheduleDate(group.contribution_frequency, newPayoutDay, new Date());
+      const pendingContributions = await db.select({ id: schema.contributions.id })
+        .from(schema.contributions)
+        .where(and(
+          eq(schema.contributions.group_id, groupId),
+          eq(schema.contributions.cycle_number, group.current_cycle),
+          eq(schema.contributions.payment_status, 'scheduled'),
+        ));
+      if (pendingContributions.length) {
+        await db.update(schema.contributions)
+          .set({
+            ...(data.payout_day !== undefined ? { due_date: dueDate } : {}),
+            ...(data.contribution_amount !== undefined ? { amount_due: data.contribution_amount } : {}),
+          })
+          .where(and(
+            eq(schema.contributions.group_id, groupId),
+            eq(schema.contributions.cycle_number, group.current_cycle),
+            eq(schema.contributions.payment_status, 'scheduled'),
+          ));
+        await createAuditLog({
+          userId: leaderId, action: 'GROUP_CYCLE_RESCHEDULED', entity: 'savings_groups', entityId: groupId,
+          metadata: { newPayoutDay, newDueDate: dueDate.toISOString(), affectedContributions: pendingContributions.length },
+        });
+      }
+    }
 
     // A permanent contribution-amount or payout-date change materially
     // affects every member's expectations going forward — notify everyone,
@@ -537,15 +669,61 @@ export const groupService = {
 
     await createAuditLog({ userId: leaderId, action: 'GROUP_ACTIVATED', entity: 'savings_groups', entityId: groupId, ipAddress, metadata: { memberCount: activeMembers.length } });
 
+    // Section 7/10 — generate cycle 1's contribution schedule and rotation
+    // record synchronously, right now, instead of waiting for the nightly
+    // safety-net job (monthlyGenerateContributionSchedule) to pick it up —
+    // otherwise "Rotation — Who's Next"/"Membership Summary" show "Not yet
+    // scheduled" for up to a day after a group launches. resolveFirstScheduleDate
+    // applies the same-day charging cut-off (Section 10): if the group's
+    // payout day is today but CONTRIBUTION_SAME_DAY_CUTOFF_HOUR_UTC has
+    // already passed, the first cycle rolls to the next occurrence instead
+    // of (unrealistically) targeting today.
+    let cutoffApplied = false;
+    let firstCycleDueDate: Date | null = null;
+    try {
+      const { rotationService } = await import('./rotationService.js');
+      const { contributionService } = await import('./contributionService.js');
+      const { resolveFirstScheduleDate } = await import('../lib/payoutSchedule.js');
+
+      const reordered = await db.select().from(schema.memberships)
+        .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')));
+      const sorted = [...reordered].sort((a, b) => (a.rotation_order ?? 0) - (b.rotation_order ?? 0));
+      const recipient = sorted.find(m => m.rotation_order === 1) ?? sorted[0];
+
+      const resolved = resolveFirstScheduleDate(group.contribution_frequency, group.payout_day, new Date());
+      cutoffApplied = resolved.cutoffApplied;
+      firstCycleDueDate = resolved.dueDate;
+
+      await contributionService.generateCycleSchedule(
+        groupId, 1, resolved.dueDate,
+        sorted.map(m => ({ user_id: m.user_id, amount_due: group.contribution_amount })),
+      );
+      if (recipient) {
+        await rotationService.createForCycle(groupId, 1, recipient.user_id, resolved.dueDate);
+      }
+    } catch (error) {
+      // Never fail activation itself over schedule generation — the
+      // nightly safety-net job (monthlyGenerateContributionSchedule) will
+      // pick up any group whose current cycle still has no schedule.
+      console.error('[GroupService] Failed to synchronously generate cycle 1 schedule at activation:', error);
+    }
+
     const memberUsers = await db.select({ id: schema.users.id, email: schema.users.email })
       .from(schema.users).where(inArray(schema.users.id, memberUserIds));
+    const cutoffNote = cutoffApplied && firstCycleDueDate
+      ? ` Today's charging cut-off (${CONTRIBUTION_SAME_DAY_CUTOFF_HOUR_UTC}:00 GMT) has already passed, so the first contribution charge and payout will be on ${firstCycleDueDate.toLocaleDateString('en-GB', { timeZone: 'UTC' })} instead of today.`
+      : '';
+    // Item 9 — the activation email is the first time everyone can see the
+    // full, final roster and rules together (payout day, contribution
+    // amount, voting-out threshold, suspension threshold, payout swaps).
+    const activationSnapshot = await this.getGroupJoinSnapshot(groupId);
     for (const u of memberUsers) {
       await notificationService.create({
         userId: u.id, type: 'group_activated',
         title: 'Group Started',
-        message: `"${group.name}" has started — contributions and payout rotation are now live.`,
+        message: `"${group.name}" has started — contributions and payout rotation are now live.${cutoffNote}`,
       });
-      await sendGroupActivatedEmail(u.email, group.name);
+      await sendGroupActivatedEmail(u.email, group.name, activationSnapshot);
     }
 
     // Section D.2 — every member just became verified in an active (3+
@@ -554,7 +732,7 @@ export const groupService = {
     // safety-net job.
     await this.reconcileMemberBilling(memberUserIds);
 
-    return this.getById(groupId);
+    return { ...await this.getById(groupId), first_charge_cutoff_applied: cutoffApplied, first_contribution_date: firstCycleDueDate, first_payout_date: firstCycleDueDate };
   },
 
   /**
@@ -676,7 +854,10 @@ export const groupService = {
       const inviterRows = await db.select({ first_name: schema.users.first_name, last_name: schema.users.last_name })
         .from(schema.users).where(eq(schema.users.id, invitedBy)).limit(1);
       const inviterName = inviterRows.length ? `${inviterRows[0].first_name} ${inviterRows[0].last_name}` : 'A PadiHub member';
-      await sendGroupInvitationEmail(email, group.name, inviteLink, expiresAt, inviterName);
+      await sendGroupInvitationEmail(email, group.name, inviteLink, expiresAt, inviterName, {
+        amountDisplay: `${group.currency} ${parseFloat(group.contribution_amount).toFixed(2)}`,
+        payoutScheduleLabel: describePayoutSchedule(group.contribution_frequency, group.payout_day),
+      });
     }
     return { token, inviteLink: invitePath };
   },
@@ -752,8 +933,14 @@ export const groupService = {
    * reminder card per group must ever reach the dashboard, so this collapses
    * to the single best invite per group_id: the newest non-expired one if
    * any exists, otherwise the newest overall.
+   *
+   * `userId` is used as a defense-in-depth guard: even if a stale duplicate
+   * invitation row was left `accepted=false` for a group the member has
+   * already joined (e.g. an older re-sent invite whose token was never the
+   * one actually used to join), a group the user already has an
+   * active/pending membership in must never be shown as "pending" again.
    */
-  async getPendingInvitationsForEmail(email?: string | null) {
+  async getPendingInvitationsForEmail(email?: string | null, userId?: string | null) {
     if (!email) return [];
     const normalized = email.trim().toLowerCase();
     const rows = await db.select({
@@ -769,11 +956,20 @@ export const groupService = {
       .innerJoin(schema.savingsGroups, eq(schema.groupInvitations.group_id, schema.savingsGroups.id))
       .where(eq(schema.groupInvitations.accepted, false));
 
+    const alreadyJoinedGroupIds = userId
+      ? new Set(
+          (await db.select({ group_id: schema.memberships.group_id }).from(schema.memberships)
+            .where(and(eq(schema.memberships.user_id, userId), inArray(schema.memberships.status, ['active', 'pending']))))
+            .map(row => row.group_id),
+        )
+      : new Set<string>();
+
     const now = new Date();
     const bestPerGroup = new Map<string, typeof rows[number] & { expired: boolean }>();
     for (const row of rows) {
       if ((row.email ?? '').trim().toLowerCase() !== normalized) continue;
       if (row.group_status === 'closed' || row.group_status === 'expired') continue;
+      if (alreadyJoinedGroupIds.has(row.group_id)) continue;
 
       const candidate = { ...row, expired: now > row.expires_at };
       const existing = bestPerGroup.get(row.group_id);

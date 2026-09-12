@@ -433,7 +433,11 @@ export const TERMS_SECTIONS: TermsSection[] = [
       },
       {
         subtitle: 'Group Charge and Payout Schedule',
-        text: 'The day your group contributions are charged, and the day the group payout is sent, follow the schedule chosen by the Group Owner when the group was created. After a payout is sent, the time it takes to reach the recipient\'s bank or mobile money account depends on the payment provider handling that transfer. Please also read the payment processing and payout timing sections of these Terms.',
+        text: 'The day your group contributions are charged, and the day the group payout is sent, follow the schedule chosen by the Group Owner when the group was created. Charges and payouts are triggered at 07:00 GMT on that day, with an automatic, idempotent catch-up run at 18:00 GMT the same day that retries any accounts not yet successfully charged (for example, due to a temporary payment-provider outage) — this catch-up can never charge you twice for the same contribution. After a payout is sent, the time it takes to reach the recipient\'s bank or mobile money account depends on the payment provider handling that transfer. Please also read the payment processing and payout timing sections of these Terms.',
+      },
+      {
+        subtitle: 'Same-Day Cut-Off for New or Newly-Active Groups',
+        text: 'If a group only reaches 3 active members and starts (or a member joins an already-started group) after 17:00 GMT on a day that matches its chosen payout schedule, that day\'s contribution charge and payout are no longer attempted on that date. Instead, the first charge and payout automatically move to the same date (or day of the week) in the following week or month, and affected members are shown the revised date.',
       },
       {
         subtitle: 'Payment Failure Emails',

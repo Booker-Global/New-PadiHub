@@ -105,6 +105,34 @@ export const identityVerificationService = {
     await trustScoreService.increase(userId, TRUST_SCORE_DELTA_IDENTITY_VERIFIED, 'IDENTITY_VERIFIED');
     await createAuditLog({ userId, action: 'IDENTITY_VERIFIED', entity: 'users', entityId: userId });
 
+    // Capture the name/DOB/address Stripe Identity just verified so it can
+    // later be submitted via the API to pre-fill the member's Stripe Connect
+    // Express payout account (see StripeProvider.syncIndividualDetails) —
+    // this means Stripe's own hosted onboarding page has fewer/no personal
+    // detail questions left to show when the member connects a payout
+    // destination. Best-effort only: never blocks or fails verification.
+    if (country === 'GB' && user.stripe_identity_session_id) {
+      try {
+        const verified = await stripeIdentity.getVerifiedOutputs(user.stripe_identity_session_id);
+        if (verified?.dob || verified?.address) {
+          await db.update(schema.users)
+            .set({
+              verified_date_of_birth: verified.dob
+                ? `${verified.dob.year}-${String(verified.dob.month).padStart(2, '0')}-${String(verified.dob.day).padStart(2, '0')}`
+                : null,
+              verified_address_line1:       verified.address?.line1 ?? null,
+              verified_address_line2:       verified.address?.line2 ?? null,
+              verified_address_city:        verified.address?.city ?? null,
+              verified_address_postal_code: verified.address?.postalCode ?? null,
+              verified_address_state:       verified.address?.state ?? null,
+            })
+            .where(eq(schema.users.id, userId));
+        }
+      } catch (err) {
+        console.warn('[identityVerificationService] Could not capture verified_outputs for Connect pre-fill:', err instanceof Error ? err.message : err);
+      }
+    }
+
     // Charge the £1 surcharge (if any) on the *first* invoice before creating
     // the subscription below, so it's actually picked up by that invoice.
     if (country === 'GB' && feePence > 0) {

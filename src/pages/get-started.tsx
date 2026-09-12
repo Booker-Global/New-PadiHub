@@ -112,29 +112,6 @@ export default function GetStartedPage() {
 </Helmet>
       <h1 style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clip: 'rect(0,0,0,0)', whiteSpace: 'nowrap', border: 0 }}>Join PadiHub — Create your free account</h1>
       <AuthLayout title="Join PadiHub 🚀" subtitle="Create your free account and start your community savings journey today." step={1} totalSteps={5}>
-        {/* Social login */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 24 }}>
-          {[
-            { label: 'Sign up with Google', icon: '🔵' },
-            { label: 'Sign up with Apple', icon: '⚫' },
-            { label: 'Sign up with Microsoft', icon: '🟦' },
-          ].map(s => (
-            <button key={s.label} style={{
-              width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
-              gap: 12, padding: '12px 16px', borderRadius: 16,
-              border: '1px solid #E5E7EB', fontSize: 14, fontWeight: 600,
-              color: '#374151', background: '#fff', cursor: 'pointer', boxSizing: 'border-box'
-            }}>
-              <span>{s.icon}</span> {s.label}
-            </button>
-          ))}
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
-          <div style={{ flex: 1, height: 1, background: '#E5E7EB' }} />
-          <span style={{ fontSize: 12, color: '#9CA3AF', fontWeight: 500, whiteSpace: 'nowrap' }}>or sign up with email</span>
-          <div style={{ flex: 1, height: 1, background: '#E5E7EB' }} />
-        </div>
 
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           {error && (

@@ -1,17 +1,18 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { MotionDiv } from '@/lib/motion-safe';
+import { getValidSession } from '@/lib/session';
 import {
   Users, PiggyBank, CreditCard, AlertTriangle,
   HelpCircle, Activity, Shield, ChevronRight,
   Search, Bell, LogOut, BarChart2,
-  CheckCircle, Clock, XCircle, Eye
+  CheckCircle, Clock, XCircle, Eye, RefreshCw
 } from 'lucide-react';
 
 const fadeUp = { hidden: { opacity: 0, y: 16 }, visible: { opacity: 1, y: 0, transition: { duration: 0.4, ease: 'easeOut' as const } } };
 const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.06 } } };
 
-type Section = 'dashboard' | 'users' | 'groups' | 'subscriptions' | 'tickets' | 'audit' | 'announcements';
+type Section = 'dashboard' | 'users' | 'groups' | 'subscriptions' | 'jobs' | 'tickets' | 'audit' | 'announcements';
 
 const kpis = [
   { label: 'Total Users',           value: '2,847',  change: '+124 this month', color: '#2EAF6F', icon: Users },
@@ -57,6 +58,7 @@ const navItems: { id: Section; icon: typeof Users; label: string }[] = [
   { id: 'users',         icon: Users,        label: 'Users' },
   { id: 'groups',        icon: PiggyBank,    label: 'Groups' },
   { id: 'subscriptions', icon: CreditCard,   label: 'Subscriptions' },
+  { id: 'jobs',          icon: RefreshCw,    label: 'Scheduled Jobs' },
   { id: 'tickets',       icon: HelpCircle,   label: 'Support Tickets' },
   { id: 'audit',         icon: Activity,     label: 'Audit Log' },
   { id: 'announcements', icon: Bell,         label: 'Announcements' },
@@ -71,6 +73,8 @@ function StatusBadge({ status }: { status: string }) {
     open:      { bg: 'rgba(245,158,11,0.1)',  color: '#F59E0B', label: 'Open' },
     urgent:    { bg: 'rgba(239,68,68,0.1)',   color: '#EF4444', label: 'Urgent' },
     normal:    { bg: 'rgba(46,175,175,0.1)',  color: '#2eafaf', label: 'Normal' },
+    success:   { bg: 'rgba(46,175,111,0.1)',  color: '#2EAF6F', label: 'Success' },
+    failed:    { bg: 'rgba(239,68,68,0.1)',   color: '#EF4444', label: 'Failed' },
   };
   const s = map[status] ?? map.normal;
   return (
@@ -80,8 +84,59 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+interface JobRun {
+  id: string;
+  job_name: string;
+  status: 'success' | 'failed';
+  started_at: string;
+  completed_at: string | null;
+  error_message: string | null;
+}
+
+function formatJobTimestamp(value: string | null): string {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+function jobDisplayName(jobName: string): string {
+  return jobName.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+}
+
 export default function AdminPortal() {
   const [section, setSection] = useState<Section>('dashboard');
+  const [jobRuns, setJobRuns] = useState<JobRun[]>([]);
+  const [jobsLoading, setJobsLoading] = useState(true);
+  const [jobsError, setJobsError] = useState<string | null>(null);
+
+  const loadJobRuns = () => {
+    const session = getValidSession();
+    if (!session?.token) {
+      setJobsError('Your session has expired. Please sign in again.');
+      setJobsLoading(false);
+      return;
+    }
+    setJobsLoading(true);
+    void window.fetch('/api/system/jobs', { headers: { Authorization: 'Bearer ' + session.token } })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => null) as { success?: boolean; data?: JobRun[]; message?: string } | null;
+        if (!response.ok || !payload?.success) {
+          throw new Error(payload?.message || 'Unable to load scheduled job status right now.');
+        }
+        setJobRuns(payload.data ?? []);
+        setJobsError(null);
+      })
+      .catch((error: unknown) => {
+        setJobsError(error instanceof Error ? error.message : 'Unable to load scheduled job status right now.');
+      })
+      .finally(() => setJobsLoading(false));
+  };
+
+  useEffect(() => {
+    if (section !== 'jobs') return;
+    loadJobRuns();
+  }, [section]);
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: '#F8FAFC' }}>
@@ -360,6 +415,62 @@ export default function AdminPortal() {
                       <p className="text-sm text-gray-500 mt-1">{s.label}</p>
                     </MotionDiv>
                   ))}
+                </MotionDiv>
+              </div>
+            )}
+
+            {/* Scheduled Jobs — real data (not mock), sourced from /api/system/jobs so job
+                execution (contribution charges, payouts, subscription renewals, etc.) is
+                independently verifiable from the admin portal. */}
+            {section === 'jobs' && (
+              <div className="space-y-5">
+                <MotionDiv variants={fadeUp} className="flex items-center justify-between">
+                  <div>
+                    <h1 className="text-2xl font-extrabold text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>Scheduled Jobs</h1>
+                    <p className="text-gray-400 text-sm mt-1">Most recent run of each scheduled job — contribution charges, payouts, subscription renewals and more</p>
+                  </div>
+                  <button
+                    onClick={loadJobRuns}
+                    disabled={jobsLoading}
+                    className="flex items-center gap-2 px-4 py-2 rounded-2xl text-xs font-bold text-white flex-shrink-0 disabled:opacity-60"
+                    style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}
+                    type="button"
+                  >
+                    <RefreshCw size={14} className={jobsLoading ? 'animate-spin' : ''} /> Refresh
+                  </button>
+                </MotionDiv>
+
+                {jobsError && (
+                  <MotionDiv variants={fadeUp} className="rounded-2xl p-4 flex items-start gap-3" style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)' }}>
+                    <AlertTriangle size={18} style={{ color: '#EF4444', flexShrink: 0 }} />
+                    <p className="text-sm font-bold" style={{ color: '#EF4444' }}>{jobsError}</p>
+                  </MotionDiv>
+                )}
+
+                <MotionDiv variants={fadeUp} className="rounded-3xl bg-white overflow-hidden" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-gray-50">
+                        {['Job', 'Status', 'Started', 'Completed', 'Error'].map(h => (
+                          <th key={h} className="text-left text-xs font-bold text-gray-400 px-5 py-3">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {!jobsLoading && jobRuns.length === 0 && !jobsError && (
+                        <tr><td colSpan={5} className="px-5 py-8 text-center text-sm text-gray-400">No scheduled jobs have run yet.</td></tr>
+                      )}
+                      {jobRuns.map((run) => (
+                        <tr key={run.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50 transition-colors">
+                          <td className="px-5 py-3"><p className="text-sm font-bold text-gray-900">{jobDisplayName(run.job_name)}</p></td>
+                          <td className="px-5 py-3"><StatusBadge status={run.status} /></td>
+                          <td className="px-5 py-3"><span className="text-xs text-gray-400">{formatJobTimestamp(run.started_at)}</span></td>
+                          <td className="px-5 py-3"><span className="text-xs text-gray-400">{formatJobTimestamp(run.completed_at)}</span></td>
+                          <td className="px-5 py-3"><span className="text-xs text-red-500">{run.error_message || '—'}</span></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </MotionDiv>
               </div>
             )}

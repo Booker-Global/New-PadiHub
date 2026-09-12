@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type ReactNode } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { AnimatePresence } from 'motion/react';
+import { loadStripe } from '@stripe/stripe-js';
 import { MotionDiv } from '@/lib/motion-safe';
 import {
   AlertTriangle,
   ArrowRight,
   ArrowLeft,
   CheckCircle,
+  Clock,
   Shield,
   Camera,
   Bell,
@@ -41,14 +43,14 @@ const countryCards = [
     key: 'UK',
     flag: '🇬🇧',
     name: 'United Kingdom',
-    desc: 'Show UK pricing, billing guidance and Stripe Identity verification.',
+    desc: 'Local pricing, billing guidance and identity verification steps.',
     color: '#2EAF6F',
   },
   {
     key: 'NG',
     flag: '🇳🇬',
     name: 'Nigeria',
-    desc: 'Show Nigerian pricing, billing guidance and Account Resolve bank-account validation steps.',
+    desc: 'Local pricing, billing guidance and bank-account verification steps.',
     color: '#F59E0B',
   },
 ] as const;
@@ -144,9 +146,27 @@ type UserProfile = {
 
 type IdentityStatus = {
   verified?: boolean;
+  status?: 'not_started' | 'pending' | 'verified' | 'failed';
   verifiedAt?: string;
   sessionId?: string;
   bypass_available?: boolean;
+};
+
+type Bank = {
+  code: string;
+  name: string;
+};
+
+type StripeVerificationStartResponse = {
+  sessionId?: string;
+  clientSecret?: string;
+  url?: string;
+};
+
+type AccountResolveResponse = {
+  verified?: boolean;
+  accountName?: string;
+  message?: string;
 };
 
 type ApiResponse<T> = {
@@ -187,6 +207,14 @@ function getErrorMessage<T>(json: ApiResponse<T> | null, fallback: string) {
     ? Object.values(json.errors).flat().find((value): value is string => Boolean(value))
     : undefined;
   return firstFieldError || json?.message || fallback;
+}
+
+const STRIPE_PUBLISHABLE_KEY = (
+  import.meta.env as Record<string, string | undefined>
+).VITE_STRIPE_PUBLISHABLE_KEY?.trim() || '';
+
+function identityDelay(ms: number) {
+  return new Promise<void>((resolve) => { window.setTimeout(resolve, ms); });
 }
 
 function mapCountryCode(value?: string | null): CountryChoice {
@@ -294,9 +322,14 @@ function OnboardingShell({ children, step, totalSteps }: { children: ReactNode; 
             <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">
               Step {step} of {totalSteps - 1}
             </span>
-            <span className="text-xs font-bold" style={{ color: '#2EAF6F' }}>
-              {Math.round(((step - 1) / (totalSteps - 2)) * 100)}% complete
-            </span>
+            <div className="flex items-center gap-3">
+              <span className="text-xs font-bold" style={{ color: '#2EAF6F' }}>
+                {Math.round(((step - 1) / (totalSteps - 2)) * 100)}% complete
+              </span>
+              <Link to="/profile" className="text-xs font-bold text-gray-400 hover:text-gray-600 transition-colors underline underline-offset-2">
+                Skip to profile
+              </Link>
+            </div>
           </div>
           <ProgressBar step={step - 1} total={totalSteps - 1} />
         </div>
@@ -316,7 +349,7 @@ const slideVariants = {
 };
 
 export default function OnboardingPage() {
-  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [step, setStep] = useState(0);
   const [country, setCountry] = useState<CountryChoice>('');
   const [accountCountry, setAccountCountry] = useState<CountryChoice>('');
@@ -331,6 +364,16 @@ export default function OnboardingPage() {
   const [notifs, setNotifs] = useState<NotificationSettings>(defaultNotifications);
   const [existingPreferences, setExistingPreferences] = useState<Record<string, unknown>>({});
   const [identityVerified, setIdentityVerified] = useState(false);
+  const [identityStatus, setIdentityStatus] = useState<IdentityStatus | null>(null);
+  const [identityStartLoading, setIdentityStartLoading] = useState(false);
+  const [identityAwaitingWebhook, setIdentityAwaitingWebhook] = useState(false);
+  const [identityBanks, setIdentityBanks] = useState<Bank[]>([]);
+  const [identityBanksLoading, setIdentityBanksLoading] = useState(false);
+  const [identityBanksError, setIdentityBanksError] = useState('');
+  const [identityBankCode, setIdentityBankCode] = useState('');
+  const [identityAccountNumber, setIdentityAccountNumber] = useState('');
+  const [identityResolveLoading, setIdentityResolveLoading] = useState(false);
+  const identityPollAbortRef = useRef(false);
   const [paymentMethodVerified, setPaymentMethodVerified] = useState(false);
   const [payoutVerified, setPayoutVerified] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -411,6 +454,7 @@ export default function OnboardingPage() {
 
       syncProfileState(loadedProfile);
       setIdentityVerified(Boolean(identityJson?.data?.verified ?? loadedProfile.identity_verified));
+      setIdentityStatus(identityJson?.data ?? null);
 
       const geoCountry = geoJson?.region === 'UK' || geoJson?.region === 'NG'
         ? geoJson.region
@@ -430,12 +474,54 @@ export default function OnboardingPage() {
     void loadOnboardingState();
   }, [loadOnboardingState]);
 
+  // Returning from a step that hands off to its own page (payment method /
+  // payout destination) — passes back ?resume=<step index> so the wizard
+  // picks up exactly where the member left off instead of restarting from
+  // Welcome. Only honoured once per page load, and only after the initial
+  // profile/identity load settles. Identity verification (step 8) no longer
+  // needs this: it happens inline, without ever leaving the wizard.
+  useEffect(() => {
+    if (loading) return;
+    const resumeParam = searchParams.get('resume');
+    if (!resumeParam) return;
+    const resumeStep = Number.parseInt(resumeParam, 10);
+    if (Number.isInteger(resumeStep) && resumeStep >= 0 && resumeStep < totalSteps) {
+      setStep(resumeStep);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading]);
+
   useEffect(() => {
     setActionError('');
     setActionNotice('');
   }, [step]);
 
   const currentCountry = country || accountCountry || 'UK';
+
+  // Lazily loads the NG bank list the first time the member reaches the
+  // (inline) identity-verification step, so the dropdown is ready without
+  // ever leaving the wizard.
+  useEffect(() => {
+    if (step !== 8 || currentCountry !== 'NG' || identityBanks.length > 0 || identityBanksLoading) return;
+    const session = getValidSession();
+    if (!session?.token) return;
+
+    setIdentityBanksLoading(true);
+    window.fetch('/api/payments/banks', { headers: { Authorization: 'Bearer ' + session.token } })
+      .then(async (response) => {
+        const json = await response.json().catch(() => null) as ApiResponse<Bank[]> | null;
+        if (!response.ok) throw new Error(getErrorMessage(json, 'Could not load the list of banks.'));
+        setIdentityBanks(json?.data ?? []);
+      })
+      .catch((banksFetchError: unknown) => {
+        setIdentityBanksError(banksFetchError instanceof Error ? banksFetchError.message : 'Could not load the list of banks.');
+      })
+      .finally(() => setIdentityBanksLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, currentCountry]);
+
+  useEffect(() => () => { identityPollAbortRef.current = true; }, []);
+
   const currentPlans = useMemo(() => planCards[currentCountry], [currentCountry]);
   const hasSavedNotifications = useMemo(() => isRecord(existingPreferences.notifications), [existingPreferences]);
   const paymentSetupComplete = paymentMethodVerified && payoutVerified;
@@ -636,6 +722,7 @@ export default function OnboardingPage() {
 
       const verified = Boolean(json?.data?.verified);
       setIdentityVerified(verified);
+      setIdentityStatus(json?.data ?? null);
       if (verified) {
         setActionNotice('Identity verification confirmed. You can continue onboarding.');
       } else {
@@ -647,6 +734,126 @@ export default function OnboardingPage() {
       setIdentityLoading(false);
     }
   }, []);
+
+  // After the embedded Stripe Identity modal closes, the terminal
+  // verified/failed result only lands via webhook (not synchronously), so
+  // briefly poll for the status to move off "pending" before giving up.
+  const pollForIdentityWebhookResult = useCallback(async () => {
+    setIdentityAwaitingWebhook(true);
+    identityPollAbortRef.current = false;
+    const session = getValidSession();
+    for (let attempt = 0; attempt < 10 && !identityPollAbortRef.current; attempt++) {
+      await identityDelay(2000);
+      if (!session?.token) break;
+      const response = await window.fetch('/api/identity/status', {
+        headers: { Authorization: 'Bearer ' + session.token },
+      }).catch(() => null);
+      const json = await response?.json().catch(() => null) as ApiResponse<IdentityStatus> | null;
+      const latest = json?.data;
+      if (latest && latest.status !== 'pending') {
+        setIdentityStatus(latest);
+        setIdentityVerified(Boolean(latest.verified));
+        break;
+      }
+    }
+    setIdentityAwaitingWebhook(false);
+  }, []);
+
+  // Item 2: identity verification never leaves the onboarding wizard — the
+  // embedded Stripe Identity modal is triggered right here (never a redirect
+  // to a separate PadiHub page or a Stripe-hosted page).
+  const handleStartStripeVerification = useCallback(async () => {
+    const session = getValidSession();
+    if (!session?.token) {
+      setActionError('Please log in again before starting identity verification.');
+      return;
+    }
+    if (!STRIPE_PUBLISHABLE_KEY) {
+      setActionError('Stripe Identity is not configured. Please contact support.');
+      return;
+    }
+
+    setIdentityStartLoading(true);
+    setActionError('');
+    setActionNotice('');
+
+    try {
+      const response = await window.fetch('/api/identity/verify/start', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + session.token },
+      });
+      const json = await response.json().catch(() => null) as ApiResponse<StripeVerificationStartResponse> | null;
+      if (!response.ok) {
+        throw new Error(getErrorMessage(json, 'Could not start Stripe Identity verification.'));
+      }
+
+      const clientSecret = json?.data?.clientSecret;
+      if (!clientSecret) {
+        throw new Error('The verification service did not return a client secret.');
+      }
+
+      const stripe = await loadStripe(STRIPE_PUBLISHABLE_KEY);
+      if (!stripe) {
+        throw new Error('Could not load Stripe. Please try again.');
+      }
+
+      const result = await stripe.verifyIdentity(clientSecret);
+      if (result.error) {
+        throw new Error(result.error.message || 'Identity verification was not completed.');
+      }
+
+      setActionNotice('Verification submitted — we\'re confirming the result now. Your card will not be charged until it succeeds.');
+      await pollForIdentityWebhookResult();
+    } catch (startError) {
+      setActionError(startError instanceof Error ? startError.message : 'Could not start Stripe Identity verification.');
+    } finally {
+      setIdentityStartLoading(false);
+    }
+  }, [pollForIdentityWebhookResult]);
+
+  const handleResolveIdentityAccount = useCallback(async () => {
+    const session = getValidSession();
+    if (!session?.token) {
+      setActionError('Please log in again before validating your bank account.');
+      return;
+    }
+    if (!identityAccountNumber.trim() || !identityBankCode) {
+      setActionError('Enter your account number and select your bank to continue.');
+      return;
+    }
+
+    setIdentityResolveLoading(true);
+    setActionError('');
+    setActionNotice('');
+
+    try {
+      const response = await window.fetch('/api/identity/ng/resolve-account', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer ' + session.token,
+        },
+        body: JSON.stringify({ account_number: identityAccountNumber.trim(), bank_code: identityBankCode }),
+      });
+      const json = await response.json().catch(() => null) as ApiResponse<AccountResolveResponse> | null;
+      if (!response.ok) {
+        throw new Error(getErrorMessage(json, 'Could not validate your bank account.'));
+      }
+
+      if (json?.data?.verified) {
+        setActionNotice(json.data.message || 'Your bank account has been validated. Your subscription is now active.');
+        setIdentityVerified(true);
+        await refreshIdentityStatus();
+        return;
+      }
+
+      setActionError(json?.data?.message || 'Could not validate your bank account. Please double-check the details and try again.');
+    } catch (resolveError) {
+      setActionError(resolveError instanceof Error ? resolveError.message : 'Could not validate your bank account.');
+    } finally {
+      setIdentityResolveLoading(false);
+    }
+  }, [identityAccountNumber, identityBankCode, refreshIdentityStatus]);
 
   const handlePhotoContinue = async () => {
     if (!photoPreview || photoPreview === savedAvatar) {
@@ -1036,9 +1243,17 @@ export default function OnboardingPage() {
                 </h2>
                 <p className="text-gray-500 text-sm mb-6">Add a payment method for contributions — it&apos;s saved but not charged yet — and a payout destination for the turn when your group pays out.</p>
 
+                <div className="rounded-2xl p-4 mb-6 text-xs text-gray-600 space-y-1.5" style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
+                  <p>
+                    <strong>{currentCountry === 'NG' ? 'Flutterwave' : 'Stripe'}</strong> handles both your card and payout destination for {currentCountry === 'NG' ? 'Nigerian' : 'UK'} members.
+                  </p>
+                  <p>Neither is charged today — your card is only charged once you&apos;re an active member of a group with at least 3 members, and then on the same day every month after that.</p>
+                  <p>If a monthly charge fails, we retry automatically for up to 72 hours with email updates at each attempt before any suspension applies.</p>
+                </div>
+
                 <div className="grid gap-4 mb-8">
                   <Link
-                    to="/payments/methods"
+                    to={`/payments/methods?next=${encodeURIComponent('/onboarding?resume=3')}`}
                     className="rounded-2xl p-5 bg-white transition-all hover:opacity-90"
                     style={{ border: '1px solid #E5E7EB' }}
                   >
@@ -1063,7 +1278,7 @@ export default function OnboardingPage() {
                   </Link>
 
                   <Link
-                    to="/payments/payout"
+                    to={`/payments/payout?next=${encodeURIComponent('/onboarding?resume=3')}`}
                     className="rounded-2xl p-5 bg-white transition-all hover:opacity-90"
                     style={{ border: '1px solid #E5E7EB' }}
                   >
@@ -1374,60 +1589,109 @@ export default function OnboardingPage() {
                   <div className="flex items-center justify-between gap-3 mb-4">
                     <div>
                       <p className="text-xs text-gray-500 mb-1">Verification status</p>
-                      <p className="font-bold text-gray-900">{identityVerified ? 'Verified' : 'Still needed'}</p>
+                      <p className="font-bold text-gray-900">{identityVerified ? 'Verified' : identityStatus?.status === 'pending' ? 'Pending' : identityStatus?.status === 'failed' ? 'Needs another attempt' : 'Still needed'}</p>
                     </div>
                     <span
-                      className="text-xs font-bold px-3 py-1 rounded-full"
+                      className="text-xs font-bold px-3 py-1 rounded-full inline-flex items-center gap-1"
                       style={{
-                        color: identityVerified ? '#2EAF6F' : '#F59E0B',
-                        background: identityVerified ? 'rgba(46,175,111,0.12)' : 'rgba(245,158,11,0.12)',
+                        color: identityVerified ? '#2EAF6F' : identityStatus?.status === 'failed' ? '#EF4444' : '#F59E0B',
+                        background: identityVerified ? 'rgba(46,175,111,0.12)' : identityStatus?.status === 'failed' ? 'rgba(239,68,68,0.12)' : 'rgba(245,158,11,0.12)',
                       }}
                     >
+                      {identityStatus?.status === 'pending' && !identityVerified && <Clock size={12} />}
                       {identityVerified ? 'Complete' : currentCountry === 'NG' ? 'Account Resolve required' : 'Stripe Identity required'}
                     </span>
                   </div>
-                  <div className="space-y-3 text-sm text-gray-600">
+                  <div className="space-y-3 text-sm text-gray-600 mb-4">
                     <div className="flex items-start gap-2">
                       <CheckCircle size={16} style={{ color: '#2EAF6F', flexShrink: 0 }} />
-                      <p>{currentCountry === 'NG' ? 'Use the secure Account Resolve flow to confirm your bank account.' : 'Use the secure Stripe Identity flow to verify your documents.'}</p>
+                      <p>{currentCountry === 'NG' ? 'Use the secure Account Resolve flow to confirm your bank account.' : 'A secure verification window opens right here — you never leave PadiHub.'}</p>
                     </div>
                     <div className="flex items-start gap-2">
                       <CheckCircle size={16} style={{ color: '#2EAF6F', flexShrink: 0 }} />
                       <p>Your subscription only starts, and your card/account is only charged, once verification succeeds.</p>
                     </div>
                   </div>
+
+                  {!identityVerified && (
+                    currentCountry === 'NG' ? (
+                      <div className="space-y-3">
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-500 mb-1">Bank</label>
+                          <select
+                            value={identityBankCode}
+                            onChange={(event) => { setIdentityBankCode(event.target.value); setActionError(''); }}
+                            disabled={identityBanksLoading || Boolean(identityBanksError)}
+                            className="w-full rounded-xl px-3.5 py-2.5 text-sm"
+                            style={{ border: '1px solid #E5E7EB' }}
+                          >
+                            <option value="">
+                              {identityBanksLoading ? 'Loading banks…' : identityBanksError ? 'Could not load banks' : 'Select your bank'}
+                            </option>
+                            {identityBanks.map((bank) => (
+                              <option key={bank.code} value={bank.code}>{bank.name}</option>
+                            ))}
+                          </select>
+                          {identityBanksError && <p className="text-xs mt-1" style={{ color: '#EF4444' }}>{identityBanksError}</p>}
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-500 mb-1">Account number</label>
+                          <input
+                            value={identityAccountNumber}
+                            onChange={(event) => {
+                              setIdentityAccountNumber(event.target.value.replace(/\D/g, '').slice(0, 10));
+                              setActionError('');
+                            }}
+                            inputMode="numeric"
+                            maxLength={10}
+                            className="w-full rounded-xl px-3.5 py-2.5 text-sm"
+                            style={{ border: '1px solid #E5E7EB' }}
+                            placeholder="Enter your account number"
+                          />
+                        </div>
+                        <Button
+                          onClick={() => void handleResolveIdentityAccount()}
+                          disabled={identityResolveLoading || !identityAccountNumber.trim() || !identityBankCode}
+                          className="w-full rounded-2xl py-3.5 font-bold gap-2"
+                          style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', color: '#fff' }}
+                        >
+                          {identityResolveLoading ? 'Validating…' : identityStatus?.status === 'failed' ? 'Try again' : 'Validate & Continue'}
+                        </Button>
+                      </div>
+                    ) : (
+                      <Button
+                        onClick={() => void handleStartStripeVerification()}
+                        disabled={identityStartLoading || identityAwaitingWebhook}
+                        className="w-full rounded-2xl py-3.5 font-bold gap-2"
+                        style={{ background: 'linear-gradient(135deg, #2eafaf, #1f8f8f)', color: '#fff' }}
+                      >
+                        {identityAwaitingWebhook ? 'Confirming result…' : identityStartLoading ? 'Opening verification…' : identityStatus?.status === 'failed' || identityStatus?.sessionId ? 'Try verification again' : 'Verify with Stripe Identity'}
+                      </Button>
+                    )
+                  )}
                 </div>
 
-                <div className="flex flex-col gap-3">
-                  <Button
-                    onClick={() => navigate('/verify-identity')}
-                    className="w-full rounded-2xl py-4 font-bold gap-2"
-                    style={{ background: 'linear-gradient(135deg, #2eafaf, #1f8f8f)', color: '#fff' }}
-                  >
-                    Go to verification <ArrowRight size={18} />
+                <div className="flex gap-3">
+                  <Button variant="outline" onClick={prevStep} className="rounded-2xl px-5 gap-2 border-gray-200">
+                    <ArrowLeft size={16} />
                   </Button>
-                  <div className="flex gap-3">
-                    <Button variant="outline" onClick={prevStep} className="rounded-2xl px-5 gap-2 border-gray-200">
-                      <ArrowLeft size={16} />
-                    </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => void refreshIdentityStatus()}
+                    disabled={identityLoading}
+                    className="flex-1 rounded-2xl py-4 font-semibold border-gray-200 text-gray-600"
+                  >
+                    {identityLoading ? 'Checking…' : 'Check status'}
+                  </Button>
+                  {identityVerified && (
                     <Button
-                      variant="outline"
-                      onClick={() => void refreshIdentityStatus()}
-                      disabled={identityLoading}
-                      className="flex-1 rounded-2xl py-4 font-semibold border-gray-200 text-gray-600"
+                      onClick={nextStep}
+                      className="flex-1 rounded-2xl py-4 font-bold gap-2"
+                      style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', color: '#fff' }}
                     >
-                      {identityLoading ? 'Checking…' : 'Check status'}
+                      Continue <ArrowRight size={18} />
                     </Button>
-                    {identityVerified && (
-                      <Button
-                        onClick={nextStep}
-                        className="flex-1 rounded-2xl py-4 font-bold gap-2"
-                        style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', color: '#fff' }}
-                      >
-                        Continue <ArrowRight size={18} />
-                      </Button>
-                    )}
-                  </div>
+                  )}
                 </div>
               </div>
             )}

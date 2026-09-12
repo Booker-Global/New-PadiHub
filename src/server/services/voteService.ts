@@ -226,6 +226,18 @@ export const voteService = {
       await db.insert(schema.voteResponses).values({ id: uuidv4(), vote_id: id, member_id: data.proposer_id, decision: 'approve' });
     }
 
+    // A unanimous vote where the auto-approved proposer is the group's ONLY
+    // active member (e.g. a brand-new group whose leader is proposing the
+    // very first member admission) is already unanimous the instant it's
+    // created — resolve it immediately rather than leaving it "open" to
+    // wait on votes that will never come, or expiring 48h later.
+    if (!(data.target_member_id && data.proposal_type === 'payout_swap')) {
+      const freshVote = await db.select().from(schema.votes).where(eq(schema.votes.id, id)).limit(1);
+      if (freshVote.length) await this._tallyAndMaybeClose(freshVote[0]);
+    }
+    const stillOpen = (await db.select({ status: schema.votes.status }).from(schema.votes).where(eq(schema.votes.id, id)).limit(1))[0]?.status === 'open';
+    if (!stillOpen) return id;
+
     const groupRows = await db.select({ name: schema.savingsGroups.name }).from(schema.savingsGroups)
       .where(eq(schema.savingsGroups.id, data.group_id)).limit(1);
     const groupName = groupRows.length ? groupRows[0].name : 'your group';

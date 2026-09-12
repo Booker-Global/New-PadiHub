@@ -18,11 +18,20 @@ const baseGroupSchema = z.object({
   // members to ever launch, so a smaller group size can never be valid.
   maximum_members:        z.number().int().min(GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH).max(GROUP_MAX_MEMBERS),
   min_trust_score:        z.number().int().min(0).max(100).optional(),
+  // "Available to public" toggle — see schema.ts savingsGroups.is_public
+  // doc comment. Optional at both create (defaults to true in
+  // groupService.create) and update (only changes when explicitly sent).
+  is_public:              z.boolean().optional(),
   rotation_method:        z.enum(['trust_score', 'random']).transform(value => value === 'trust_score' ? 'manual' : value),
   strike_threshold:       z.number().int().min(1).optional(),
   suspension_threshold:   z.number().int().min(1).optional(),
   voting_threshold:       z.number().int().min(51).max(100).optional(),
   allow_payout_swaps:     z.boolean().optional(),
+  // "Require voting for key decisions" toggle — see schema.ts
+  // savingsGroups.requires_admission_vote doc comment. When true, all join
+  // requests must go through a unanimous member_admission vote rather than
+  // the leader deciding unilaterally.
+  requires_admission_vote: z.boolean().optional(),
   // Group lifecycle length, chosen once at creation (see schema.ts
   // savingsGroups.group_duration_type doc comment).
   group_duration_type:      z.enum(['fixed', 'indefinite']).optional().default('indefinite'),
@@ -87,7 +96,7 @@ const inviteSchema = z.object({
 export const groupController = {
   list: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const data = await groupService.list({ status: qsOpt(req.query.status) });
+      const data = await groupService.list(req.user!.userId, { status: qsOpt(req.query.status) });
       res.json({ success: true, data });
     } catch (e) { next(e); }
   },
@@ -113,7 +122,7 @@ export const groupController = {
         const countryParam = (qsOpt(req.query.country) ?? 'GB').toUpperCase();
         country = countryParam === 'NG' ? 'NG' : 'GB';
       }
-      const data = await groupService.search(country, qsOpt(req.query.query));
+      const data = await groupService.search(country, qsOpt(req.query.query), req.user?.userId);
       res.json({ success: true, data });
     } catch (e) { next(e); }
   },

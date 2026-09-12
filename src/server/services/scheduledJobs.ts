@@ -16,7 +16,7 @@ import { groupService } from './groupService.js';
 import { chargeContributionForUser } from '../controllers/paymentController.js';
 import { getFlutterwaveProvider } from '../integrations/payments/PaymentProviderFactory.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
-import { computeNextPayoutDate } from '../lib/payoutSchedule.js';
+import { resolveFirstScheduleDate } from '../lib/payoutSchedule.js';
 import {
   SUBSCRIPTION_TIERS, isSubscriptionTierKey, getTierMonthlyPrice, formatTierPrice,
   GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH, GROUP_STUCK_BELOW_MIN_EXPIRY_DAYS, GROUP_STUCK_EXPIRY_REMINDER_DAYS_BEFORE,
@@ -31,6 +31,7 @@ import {
   sendGroupExpiredEmail,
   sendGroupExpiryReminderEmail,
   sendSubscriptionPaymentFailedEmail,
+  sendSubscriptionRenewalChargedEmail,
   sendPendingChargeGroupJoinReminderEmail,
   sendPendingChargeExpiredEmail,
   sendIncompleteProfileReminderEmail,
@@ -153,6 +154,26 @@ export async function dailyTrustScoreUpdates(): Promise<void> {
         eq(schema.contributions.payment_status, 'scheduled'),
         lte(schema.contributions.due_date, now),
       ));
+  });
+}
+
+/**
+ * Idempotent catch-up run for the primary 07:00 UTC charge trigger.
+ *
+ * Runs a few hours later (18:00 UTC) purely to retry accounts that were not
+ * yet successfully charged in the morning — e.g. a transient provider outage,
+ * or a contribution that only became "due" mid-morning because its group was
+ * activated after the primary run. It simply re-invokes the same
+ * scheduled→due flip and charge-due-contributions logic, both of which are
+ * naturally idempotent (they only ever act on rows still in 'scheduled'/'due'
+ * status — a contribution already charged via markPaid/markFailed is no
+ * longer in that state), so re-running this later in the day can never
+ * double-charge a member who was already successfully charged this morning.
+ */
+export async function dailyChargeCatchUp(): Promise<void> {
+  await runJob('daily_charge_catch_up', async () => {
+    await dailyTrustScoreUpdates();
+    await dailyAutoChargeDueContributions();
   });
 }
 
@@ -604,7 +625,7 @@ export async function monthlyGenerateContributionSchedule(): Promise<void> {
         .limit(1);
       if (existing.length) continue;
 
-      const dueDate = computeNextPayoutDate(group.contribution_frequency, group.payout_day, new Date());
+      const { dueDate } = resolveFirstScheduleDate(group.contribution_frequency, group.payout_day, new Date());
       await contributionService.generateCycleSchedule(
         group.id,
         group.current_cycle,
@@ -628,7 +649,18 @@ export async function monthlyGenerateContributionSchedule(): Promise<void> {
   });
 }
 
-/** Advance rotation for groups whose current cycle is fully paid. */
+/**
+ * Safety-net sweep for groups whose current cycle is fully paid but haven't
+ * been advanced/paid out yet. Section 7/10: the PRIMARY trigger is now
+ * inline — contributionService.markPaid() calls
+ * rotationService.advanceIfCycleComplete() itself the moment the last
+ * contribution in a cycle clears, so the payout goes out the SAME DAY as
+ * the charge in the normal case. This daily run only catches the cases that
+ * inline trigger could have missed (a transient error right after the last
+ * charge, a process restart mid-request, etc.) — advanceIfCycleComplete is
+ * idempotent/concurrency-safe, so calling it again here for an
+ * already-advanced or already-in-flight cycle is always a safe no-op.
+ */
 export async function monthlyAdvanceRotation(): Promise<void> {
   await runJob('monthly_advance_rotation', async () => {
     const activeGroups = await db.select().from(schema.savingsGroups)
@@ -636,19 +668,8 @@ export async function monthlyAdvanceRotation(): Promise<void> {
 
     let advanced = 0;
     for (const group of activeGroups) {
-      const cycleContributions = await db.select().from(schema.contributions)
-        .where(and(
-          eq(schema.contributions.group_id, group.id),
-          eq(schema.contributions.cycle_number, group.current_cycle),
-        ));
-
-      const allPaid = cycleContributions.length > 0 &&
-        cycleContributions.every(c => c.payment_status === 'paid');
-
-      if (allPaid) {
-        await rotationService.advance(group.id, 'system');
-        advanced++;
-      }
+      const result = await rotationService.advanceIfCycleComplete(group.id, group.current_cycle);
+      if (result) advanced++;
     }
     console.log(`[Job] Rotation advance: ${advanced}/${activeGroups.length} active groups advanced.`);
   });
@@ -732,6 +753,16 @@ export async function monthlySubscriptionRenewalCharge(): Promise<void> {
             .set({ billing_status: 'active', renewal_date: nextRenewalDate })
             .where(eq(schema.subscriptions.id, sub.id));
           await db.update(schema.users).set({ subscription_status: 'active' }).where(eq(schema.users.id, user.id));
+          // Item 8.d — confirm every successful renewal charge by email so
+          // it's traceable alongside its Billing History entry, matching
+          // the same guarantee now given to first-charges-on-join and
+          // Stripe renewals (see webhookStripeController.ts).
+          await sendSubscriptionRenewalChargedEmail(
+            user.email,
+            isSubscriptionTierKey(user.subscription_tier) ? SUBSCRIPTION_TIERS[user.subscription_tier].name : '',
+            isSubscriptionTierKey(user.subscription_tier) ? formatTierPrice(user.subscription_tier, user.country) : '',
+            nextRenewalDate.toLocaleDateString('en-GB'),
+          );
         } else {
           await db.update(schema.subscriptions).set({ billing_status: 'past_due' }).where(eq(schema.subscriptions.id, sub.id));
           await db.update(schema.users).set({ subscription_status: 'expired' }).where(eq(schema.users.id, user.id));

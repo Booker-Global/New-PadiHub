@@ -15,6 +15,7 @@ import {
   Mail,
   Eye,
   Sparkles,
+  Globe,
 } from 'lucide-react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { Button } from '@/components/ui/button';
@@ -56,6 +57,7 @@ interface GroupData {
   votingRequired: boolean;
   allowSwaps: boolean;
   minTrustScore: number;
+  isPublic: boolean;
   inviteEmails: string;
   durationType: 'fixed' | 'indefinite';
   durationRotations: number;
@@ -105,6 +107,7 @@ const defaultData: GroupData = {
   votingRequired: false,
   allowSwaps: true,
   minTrustScore: 0,
+  isPublic: true,
   inviteEmails: '',
   durationType: 'indefinite',
   durationRotations: 6,
@@ -390,6 +393,8 @@ export default function CreateGroupWizard() {
           suspension_threshold: data.maxMissed,
           allow_payout_swaps: data.allowSwaps,
           min_trust_score: data.minTrustScore || undefined,
+          is_public: data.isPublic,
+          requires_admission_vote: data.votingRequired,
           group_duration_type: data.durationType,
           group_duration_rotations: data.durationType === 'fixed' ? data.durationRotations : undefined,
         }),
@@ -836,7 +841,7 @@ export default function CreateGroupWizard() {
                           <Shield size={16} style={{ color: '#8B5CF6' }} />
                           <div>
                             <p className="font-bold text-sm text-gray-900">Require voting for key decisions</p>
-                            <p className="text-xs text-gray-400">Members vote on removing members, admitting new ones and payout swaps</p>
+                            <p className="text-xs text-gray-400">Every new join request must be unanimously approved by all active members via a group vote, instead of you deciding alone</p>
                           </div>
                         </div>
                       </OptionCard>
@@ -846,6 +851,19 @@ export default function CreateGroupWizard() {
                           <div>
                             <p className="font-bold text-sm text-gray-900">Allow payout swap requests</p>
                             <p className="text-xs text-gray-400">Members can request to swap their payout position with another member</p>
+                          </div>
+                        </div>
+                      </OptionCard>
+                      <OptionCard selected={data.isPublic} onClick={() => set('isPublic', !data.isPublic)}>
+                        <div className="flex items-center gap-3">
+                          <Globe size={16} style={{ color: '#2eafaf' }} />
+                          <div>
+                            <p className="font-bold text-sm text-gray-900">Available to public</p>
+                            <p className="text-xs text-gray-400">
+                              {data.isPublic
+                                ? 'Shown in group search — anyone in your country can request to join'
+                                : 'Private — hidden from search, only people you invite directly can join'}
+                            </p>
                           </div>
                         </div>
                       </OptionCard>
@@ -934,6 +952,8 @@ export default function CreateGroupWizard() {
                       { icon: Shield, label: 'Max missed payments', value: `${data.maxMissed} missed` },
                       { icon: Eye, label: 'Grace period', value: `${FIXED_GRACE_PERIOD_HOURS} hours (fixed)` },
                       { icon: Shield, label: 'Minimum Trust Score™ to join', value: data.minTrustScore > 0 ? `${data.minTrustScore}+ (${minTrustTierLabel})` : 'None' },
+                      { icon: Globe, label: 'Available to public', value: data.isPublic ? 'Yes — shown in search' : 'No — invite only' },
+                      { icon: Shield, label: 'Admission voting', value: data.votingRequired ? 'Required — all members must agree' : 'Not required — you decide' },
                       { icon: RotateCcw, label: 'Group lifecycle', value: data.durationType === 'fixed' ? `Closes after ${data.durationRotations} complete rotation(s)` : 'Indefinite (until you close it)' },
                     ].map(row => (
                       <div key={row.label} className="flex items-center justify-between py-2.5 border-b border-gray-50 last:border-0 gap-4">
@@ -944,6 +964,14 @@ export default function CreateGroupWizard() {
                         <span className="text-sm font-bold text-gray-900 text-right">{row.value}</span>
                       </div>
                     ))}
+                    <p className="text-xs text-gray-400 mt-1">
+                      Once this group is active (has at least 3 verified members), contributions are
+                      charged automatically and payouts are routed automatically — no manual
+                      "make a payment" step needed. Charges run at 07:00 GMT on the payout day, with
+                      an 18:00 GMT catch-up retry the same day. If the group only becomes active after
+                      17:00 GMT on a day matching its payout schedule, the first contribution charge and
+                      payout will instead run on the same date/day next week or month.
+                    </p>
                   </div>
                 )}
               </MotionDiv>

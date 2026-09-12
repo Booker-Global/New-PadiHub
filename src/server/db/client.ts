@@ -130,6 +130,12 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
     { column: 'onboarding_incomplete_reminder_last_sent_at', sqlType: 'TIMESTAMP NULL' },
     { column: 'resubscribe_reminder_last_sent_at', sqlType: 'TIMESTAMP NULL' },
     { column: 'vote_removed_count', sqlType: 'INT NOT NULL DEFAULT 0' },
+    { column: 'verified_date_of_birth',       sqlType: 'VARCHAR(10) NULL' },
+    { column: 'verified_address_line1',       sqlType: 'VARCHAR(255) NULL' },
+    { column: 'verified_address_line2',       sqlType: 'VARCHAR(255) NULL' },
+    { column: 'verified_address_city',        sqlType: 'VARCHAR(100) NULL' },
+    { column: 'verified_address_postal_code', sqlType: 'VARCHAR(20) NULL' },
+    { column: 'verified_address_state',       sqlType: 'VARCHAR(100) NULL' },
   ],
   savings_groups: [
     { column: 'description',     sqlType: 'TEXT NULL' },
@@ -143,6 +149,8 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
     { column: 'group_duration_rotations', sqlType: 'INT NULL' },
     { column: 'full_rotations_completed', sqlType: 'INT NOT NULL DEFAULT 0' },
     { column: 'closure_scheduled',        sqlType: 'BOOLEAN NOT NULL DEFAULT false' },
+    { column: 'is_public',                sqlType: 'BOOLEAN NOT NULL DEFAULT true' },
+    { column: 'requires_admission_vote',  sqlType: 'BOOLEAN NOT NULL DEFAULT false' },
   ],
   contributions: [
     { column: 'amount_paid',        sqlType: 'DECIMAL(12,2) NULL' },

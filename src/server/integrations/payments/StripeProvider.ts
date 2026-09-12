@@ -162,10 +162,53 @@ export class StripeProvider implements IPaymentProvider {
     await stripe.subscriptions.update(subscriptionId, { pause_collection: { behavior: 'void' } });
   }
 
-  /** Section D.2 — resume real Stripe collection once the member is verified in an active (3+ member) group. */
+  /**
+   * Section D.2/1/5 — resume real Stripe collection once the member is
+   * verified in an active (3+ member) group, AND immediately charge the
+   * card now rather than waiting for whatever date the subscription's
+   * original (deferred, paused-at-creation) billing cycle anchor happens
+   * to land on. Clearing pause_collection alone only resumes Stripe's
+   * normal automatic billing at its existing cycle date — it does NOT
+   * trigger a charge today, which previously left billing_status stuck
+   * unset/paused indefinitely for anyone who joined an active group
+   * between billing cycle anchors. Creating + paying an out-of-cycle
+   * invoice for the current subscription forces that immediate charge.
+   * The actual success/failure is reported via Stripe's usual
+   * invoice.payment_succeeded/invoice.payment_failed webhooks (handled in
+   * webhookStripeController.ts) exactly like any other renewal charge, so
+   * this method deliberately does not update any local billing_status
+   * itself — callers must treat this as "charge attempted", not "charge
+   * confirmed".
+   */
   async resumeBilling(subscriptionId: string): Promise<void> {
     const stripe = getStripe();
     await stripe.subscriptions.update(subscriptionId, { pause_collection: null });
+
+    const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+    const customerId = typeof subscription.customer === 'string' ? subscription.customer : subscription.customer.id;
+
+    let invoice: Stripe.Invoice;
+    try {
+      invoice = await stripe.invoices.create({
+        customer: customerId,
+        subscription: subscriptionId,
+        collection_method: 'charge_automatically',
+        description: 'PadiHub monthly subscription — first charge on joining an active group',
+      }, { idempotencyKey: `sub-first-charge-invoice-${subscriptionId}` });
+    } catch (error) {
+      console.error(`[StripeProvider] Failed to create immediate first-charge invoice for subscription ${subscriptionId}:`, error);
+      return;
+    }
+    if (!invoice.id) return;
+
+    try {
+      await stripe.invoices.pay(invoice.id, undefined, { idempotencyKey: `sub-first-charge-pay-${subscriptionId}` });
+    } catch (error) {
+      // Card declined etc. — leave it to Stripe's invoice.payment_failed
+      // webhook (already wired to billing_status='past_due' + the
+      // payment-failed email/retry-suspension flow) to record the outcome.
+      console.error(`[StripeProvider] Immediate first-charge invoice ${invoice.id} for subscription ${subscriptionId} failed to pay:`, error);
+    }
   }
 
   async handleWebhook(params: { rawBody: Buffer; signature: string }): Promise<WebhookResult> {
@@ -207,6 +250,13 @@ export class StripeProvider implements IPaymentProvider {
   async createConnectedAccount(params: {
     userId: string; email: string; country?: string;
     firstName?: string; lastName?: string;
+    // Optional verified DOB/address (from Stripe Identity's verified_outputs
+    // — see identityVerificationService.completeIdentityVerification) to
+    // pre-fill the individual's personal details at account-creation time, so
+    // Stripe's hosted onboarding page has fewer of these questions left to
+    // ask, without changing what data is collected or who collects it.
+    dob?: { day: number; month: number; year: number };
+    address?: { line1?: string; line2?: string; city?: string; postalCode?: string; state?: string };
   }): Promise<{ accountId: string }> {
     const stripe = getStripe();
     const account = await stripe.accounts.create({
@@ -218,12 +268,66 @@ export class StripeProvider implements IPaymentProvider {
         email:      params.email,
         first_name: params.firstName,
         last_name:  params.lastName,
+        ...(params.dob ? { dob: params.dob } : {}),
+        ...(params.address ? {
+          address: {
+            line1:       params.address.line1,
+            line2:       params.address.line2,
+            city:        params.address.city,
+            postal_code: params.address.postalCode,
+            state:       params.address.state,
+            country:     params.country || 'GB',
+          },
+        } : {}),
       },
+      // Pre-fill the business website with PadiHub's own site — Stripe's
+      // hosted "Business details" step only asks for this when it's
+      // missing, so setting it up front skips a confusing question that
+      // has nothing to do with the member's own business.
+      business_profile: { url: 'https://www.padihub.com' },
       metadata: { padihub_user_id: params.userId },
       capabilities: { transfers: { requested: true } },
     });
 
     return { accountId: account.id };
+  }
+
+  /**
+   * Push already-verified DOB/address (captured from Stripe Identity's
+   * verified_outputs) onto an EXISTING connected account, so an account
+   * created before this data was available (or before the member's identity
+   * was verified) still gets pre-filled before the next Account Link is
+   * generated — same self-heal pattern as the business_profile.url fix in
+   * getOutstandingRequirements below. Best-effort: swallows errors (e.g. the
+   * account already has different values on file and Stripe rejects the
+   * update) rather than blocking payout setup on it.
+   */
+  async syncIndividualDetails(accountId: string, params: {
+    dob?: { day: number; month: number; year: number };
+    address?: { line1?: string; line2?: string; city?: string; postalCode?: string; state?: string };
+    country?: string;
+  }): Promise<void> {
+    if (!params.dob && !params.address) return;
+    const stripe = getStripe();
+    try {
+      await stripe.accounts.update(accountId, {
+        individual: {
+          ...(params.dob ? { dob: params.dob } : {}),
+          ...(params.address ? {
+            address: {
+              line1:       params.address.line1,
+              line2:       params.address.line2,
+              city:        params.address.city,
+              postal_code: params.address.postalCode,
+              state:       params.address.state,
+              country:     params.country || 'GB',
+            },
+          } : {}),
+        },
+      });
+    } catch (err) {
+      console.warn('[StripeProvider] Could not pre-fill individual details on connected account:', err instanceof Error ? err.message : err);
+    }
   }
 
   /**
@@ -262,24 +366,37 @@ export class StripeProvider implements IPaymentProvider {
    * verification) are still outstanding on a connected account. `nextPath` is
    * an optional, already-sanitized return path (e.g. back to an invite's join
    * page) appended to both URLs so the member isn't stranded on /payments/payout
-   * after Stripe's hosted flow — see sanitizeReturnPath() in paymentController. */
+   * after Stripe's hosted flow — see sanitizeReturnPath() in paymentController.
+   *
+   * `for_account=<accountId>` is also stamped onto both URLs so the return
+   * page can detect a "wrong browser session" mid-flow (e.g. a different
+   * PadiHub account got logged into the same browser/tab while the member was
+   * on Stripe's hosted page) and warn instead of silently rendering whichever
+   * account happens to be logged in when the redirect lands. */
   async createOnboardingLink(accountId: string, mode: 'add' | 'change' = 'add', nextPath?: string): Promise<{ onboardingUrl: string }> {
     const stripe = getStripe();
     const nextParam = nextPath ? `&next=${encodeURIComponent(nextPath)}` : '';
+    const acctParam = `&for_account=${encodeURIComponent(accountId)}`;
     const accountLink = await stripe.accountLinks.create({
       account:     accountId,
-      refresh_url: `${process.env.APP_URL ?? 'https://padihub.com'}/payments/payout?stripe_refresh=1&payout_mode=${mode}${nextParam}`,
-      return_url:  `${process.env.APP_URL ?? 'https://padihub.com'}/payments/payout?stripe_connected=1&payout_mode=${mode}${nextParam}`,
+      refresh_url: `${process.env.APP_URL ?? 'https://padihub.com'}/payments/payout?stripe_refresh=1&payout_mode=${mode}${nextParam}${acctParam}`,
+      return_url:  `${process.env.APP_URL ?? 'https://padihub.com'}/payments/payout?stripe_connected=1&payout_mode=${mode}${nextParam}${acctParam}`,
       type:        'account_onboarding',
     });
     return { onboardingUrl: accountLink.url };
   }
 
   /** Whether a connected account still has outstanding onboarding requirements
-   * (e.g. identity verification) that only Stripe's hosted flow can collect. */
+   * (e.g. identity verification) that only Stripe's hosted flow can collect.
+   * Also self-heals accounts created before business_profile.url was added to
+   * createConnectedAccount() above, so pre-existing connected accounts skip
+   * Stripe's "Business details → website" question too. */
   async getOutstandingRequirements(accountId: string): Promise<string[]> {
     const stripe = getStripe();
     const account = await stripe.accounts.retrieve(accountId);
+    if (!account.business_profile?.url) {
+      await stripe.accounts.update(accountId, { business_profile: { url: 'https://www.padihub.com' } });
+    }
     return [
       ...(account.requirements?.currently_due ?? []),
       ...(account.requirements?.past_due ?? []),

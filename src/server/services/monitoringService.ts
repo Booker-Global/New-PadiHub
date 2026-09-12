@@ -114,6 +114,19 @@ export const monitoringService = {
     });
   },
 
+  /**
+   * Has this job already been recorded (any outcome) since the given
+   * timestamp? Used by the in-process scheduler fallback (see
+   * ../lib/inProcessScheduler.ts) to avoid re-firing a job that already ran
+   * for the current day/week/month period — e.g. after a mid-slot restart.
+   */
+  async hasRunSince(jobName: string, since: Date): Promise<boolean> {
+    const rows = await db.select({ id: schema.jobRuns.id }).from(schema.jobRuns)
+      .where(and(eq(schema.jobRuns.job_name, jobName), gte(schema.jobRuns.started_at, since)))
+      .limit(1);
+    return rows.length > 0;
+  },
+
   /** Get last run per job */
   async getJobStatuses() {
     const runs = await db.select().from(schema.jobRuns)

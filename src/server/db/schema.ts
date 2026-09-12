@@ -58,6 +58,19 @@ export const users = mysqlTable('users', {
   // Resolve carries no member-facing fee).
   identity_verification_fee_amount: decimal('identity_verification_fee_amount', { precision: 12, scale: 2 }),
   stripe_identity_session_id:  varchar('stripe_identity_session_id', { length: 255 }),
+  // Verified name/DOB/address captured from Stripe Identity's completed
+  // VerificationSession (verified_outputs — GB only). Used SOLELY to
+  // pre-fill the member's Stripe Connect Express payout account via the API
+  // (see StripeProvider.createConnectedAccount/syncIndividualDetails) so
+  // Stripe's hosted onboarding page has fewer/no personal-detail questions
+  // left to ask — never displayed back to the member and never used in
+  // place of the identity verification result itself.
+  verified_date_of_birth:      varchar('verified_date_of_birth', { length: 10 }),
+  verified_address_line1:      varchar('verified_address_line1', { length: 255 }),
+  verified_address_line2:      varchar('verified_address_line2', { length: 255 }),
+  verified_address_city:       varchar('verified_address_city', { length: 100 }),
+  verified_address_postal_code: varchar('verified_address_postal_code', { length: 20 }),
+  verified_address_state:      varchar('verified_address_state', { length: 100 }),
   // TODO(NG paid KYC tier): reserved for a future PAID full BVN identity-
   // verification tier for Nigeria (distinct from the free interim
   // Flutterwave Account Resolve bank-account-validation check — see
@@ -151,6 +164,13 @@ export const savingsGroups = mysqlTable('savings_groups', {
   // this group — set by the creator at group-creation time (0 = no minimum).
   // Enforced in membershipService.requestToJoin().
   min_trust_score:          int('min_trust_score').notNull().default(0),
+  // "Available to public" toggle, set at creation and editable by the
+  // Creator afterwards. true (default): the group appears in group search
+  // results and strangers can submit a self-service "request to join" (see
+  // groupService.search() and membershipService.join()). false: the group
+  // is private — it's hidden from search and self-service join requests are
+  // rejected; the ONLY way to join is a direct invite from the Creator.
+  is_public:                boolean('is_public').notNull().default(true),
   rotation_method:          mysqlEnum('rotation_method', ['manual', 'random']).notNull().default('manual'),
   current_rotation_position: int('current_rotation_position').notNull().default(1),
   current_cycle:            int('current_cycle').notNull().default(1),
@@ -163,6 +183,14 @@ export const savingsGroups = mysqlTable('savings_groups', {
   suspension_threshold:     int('suspension_threshold').notNull().default(3),
   voting_threshold:         int('voting_threshold').notNull().default(51),
   allow_payout_swaps:       boolean('allow_payout_swaps').notNull().default(true),
+  // "Require voting for key decisions" toggle, set at creation and editable
+  // by the Creator afterwards (mirrors the create.tsx "Require voting for
+  // key decisions" OptionCard). When true, self-service "request to join"
+  // submissions are never decided unilaterally by the leader — join()
+  // automatically opens a unanimous member_admission vote (see
+  // voteService.proposeMemberAdmission), and approveJoinRequest/
+  // rejectJoinRequest are rejected outright so the leader cannot bypass it.
+  requires_admission_vote: boolean('requires_admission_vote').notNull().default(false),
   payment_provider:         mysqlEnum('payment_provider', ['stripe', 'flutterwave']).notNull(),
   // 'draft': newly created, needs 3 verified active members before the
   // Creator can "Start Group" (see groupService.activateGroup). 'active':
@@ -481,6 +509,23 @@ export const jobRuns = mysqlTable('job_runs', {
   error_message: text('error_message'),
 }, (t) => ({
   jobNameIdx: index('job_runs_job_name_idx').on(t.job_name),
+}));
+
+// ─── Email Logs ───────────────────────────────────────────────────────────────
+// One row per outbound transactional email attempt, logged from the single
+// internal send() wrapper in integrations/email/emailService.ts (every one of
+// the ~60 sendXxxEmail() helpers funnels through it), so the admin dashboard's
+// "Email usage" KPI reflects real send volume/success rate, not an estimate.
+export const emailLogs = mysqlTable('email_logs', {
+  id:            varchar('id', { length: 36 }).primaryKey(),
+  recipient:     varchar('recipient', { length: 255 }).notNull(),
+  subject:       varchar('subject', { length: 255 }).notNull(),
+  status:        mysqlEnum('status', ['sent', 'failed']).notNull(),
+  error_message: text('error_message'),
+  created_at:    timestamp('created_at').notNull().defaultNow(),
+}, (t) => ({
+  statusIdx:    index('email_logs_status_idx').on(t.status),
+  createdAtIdx: index('email_logs_created_at_idx').on(t.created_at),
 }));
 
 // ─── Audit Logs ───────────────────────────────────────────────────────────────

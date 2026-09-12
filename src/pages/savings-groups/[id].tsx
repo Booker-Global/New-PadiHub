@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { AnimatePresence } from 'motion/react';
 import { MotionDiv } from '@/lib/motion-safe';
+import { getGroupStatusLabel } from '@/lib/groupStatus';
 import { Link, useParams } from 'react-router-dom';
 import {
   ChevronLeft,
@@ -58,6 +59,8 @@ interface SavingsGroup {
   payout_day?: number | null;
   maximum_members: number;
   min_trust_score: number;
+  is_public: boolean;
+  requires_admission_vote?: boolean;
   rotation_method: 'manual' | 'random' | 'trust_score';
   current_rotation_position: number;
   current_cycle: number;
@@ -185,6 +188,21 @@ function describeRotationMethod(rotationMethod: SavingsGroup['rotation_method'])
     : titleCase(rotationMethod);
 }
 
+/** Mirrors src/server/lib/payoutSchedule.ts describePayoutSchedule() for client-side display. */
+function describePayoutSchedule(frequency: SavingsGroup['contribution_frequency'], payoutDay: number | null | undefined) {
+  if (frequency === 'daily') return 'Every day';
+  if (frequency === 'weekly') {
+    const names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const idx = payoutDay !== null && payoutDay !== undefined ? Math.min(6, Math.max(0, payoutDay)) : 0;
+    return `Every ${names[idx]}`;
+  }
+  const day = payoutDay !== null && payoutDay !== undefined ? Math.min(31, Math.max(1, payoutDay)) : 1;
+  const suffix = day % 10 === 1 && day !== 11 ? 'st'
+    : day % 10 === 2 && day !== 12 ? 'nd'
+    : day % 10 === 3 && day !== 13 ? 'rd' : 'th';
+  return `Monthly on the ${day}${suffix}`;
+}
+
 function shortId(value: string) {
   return `${value.slice(0, 8)}…`;
 }
@@ -268,11 +286,12 @@ export default function SavingsGroupDetailPage() {
   const [editOpen, setEditOpen] = useState(false);
   const [editMaxMembers, setEditMaxMembers] = useState('');
   const [editMinTrustScore, setEditMinTrustScore] = useState('');
+  const [editIsPublic, setEditIsPublic] = useState(true);
+  const [editRequiresAdmissionVote, setEditRequiresAdmissionVote] = useState(false);
   const [editContributionAmount, setEditContributionAmount] = useState('');
   const [editPayoutDay, setEditPayoutDay] = useState('');
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState('');
-  const [editNotice, setEditNotice] = useState('');
   const [membershipActionId, setMembershipActionId] = useState<string | null>(null);
   const [membershipActionError, setMembershipActionError] = useState('');
   const [admissionVoteId, setAdmissionVoteId] = useState<string | null>(null);
@@ -300,6 +319,8 @@ export default function SavingsGroupDetailPage() {
   const [voteActionError, setVoteActionError] = useState('');
   const [activating, setActivating] = useState(false);
   const [activateError, setActivateError] = useState('');
+  const [activateNotice, setActivateNotice] = useState('');
+  const [groupUpdateNotice, setGroupUpdateNotice] = useState('');
 
   const loadData = useCallback(async () => {
     if (!id) {
@@ -529,6 +550,32 @@ export default function SavingsGroupDetailPage() {
     [contributions, currentUserId],
   );
 
+  // Group-wide next contribution date — the earliest not-yet-paid contribution
+  // due date across ALL members (not just the current user), so the Group
+  // Details card reflects the group's real, ground-truth next charge date.
+  const groupNextContributionDate = useMemo(
+    () => contributions
+      .filter(entry => entry.payment_status === 'due' || entry.payment_status === 'scheduled' || entry.payment_status === 'pending_default')
+      .map(entry => entry.due_date)
+      .sort((left, right) => new Date(left).getTime() - new Date(right).getTime())[0] ?? null,
+    [contributions],
+  );
+
+  // Group-wide next payout date — only ever real ground-truth data (the
+  // current cycle's scheduled_payout_date, if not already completed). We
+  // deliberately don't guess a date for the *next* rotation before its record
+  // exists, since rotationService.getNext() has no date field until that
+  // cycle's schedule has actually been generated.
+  const groupNextPayoutDate = useMemo(
+    () => (currentRotation && currentRotation.payout_status !== 'completed' ? currentRotation.scheduled_payout_date : null),
+    [currentRotation],
+  );
+
+  const contributionScheduleLabel = useMemo(
+    () => (group ? describePayoutSchedule(group.contribution_frequency, group.payout_day) : ''),
+    [group],
+  );
+
   const myCompletedPayouts = useMemo(
     () => rotationHistory.filter(entry => entry.recipient_id === currentUserId && entry.payout_status === 'completed'),
     [rotationHistory, currentUserId],
@@ -670,10 +717,12 @@ export default function SavingsGroupDetailPage() {
     if (!group) return;
     setEditMaxMembers(String(group.maximum_members));
     setEditMinTrustScore(String(group.min_trust_score ?? 0));
+    setEditIsPublic(group.is_public ?? true);
+    setEditRequiresAdmissionVote(group.requires_admission_vote ?? false);
     setEditContributionAmount(String(group.contribution_amount ?? ''));
     setEditPayoutDay(group.payout_day !== null && group.payout_day !== undefined ? String(group.payout_day) : '');
     setEditError('');
-    setEditNotice('');
+    setGroupUpdateNotice('');
     setEditOpen(true);
   };
 
@@ -681,7 +730,6 @@ export default function SavingsGroupDetailPage() {
     setEditOpen(false);
     setEditSaving(false);
     setEditError('');
-    setEditNotice('');
   };
 
   const handleSaveEdit = async () => {
@@ -695,7 +743,6 @@ export default function SavingsGroupDetailPage() {
 
     setEditSaving(true);
     setEditError('');
-    setEditNotice('');
 
     try {
       const response = await window.fetch(`/api/groups/${id}`, {
@@ -709,6 +756,8 @@ export default function SavingsGroupDetailPage() {
           min_trust_score: Number(editMinTrustScore),
           contribution_amount: editContributionAmount,
           payout_day: editPayoutDay !== '' ? Number(editPayoutDay) : undefined,
+          is_public: editIsPublic,
+          requires_admission_vote: editRequiresAdmissionVote,
         }),
       });
 
@@ -719,7 +768,8 @@ export default function SavingsGroupDetailPage() {
       }
 
       if (json.data) setGroup(json.data);
-      setEditNotice('Group settings saved. Active members have been notified.');
+      setGroupUpdateNotice('Group settings saved successfully. Active members have been notified.');
+      closeEditModal();
     } catch {
       setEditError('Network error. Please check your connection and try again.');
     } finally {
@@ -737,16 +787,27 @@ export default function SavingsGroupDetailPage() {
 
     setActivating(true);
     setActivateError('');
+    setActivateNotice('');
 
     try {
       const response = await window.fetch(`/api/groups/${id}/activate`, {
         method: 'POST',
         headers: { Authorization: 'Bearer ' + activeSession.token },
       });
-      const json = await response.json() as ApiResponse<null>;
+      const json = await response.json() as ApiResponse<{
+        first_charge_cutoff_applied?: boolean;
+        first_contribution_date?: string;
+        first_payout_date?: string;
+      }>;
       if (!response.ok) {
         setActivateError(getErrorMessage(json, 'Could not start this group.'));
         return;
+      }
+      if (json.data?.first_charge_cutoff_applied && json.data.first_contribution_date) {
+        setActivateNotice(
+          `Group started! Since it's after our 17:00 GMT same-day cut-off, the first contribution `
+          + `charge and payout are now scheduled for ${formatDate(json.data.first_contribution_date)} instead of today.`,
+        );
       }
       await loadData();
     } catch {
@@ -1104,7 +1165,7 @@ export default function SavingsGroupDetailPage() {
                   <div>
                     <h1 className="text-xl font-extrabold text-white" style={{ fontFamily: 'Nunito, sans-serif' }}>{group.name}</h1>
                     <p className="text-xs mt-0.5" style={{ color: 'rgba(255,255,255,0.45)' }}>
-                      {titleCase(group.status)} · {group.currency} · Created {formatDate(group.created_at)}
+                      {getGroupStatusLabel(group.status)} · {group.currency} · Created {formatDate(group.created_at)}
                     </p>
                   </div>
                 </div>
@@ -1129,15 +1190,21 @@ export default function SavingsGroupDetailPage() {
                       Waiting to start · {activeMembers.length} of {GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH} verified members
                     </span>
                   )
-                ) : (
-                  <Link to={`/savings-groups/${group.id}/contribute`} className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-sm font-bold text-white transition-all hover:opacity-90" style={{ background: `linear-gradient(135deg, ${groupColor}, ${groupColor}cc)` }}>
-                    <PiggyBank size={14} /> Make Payment
-                  </Link>
-                )}
+                ) : null}
               </div>
               {group.status === 'draft' && activateError && (
                 <div className="rounded-xl p-2.5 text-xs font-semibold flex items-center gap-2 mb-3" style={{ background: 'rgba(239,68,68,0.12)', color: '#FCA5A5' }}>
                   <AlertTriangle size={13} /> {activateError}
+                </div>
+              )}
+              {activateNotice && (
+                <div className="rounded-xl p-2.5 text-xs font-semibold flex items-center gap-2 mb-3" style={{ background: 'rgba(245,158,11,0.12)', color: '#B45309' }}>
+                  <AlertTriangle size={13} /> {activateNotice}
+                </div>
+              )}
+              {groupUpdateNotice && (
+                <div className="rounded-xl p-2.5 text-xs font-semibold flex items-center gap-2 mb-3" style={{ background: 'rgba(46,175,111,0.14)', color: '#4ADE80' }}>
+                  <CheckCircle size={13} /> {groupUpdateNotice}
                 </div>
               )}
 
@@ -1265,6 +1332,10 @@ export default function SavingsGroupDetailPage() {
                         { label: 'Description', value: group.description || 'No description added yet.' },
                         { label: 'Leader', value: getMemberDisplayName(group.leader_id) },
                         { label: 'Country', value: group.country === 'NG' ? 'Nigeria' : 'United Kingdom' },
+                        { label: 'Visibility', value: group.is_public ? 'Public — shown in group search' : 'Private — invite only' },
+                        { label: 'Contribution schedule', value: contributionScheduleLabel },
+                        { label: 'Next contribution date', value: groupNextContributionDate ? formatDate(groupNextContributionDate) : 'Not yet scheduled' },
+                        { label: 'Next payout date', value: groupNextPayoutDate ? formatDate(groupNextPayoutDate) : 'Not yet scheduled' },
                         { label: 'Created', value: formatDate(group.created_at) },
                         { label: 'Last updated', value: formatDate(group.updated_at) },
                       ].map(row => (
@@ -1878,11 +1949,6 @@ export default function SavingsGroupDetailPage() {
                     {editError}
                   </div>
                 )}
-                {editNotice && (
-                  <div style={{ borderRadius: 16, padding: 16, fontSize: 14, fontWeight: 500, background: '#F0FDF4', color: '#15803D', border: '1px solid #BBF7D0', marginBottom: 16 }}>
-                    {editNotice}
-                  </div>
-                )}
 
                 <label className="block text-sm font-bold text-gray-700 mb-1.5">Contribution amount ({group.currency})</label>
                 <input value={editContributionAmount} onChange={event => setEditContributionAmount(event.target.value)} type="text" inputMode="decimal" placeholder="0.00" className="w-full px-4 py-3 rounded-2xl border border-gray-200 text-sm focus:outline-none focus:border-green-400 transition-colors mb-4" />
@@ -1902,6 +1968,52 @@ export default function SavingsGroupDetailPage() {
                 <label className="block text-sm font-bold text-gray-700 mb-1.5">Minimum Trust Score™ for new join requests</label>
                 <p className="text-xs text-gray-400 mb-1.5">Only applies to members who request to join themselves — never to people you invite directly.</p>
                 <input value={editMinTrustScore} onChange={event => setEditMinTrustScore(event.target.value)} type="number" min={0} max={100} className="w-full px-4 py-3 rounded-2xl border border-gray-200 text-sm focus:outline-none focus:border-green-400 transition-colors mb-4" />
+
+                <div className="flex items-center justify-between gap-4 rounded-2xl p-4 mb-4" style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
+                  <div>
+                    <p className="text-sm font-bold text-gray-700">Available to public</p>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      {editIsPublic
+                        ? 'Shown in group search — anyone in your country can request to join'
+                        : 'Private — hidden from search, only people you invite directly can join'}
+                    </p>
+                  </div>
+                  <button
+                    role="switch"
+                    aria-checked={editIsPublic}
+                    onClick={() => setEditIsPublic(current => !current)}
+                    className="relative w-11 h-6 rounded-full transition-colors duration-200 flex-shrink-0"
+                    style={{ background: editIsPublic ? '#2EAF6F' : '#D1D5DB' }}
+                  >
+                    <span
+                      className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200"
+                      style={{ transform: editIsPublic ? 'translateX(20px)' : 'translateX(0)' }}
+                    />
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 rounded-2xl p-4 mb-4" style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
+                  <div>
+                    <p className="text-sm font-bold text-gray-700">Require voting for new members</p>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      {editRequiresAdmissionVote
+                        ? 'Every join request opens a unanimous group vote — you can no longer approve/reject directly'
+                        : 'Off — you decide directly whether to approve or reject each join request'}
+                    </p>
+                  </div>
+                  <button
+                    role="switch"
+                    aria-checked={editRequiresAdmissionVote}
+                    onClick={() => setEditRequiresAdmissionVote(current => !current)}
+                    className="relative w-11 h-6 rounded-full transition-colors duration-200 flex-shrink-0"
+                    style={{ background: editRequiresAdmissionVote ? '#2EAF6F' : '#D1D5DB' }}
+                  >
+                    <span
+                      className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200"
+                      style={{ transform: editRequiresAdmissionVote ? 'translateX(20px)' : 'translateX(0)' }}
+                    />
+                  </button>
+                </div>
 
                 <div className="flex gap-3">
                   <Button variant="outline" onClick={closeEditModal} className="flex-1 rounded-2xl font-semibold">Close</Button>
