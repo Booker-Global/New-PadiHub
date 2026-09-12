@@ -112,6 +112,7 @@ interface RotationInfo {
   recipient_id: string;
   scheduled_payout_date: string;
   payout_status: 'pending' | 'processing' | 'completed' | 'failed';
+  pot_amount?: number | string;
 }
 
 interface NextRotationInfo {
@@ -127,6 +128,7 @@ interface RotationHistoryEntry {
   scheduled_payout_date: string;
   payout_status: 'pending' | 'processing' | 'completed' | 'failed';
   completed_date?: string | null;
+  pot_amount?: number | string;
 }
 
 interface InvitationResult {
@@ -520,17 +522,16 @@ export default function SavingsGroupDetailPage() {
     [orderedMembers],
   );
 
-  // Mirrors rotationService's potAmount calc (contribution_amount ×
-  // maximum_members — the group's target size, not just currently-active
-  // members) so the pot shown here always matches the amount actually
-  // transferred to the recipient when a rotation completes.
-  const payoutPotAmount = useMemo(() => {
-    if (!group) return 0;
-    const numericContribution = typeof group.contribution_amount === 'number'
-      ? group.contribution_amount
-      : Number.parseFloat(group.contribution_amount);
-    return (Number.isFinite(numericContribution) ? numericContribution : 0) * group.maximum_members;
-  }, [group]);
+  // pot_amount now comes from the API (rotationService.getCyclePotAmount —
+  // sum of what THIS cycle's actual active/contributing members owe or
+  // paid), never contribution_amount × maximum_members capacity. A group
+  // with a capacity of 10 but only 3 active contributing members has a pot
+  // of 3× the contribution amount, not 10×.
+  const toPotAmount = (value: number | string | undefined | null): number => {
+    if (value === undefined || value === null) return 0;
+    const numeric = typeof value === 'number' ? value : Number.parseFloat(value);
+    return Number.isFinite(numeric) ? numeric : 0;
+  };
 
   const myContributionsTotal = useMemo(
     () => contributions
@@ -582,8 +583,8 @@ export default function SavingsGroupDetailPage() {
   );
 
   const myPayoutsTotal = useMemo(
-    () => myCompletedPayouts.length * payoutPotAmount,
-    [myCompletedPayouts, payoutPotAmount],
+    () => myCompletedPayouts.reduce((sum, entry) => sum + toPotAmount(entry.pot_amount), 0),
+    [myCompletedPayouts],
   );
 
   const myUpcomingPayout = useMemo(
@@ -1432,7 +1433,7 @@ export default function SavingsGroupDetailPage() {
                     {myUpcomingPayout && (
                       <div className="rounded-2xl p-4" style={{ background: 'rgba(46,175,111,0.06)', border: '1px solid rgba(46,175,111,0.15)' }}>
                         <p className="text-xs text-gray-400 mb-1">Your upcoming payout — cycle {myUpcomingPayout.cycle_number}</p>
-                        <p className="text-sm font-bold text-gray-900">{formatCurrency(payoutPotAmount, group.currency)} · {titleCase(myUpcomingPayout.payout_status)}</p>
+                        <p className="text-sm font-bold text-gray-900">{formatCurrency(toPotAmount(myUpcomingPayout.pot_amount), group.currency)} · {titleCase(myUpcomingPayout.payout_status)}</p>
                         <p className="text-xs text-gray-400 mt-0.5">Scheduled {formatDate(myUpcomingPayout.scheduled_payout_date)}</p>
                       </div>
                     )}
@@ -1802,7 +1803,7 @@ export default function SavingsGroupDetailPage() {
                                     <p className="text-xs text-gray-400 break-all">{getMemberDisplayName(entry.recipient_id)}</p>
                                   </div>
                                   <div className="text-right">
-                                    <p className="text-sm font-bold" style={{ color: meta.color }}>{formatCurrency(payoutPotAmount, group.currency)}</p>
+                                    <p className="text-sm font-bold" style={{ color: meta.color }}>{formatCurrency(toPotAmount(entry.pot_amount), group.currency)}</p>
                                     <span className="text-xs text-gray-400">{formatDate(activityDate)}</span>
                                   </div>
                                 </div>
