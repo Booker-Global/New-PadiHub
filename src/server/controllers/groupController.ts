@@ -27,6 +27,11 @@ const baseGroupSchema = z.object({
   suspension_threshold:   z.number().int().min(1).optional(),
   voting_threshold:       z.number().int().min(51).max(100).optional(),
   allow_payout_swaps:     z.boolean().optional(),
+  // "Require voting for key decisions" toggle — see schema.ts
+  // savingsGroups.requires_admission_vote doc comment. When true, all join
+  // requests must go through a unanimous member_admission vote rather than
+  // the leader deciding unilaterally.
+  requires_admission_vote: z.boolean().optional(),
   // Group lifecycle length, chosen once at creation (see schema.ts
   // savingsGroups.group_duration_type doc comment).
   group_duration_type:      z.enum(['fixed', 'indefinite']).optional().default('indefinite'),

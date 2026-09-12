@@ -144,6 +144,7 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
     { column: 'full_rotations_completed', sqlType: 'INT NOT NULL DEFAULT 0' },
     { column: 'closure_scheduled',        sqlType: 'BOOLEAN NOT NULL DEFAULT false' },
     { column: 'is_public',                sqlType: 'BOOLEAN NOT NULL DEFAULT true' },
+    { column: 'requires_admission_vote',  sqlType: 'BOOLEAN NOT NULL DEFAULT false' },
   ],
   contributions: [
     { column: 'amount_paid',        sqlType: 'DECIMAL(12,2) NULL' },

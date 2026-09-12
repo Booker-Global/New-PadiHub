@@ -60,6 +60,7 @@ interface SavingsGroup {
   maximum_members: number;
   min_trust_score: number;
   is_public: boolean;
+  requires_admission_vote?: boolean;
   rotation_method: 'manual' | 'random' | 'trust_score';
   current_rotation_position: number;
   current_cycle: number;
@@ -286,6 +287,7 @@ export default function SavingsGroupDetailPage() {
   const [editMaxMembers, setEditMaxMembers] = useState('');
   const [editMinTrustScore, setEditMinTrustScore] = useState('');
   const [editIsPublic, setEditIsPublic] = useState(true);
+  const [editRequiresAdmissionVote, setEditRequiresAdmissionVote] = useState(false);
   const [editContributionAmount, setEditContributionAmount] = useState('');
   const [editPayoutDay, setEditPayoutDay] = useState('');
   const [editSaving, setEditSaving] = useState(false);
@@ -716,6 +718,7 @@ export default function SavingsGroupDetailPage() {
     setEditMaxMembers(String(group.maximum_members));
     setEditMinTrustScore(String(group.min_trust_score ?? 0));
     setEditIsPublic(group.is_public ?? true);
+    setEditRequiresAdmissionVote(group.requires_admission_vote ?? false);
     setEditContributionAmount(String(group.contribution_amount ?? ''));
     setEditPayoutDay(group.payout_day !== null && group.payout_day !== undefined ? String(group.payout_day) : '');
     setEditError('');
@@ -754,6 +757,7 @@ export default function SavingsGroupDetailPage() {
           contribution_amount: editContributionAmount,
           payout_day: editPayoutDay !== '' ? Number(editPayoutDay) : undefined,
           is_public: editIsPublic,
+          requires_admission_vote: editRequiresAdmissionVote,
         }),
       });
 
@@ -1984,6 +1988,29 @@ export default function SavingsGroupDetailPage() {
                     <span
                       className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200"
                       style={{ transform: editIsPublic ? 'translateX(20px)' : 'translateX(0)' }}
+                    />
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 rounded-2xl p-4 mb-4" style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
+                  <div>
+                    <p className="text-sm font-bold text-gray-700">Require voting for new members</p>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      {editRequiresAdmissionVote
+                        ? 'Every join request opens a unanimous group vote — you can no longer approve/reject directly'
+                        : 'Off — you decide directly whether to approve or reject each join request'}
+                    </p>
+                  </div>
+                  <button
+                    role="switch"
+                    aria-checked={editRequiresAdmissionVote}
+                    onClick={() => setEditRequiresAdmissionVote(current => !current)}
+                    className="relative w-11 h-6 rounded-full transition-colors duration-200 flex-shrink-0"
+                    style={{ background: editRequiresAdmissionVote ? '#2EAF6F' : '#D1D5DB' }}
+                  >
+                    <span
+                      className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200"
+                      style={{ transform: editRequiresAdmissionVote ? 'translateX(20px)' : 'translateX(0)' }}
                     />
                   </button>
                 </div>

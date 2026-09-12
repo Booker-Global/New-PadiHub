@@ -170,6 +170,14 @@ export const savingsGroups = mysqlTable('savings_groups', {
   suspension_threshold:     int('suspension_threshold').notNull().default(3),
   voting_threshold:         int('voting_threshold').notNull().default(51),
   allow_payout_swaps:       boolean('allow_payout_swaps').notNull().default(true),
+  // "Require voting for key decisions" toggle, set at creation and editable
+  // by the Creator afterwards (mirrors the create.tsx "Require voting for
+  // key decisions" OptionCard). When true, self-service "request to join"
+  // submissions are never decided unilaterally by the leader — join()
+  // automatically opens a unanimous member_admission vote (see
+  // voteService.proposeMemberAdmission), and approveJoinRequest/
+  // rejectJoinRequest are rejected outright so the leader cannot bypass it.
+  requires_admission_vote: boolean('requires_admission_vote').notNull().default(false),
   payment_provider:         mysqlEnum('payment_provider', ['stripe', 'flutterwave']).notNull(),
   // 'draft': newly created, needs 3 verified active members before the
   // Creator can "Start Group" (see groupService.activateGroup). 'active':

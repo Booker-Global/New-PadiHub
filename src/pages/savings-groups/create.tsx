@@ -394,6 +394,7 @@ export default function CreateGroupWizard() {
           allow_payout_swaps: data.allowSwaps,
           min_trust_score: data.minTrustScore || undefined,
           is_public: data.isPublic,
+          requires_admission_vote: data.votingRequired,
           group_duration_type: data.durationType,
           group_duration_rotations: data.durationType === 'fixed' ? data.durationRotations : undefined,
         }),
@@ -840,7 +841,7 @@ export default function CreateGroupWizard() {
                           <Shield size={16} style={{ color: '#8B5CF6' }} />
                           <div>
                             <p className="font-bold text-sm text-gray-900">Require voting for key decisions</p>
-                            <p className="text-xs text-gray-400">Members vote on removing members, admitting new ones and payout swaps</p>
+                            <p className="text-xs text-gray-400">Every new join request must be unanimously approved by all active members via a group vote, instead of you deciding alone</p>
                           </div>
                         </div>
                       </OptionCard>
@@ -952,6 +953,7 @@ export default function CreateGroupWizard() {
                       { icon: Eye, label: 'Grace period', value: `${FIXED_GRACE_PERIOD_HOURS} hours (fixed)` },
                       { icon: Shield, label: 'Minimum Trust Score™ to join', value: data.minTrustScore > 0 ? `${data.minTrustScore}+ (${minTrustTierLabel})` : 'None' },
                       { icon: Globe, label: 'Available to public', value: data.isPublic ? 'Yes — shown in search' : 'No — invite only' },
+                      { icon: Shield, label: 'Admission voting', value: data.votingRequired ? 'Required — all members must agree' : 'Not required — you decide' },
                       { icon: RotateCcw, label: 'Group lifecycle', value: data.durationType === 'fixed' ? `Closes after ${data.durationRotations} complete rotation(s)` : 'Indefinite (until you close it)' },
                     ].map(row => (
                       <div key={row.label} className="flex items-center justify-between py-2.5 border-b border-gray-50 last:border-0 gap-4">

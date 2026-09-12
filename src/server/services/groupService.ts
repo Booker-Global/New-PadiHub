@@ -357,6 +357,7 @@ export const groupService = {
     strike_threshold?: number; suspension_threshold?: number;
     voting_threshold?: number; allow_payout_swaps?: boolean;
     min_trust_score?: number; is_public?: boolean;
+    requires_admission_vote?: boolean;
     group_duration_type?: 'fixed' | 'indefinite'; group_duration_rotations?: number;
   }, ipAddress?: string) {
     // Production payment frequency is Weekly/Monthly only — Daily exists
@@ -463,6 +464,7 @@ export const groupService = {
       suspension_threshold:     data.suspension_threshold ?? GROUP_DEFAULT_SUSPENSION_THRESHOLD,
       voting_threshold:         data.voting_threshold ?? GROUP_DEFAULT_VOTING_THRESHOLD,
       allow_payout_swaps:       data.allow_payout_swaps ?? true,
+      requires_admission_vote:  data.requires_admission_vote ?? false,
       payment_provider:         payment_provider as 'stripe' | 'flutterwave',
       status:                   'draft',
       group_duration_type:      durationType,
@@ -498,6 +500,7 @@ export const groupService = {
     contribution_amount: string; payout_day: number;
     strike_threshold: number; suspension_threshold: number;
     voting_threshold: number; allow_payout_swaps: boolean; is_public: boolean;
+    requires_admission_vote: boolean;
   }>, ipAddress?: string) {
     
     const group = await this.getById(groupId);

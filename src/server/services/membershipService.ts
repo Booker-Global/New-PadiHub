@@ -265,7 +265,11 @@ export const membershipService = {
       return { success: true, status: 'active' as const, message: 'You have joined the group.' };
     }
 
-    // Self-service request-to-join — requires leader approval.
+    // Self-service request-to-join — requires leader approval, UNLESS the
+    // group's "Require voting for key decisions" toggle is on, in which
+    // case admission is never decided unilaterally: a unanimous
+    // member_admission vote opens automatically (see requires_admission_vote
+    // doc comment in schema.ts).
     const membershipId = uuidv4();
     await db.insert(schema.memberships).values({
       id: membershipId, user_id: userId, group_id: groupId,
@@ -277,16 +281,23 @@ export const membershipService = {
     await notificationService.create({
       userId, type: 'join_request_submitted',
       title: 'Join Request Submitted',
-      message: `Your request to join "${group.name}" has been sent to the group leader.`,
+      message: group.requires_admission_vote
+        ? `Your request to join "${group.name}" has opened a group vote — every active member must agree before you can join.`
+        : `Your request to join "${group.name}" has been sent to the group leader.`,
     });
 
-    const [requesterEmailRow, leaderRow] = await Promise.all([
-      db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, userId)).limit(1),
-      db.select({ id: schema.users.id, email: schema.users.email }).from(schema.users).where(eq(schema.users.id, group.leader_id)).limit(1),
-    ]);
+    const requesterEmailRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
     if (requesterEmailRow.length) {
       await sendGroupJoinRequestSubmittedEmail(requesterEmailRow[0].email, group.name);
     }
+
+    if (group.requires_admission_vote) {
+      const { voteService } = await import('./voteService.js');
+      await voteService.proposeMemberAdmission(groupId, group.leader_id, membershipId, ipAddress);
+      return { success: true, status: 'pending' as const, message: 'Your request to join has opened a group vote — every active member must agree before you can join.' };
+    }
+
+    const leaderRow = await db.select({ id: schema.users.id, email: schema.users.email }).from(schema.users).where(eq(schema.users.id, group.leader_id)).limit(1);
     if (leaderRow.length) {
       await notificationService.create({
         userId: leaderRow[0].id, type: 'join_request_received',
@@ -312,6 +323,13 @@ export const membershipService = {
 
     const group = await groupService.getById(membership.group_id);
     if (group.leader_id !== leaderId) throw new AppError('Only the group leader can approve join requests.', 403);
+    if (group.requires_admission_vote) {
+      throw new AppError(
+        'This group requires a unanimous member vote for new admissions — use "Start admission vote" instead of approving directly.',
+        403,
+        'ADMISSION_VOTE_REQUIRED',
+      );
+    }
 
     return this._activatePendingMembership(membershipId, ipAddress);
   },
@@ -417,6 +435,13 @@ export const membershipService = {
 
     const group = await groupService.getById(membership.group_id);
     if (group.leader_id !== leaderId) throw new AppError('Only the group leader can reject join requests.', 403);
+    if (group.requires_admission_vote) {
+      throw new AppError(
+        'This group requires a unanimous member vote for new admissions — the group vote already in progress will reject this request if any member declines.',
+        403,
+        'ADMISSION_VOTE_REQUIRED',
+      );
+    }
 
     return this._invalidatePendingMembership(membershipId, ipAddress, leaderId);
   },
