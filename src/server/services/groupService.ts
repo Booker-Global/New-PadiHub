@@ -267,7 +267,7 @@ export const groupService = {
         message: `"${group.name}" is back to ${activeCount} active members and collection has resumed.`,
       });
       const leaderRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, group.leader_id)).limit(1);
-      if (leaderRow.length) await sendGroupReactivatedEmail(leaderRow[0].email, group.name);
+      if (leaderRow.length) await sendGroupReactivatedEmail(leaderRow[0].email, group.name, activeCount);
 
       const memberUserIds = (await db.select({ user_id: schema.memberships.user_id }).from(schema.memberships)
         .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')))).map(m => m.user_id);

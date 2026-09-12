@@ -457,6 +457,8 @@ export async function sendGroupJoinRejectedEmail(to: string, groupName: string):
   await send(to, `Update on your request to join ${groupName}`, wrap(`
     ${h2('Request not approved')}
     ${p(`Your request to join <strong>${groupName}</strong> was not approved by the group leader at this time.`)}
+    ${p('This does not affect your PadiHub account, subscription, or Trust Score — you\'re free to search for and request to join other groups, or ask the group leader for more context if you\'d like.')}
+    ${btn('Find Another Group', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
   `));
 }
 
@@ -499,10 +501,13 @@ export async function sendGroupSuspendedLowMembersEmail(
 }
 
 /** Notify the group leader that a Suspended group was refilled and is Active again. */
-export async function sendGroupReactivatedEmail(to: string, groupName: string): Promise<void> {
+export async function sendGroupReactivatedEmail(to: string, groupName: string, activeCount?: number): Promise<void> {
   await send(to, `${groupName} is active again`, wrap(`
     ${h2('Group reactivated')}
-    ${p(`<strong>${groupName}</strong> is back above the minimum member count and is <strong>Active</strong> again. Contribution collection has resumed.`)}
+    ${p(`<strong>${groupName}</strong> is back above the minimum member count and is <strong>Active</strong> again.`)}
+    ${activeCount !== undefined ? table(detail('Active members', String(activeCount))) : ''}
+    ${p('Contribution collection has resumed and the payout rotation continues from where it left off. Check the group page for the current cycle, member positions, and next payout date.')}
+    ${btn('View Group', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
   `));
 }
 
