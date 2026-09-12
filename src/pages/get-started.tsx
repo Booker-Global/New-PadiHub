@@ -116,8 +116,6 @@ export default function GetStartedPage() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 24 }}>
           {[
             { label: 'Sign up with Google', icon: '🔵' },
-            { label: 'Sign up with Apple', icon: '⚫' },
-            { label: 'Sign up with Microsoft', icon: '🟦' },
           ].map(s => (
             <button key={s.label} style={{
               width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',

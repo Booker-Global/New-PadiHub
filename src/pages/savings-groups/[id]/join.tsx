@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { MotionDiv } from '@/lib/motion-safe';
 import { Link, useLocation, useParams, useSearchParams } from 'react-router-dom';
-import { ChevronLeft, PiggyBank, Users, Shield, Calendar, CheckCircle, ArrowRight, AlertTriangle, RefreshCw } from 'lucide-react';
+import { ChevronLeft, PiggyBank, Users, Shield, Calendar, CheckCircle, Clock, ArrowRight, AlertTriangle, RefreshCw } from 'lucide-react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { SkeletonPage } from '@/components/ui/loading-skeleton';
 import { getValidSession } from '@/lib/session';
@@ -136,6 +136,8 @@ export default function JoinSavingsGroupPage() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [joinStatus, setJoinStatus] = useState<'active' | 'pending'>('active');
+  const [joinMessage, setJoinMessage] = useState('');
   const [error, setError] = useState('');
   const [needsPaymentSetup, setNeedsPaymentSetup] = useState(false);
   const [needsIdentityVerification, setNeedsIdentityVerification] = useState(false);
@@ -240,7 +242,7 @@ export default function JoinSavingsGroupPage() {
         }),
       });
 
-      const json = await response.json() as ApiResponse<null>;
+      const json = await response.json() as ApiResponse<{ status?: 'active' | 'pending'; message?: string }>;
       if (!response.ok) {
         const message = getErrorMessage(json, 'Could not join this group.');
         setError(message);
@@ -258,6 +260,13 @@ export default function JoinSavingsGroupPage() {
         return;
       }
 
+      // The backend reports the REAL outcome — an already-open group
+      // activates the membership immediately ('active'), while a full
+      // group only submits a request awaiting leader approval ('pending').
+      // Showing "You've joined!" for a pending request was misleading, so
+      // branch the success screen on the actual status.
+      setJoinStatus(json.data?.status === 'pending' ? 'pending' : 'active');
+      setJoinMessage(json.message || json.data?.message || '');
       setSuccess(true);
     } catch {
       setError('Network error. Please check your connection and try again.');
@@ -342,17 +351,24 @@ export default function JoinSavingsGroupPage() {
   const availableSpots = Math.max(group.maximum_members - memberCount, 0);
 
   if (success) {
+    const isPending = joinStatus === 'pending';
     return (
       <DashboardLayout>
         <div className="p-4 sm:p-6 max-w-lg mx-auto text-center py-16">
           <MotionDiv initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 300, damping: 20 }} className="w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6" style={{ background: `linear-gradient(135deg, ${groupColor}, ${groupColor}cc)`, boxShadow: `0 0 40px ${groupColor}50` }}>
-            <CheckCircle size={36} color="#fff" />
+            {isPending ? <Clock size={36} color="#fff" /> : <CheckCircle size={36} color="#fff" />}
           </MotionDiv>
-          <h2 className="text-2xl font-extrabold text-gray-900 mb-2" style={{ fontFamily: 'Nunito, sans-serif' }}>You&apos;ve joined! 🎉</h2>
-          <p className="text-gray-500 mb-8">Welcome to <strong>{group.name}</strong>. You can now view the group and track your contributions.</p>
+          <h2 className="text-2xl font-extrabold text-gray-900 mb-2" style={{ fontFamily: 'Nunito, sans-serif' }}>
+            {isPending ? 'Request submitted' : 'You\u2019ve joined! \ud83c\udf89'}
+          </h2>
+          <p className="text-gray-500 mb-8">
+            {joinMessage || (isPending
+              ? `Your request to join ${group.name} has been sent to the group leader for approval.`
+              : `Welcome to ${group.name}. You can now view the group and track your contributions.`)}
+          </p>
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
-            <Link to={`/savings-groups/${group.id}`} className="px-6 py-3 rounded-2xl font-bold text-white hover:opacity-90 transition-all" style={{ background: `linear-gradient(135deg, ${groupColor}, ${groupColor}cc)` }}>
-              View group
+            <Link to={isPending ? '/savings-groups' : `/savings-groups/${group.id}`} className="px-6 py-3 rounded-2xl font-bold text-white hover:opacity-90 transition-all" style={{ background: `linear-gradient(135deg, ${groupColor}, ${groupColor}cc)` }}>
+              {isPending ? 'My groups' : 'View group'}
             </Link>
             <Link to="/savings-groups" className="px-6 py-3 rounded-2xl font-bold text-gray-600 hover:bg-gray-50 transition-colors text-center" style={{ border: '1px solid #E5E7EB' }}>
               All groups

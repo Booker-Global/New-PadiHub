@@ -45,10 +45,36 @@ function normalizeRotationMethod(rotationMethod: 'manual' | 'random') {
 }
 
 export const groupService = {
-  async list(filters?: { status?: string; country?: string }) {
-    
-    const rows = await db.select().from(schema.savingsGroups)
-      .where(filters?.status ? eq(schema.savingsGroups.status, filters.status as 'draft' | 'active' | 'closed' | 'suspended' | 'expired') : undefined);
+  /**
+   * GET /api/groups — always authenticated (see entry.ts), and every caller
+   * (homepage widget, dashboard, "My Groups") expects ONLY the groups the
+   * signed-in user actually belongs to. Previously this returned literally
+   * every group in the system regardless of the caller, which is why a
+   * brand-new user could see themselves listed as a member of a group
+   * they'd never joined. Scoped via an INNER JOIN through the user's own
+   * memberships — 'active' and 'suspended' memberships count (the user IS
+   * still part of that group, even if it's currently below the launch
+   * threshold), but 'pending' (an unapproved join request) and 'removed'
+   * do not. The group's own lifecycle status (draft/active/suspended/
+   * closed/expired) is NOT used to filter here — a closed/expired group the
+   * user was part of should still show up (with that status badge) so its
+   * history remains visible; only the viewer's own membership status
+   * determines whether the group appears at all.
+   */
+  async list(viewerId: string, filters?: { status?: string; country?: string }) {
+    const membershipRows = await db.select({ group_id: schema.memberships.group_id })
+      .from(schema.memberships)
+      .where(and(
+        eq(schema.memberships.user_id, viewerId),
+        inArray(schema.memberships.status, ['active', 'suspended']),
+      ));
+    const memberGroupIds = membershipRows.map(row => row.group_id);
+    if (!memberGroupIds.length) return [];
+
+    const conditions = [inArray(schema.savingsGroups.id, memberGroupIds)];
+    if (filters?.status) conditions.push(eq(schema.savingsGroups.status, filters.status as 'draft' | 'active' | 'closed' | 'suspended' | 'expired'));
+
+    const rows = await db.select().from(schema.savingsGroups).where(and(...conditions));
     return rows.map(row => ({
       ...row,
       maximum_members: clampGroupMaximumMembers(row.maximum_members),

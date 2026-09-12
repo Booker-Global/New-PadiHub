@@ -91,7 +91,7 @@ const inviteSchema = z.object({
 export const groupController = {
   list: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const data = await groupService.list({ status: qsOpt(req.query.status) });
+      const data = await groupService.list(req.user!.userId, { status: qsOpt(req.query.status) });
       res.json({ success: true, data });
     } catch (e) { next(e); }
   },

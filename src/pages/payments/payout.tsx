@@ -69,6 +69,7 @@ function getReturnPath(searchParams: { get(name: string): string | null }) {
 function getReturnLabel(path: string) {
   if (path.includes('/join')) return 'Continue joining the group';
   if (path === '/savings-groups/create') return 'Continue creating your group';
+  if (path.startsWith('/onboarding')) return 'Continue onboarding';
   return 'Continue';
 }
 

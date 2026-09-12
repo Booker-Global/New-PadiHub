@@ -262,6 +262,11 @@ export class StripeProvider implements IPaymentProvider {
         first_name: params.firstName,
         last_name:  params.lastName,
       },
+      // Pre-fill the business website with PadiHub's own site — Stripe's
+      // hosted "Business details" step only asks for this when it's
+      // missing, so setting it up front skips a confusing question that
+      // has nothing to do with the member's own business.
+      business_profile: { url: 'https://www.padihub.com' },
       metadata: { padihub_user_id: params.userId },
       capabilities: { transfers: { requested: true } },
     });

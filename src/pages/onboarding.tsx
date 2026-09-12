@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type ReactNode } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { AnimatePresence } from 'motion/react';
 import { MotionDiv } from '@/lib/motion-safe';
@@ -294,9 +294,14 @@ function OnboardingShell({ children, step, totalSteps }: { children: ReactNode; 
             <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">
               Step {step} of {totalSteps - 1}
             </span>
-            <span className="text-xs font-bold" style={{ color: '#2EAF6F' }}>
-              {Math.round(((step - 1) / (totalSteps - 2)) * 100)}% complete
-            </span>
+            <div className="flex items-center gap-3">
+              <span className="text-xs font-bold" style={{ color: '#2EAF6F' }}>
+                {Math.round(((step - 1) / (totalSteps - 2)) * 100)}% complete
+              </span>
+              <Link to="/profile" className="text-xs font-bold text-gray-400 hover:text-gray-600 transition-colors underline underline-offset-2">
+                Skip to profile
+              </Link>
+            </div>
           </div>
           <ProgressBar step={step - 1} total={totalSteps - 1} />
         </div>
@@ -317,6 +322,7 @@ const slideVariants = {
 
 export default function OnboardingPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [step, setStep] = useState(0);
   const [country, setCountry] = useState<CountryChoice>('');
   const [accountCountry, setAccountCountry] = useState<CountryChoice>('');
@@ -429,6 +435,22 @@ export default function OnboardingPage() {
   useEffect(() => {
     void loadOnboardingState();
   }, [loadOnboardingState]);
+
+  // Returning from a step that hands off to its own page (currently only
+  // /verify-identity) — e.g. "Go to verification" — passes back
+  // ?resume=<step index> so the wizard picks up exactly where the member
+  // left off instead of restarting from Welcome. Only honoured once per
+  // page load, and only after the initial profile/identity load settles.
+  useEffect(() => {
+    if (loading) return;
+    const resumeParam = searchParams.get('resume');
+    if (!resumeParam) return;
+    const resumeStep = Number.parseInt(resumeParam, 10);
+    if (Number.isInteger(resumeStep) && resumeStep >= 0 && resumeStep < totalSteps) {
+      setStep(resumeStep);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading]);
 
   useEffect(() => {
     setActionError('');
@@ -1036,9 +1058,17 @@ export default function OnboardingPage() {
                 </h2>
                 <p className="text-gray-500 text-sm mb-6">Add a payment method for contributions — it&apos;s saved but not charged yet — and a payout destination for the turn when your group pays out.</p>
 
+                <div className="rounded-2xl p-4 mb-6 text-xs text-gray-600 space-y-1.5" style={{ background: '#F9FAFB', border: '1px solid #E5E7EB' }}>
+                  <p>
+                    <strong>{currentCountry === 'NG' ? 'Flutterwave' : 'Stripe'}</strong> handles both your card and payout destination for {currentCountry === 'NG' ? 'Nigerian' : 'UK'} members.
+                  </p>
+                  <p>Neither is charged today — your card is only charged once you&apos;re an active member of a group with at least 3 members, and then on the same day every month after that.</p>
+                  <p>If a monthly charge fails, we retry automatically for up to 72 hours with email updates at each attempt before any suspension applies.</p>
+                </div>
+
                 <div className="grid gap-4 mb-8">
                   <Link
-                    to="/payments/methods"
+                    to={`/payments/methods?next=${encodeURIComponent('/onboarding?resume=3')}`}
                     className="rounded-2xl p-5 bg-white transition-all hover:opacity-90"
                     style={{ border: '1px solid #E5E7EB' }}
                   >
@@ -1063,7 +1093,7 @@ export default function OnboardingPage() {
                   </Link>
 
                   <Link
-                    to="/payments/payout"
+                    to={`/payments/payout?next=${encodeURIComponent('/onboarding?resume=3')}`}
                     className="rounded-2xl p-5 bg-white transition-all hover:opacity-90"
                     style={{ border: '1px solid #E5E7EB' }}
                   >
@@ -1400,7 +1430,7 @@ export default function OnboardingPage() {
 
                 <div className="flex flex-col gap-3">
                   <Button
-                    onClick={() => navigate('/verify-identity')}
+                    onClick={() => navigate(`/verify-identity?next=${encodeURIComponent('/onboarding?resume=8')}`)}
                     className="w-full rounded-2xl py-4 font-bold gap-2"
                     style={{ background: 'linear-gradient(135deg, #2eafaf, #1f8f8f)', color: '#fff' }}
                   >
