@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { AnimatePresence } from 'motion/react';
 import { MotionDiv } from '@/lib/motion-safe';
+import { getGroupStatusLabel } from '@/lib/groupStatus';
 import { Link, useParams } from 'react-router-dom';
 import {
   ChevronLeft,
@@ -1160,7 +1161,7 @@ export default function SavingsGroupDetailPage() {
                   <div>
                     <h1 className="text-xl font-extrabold text-white" style={{ fontFamily: 'Nunito, sans-serif' }}>{group.name}</h1>
                     <p className="text-xs mt-0.5" style={{ color: 'rgba(255,255,255,0.45)' }}>
-                      {titleCase(group.status)} · {group.currency} · Created {formatDate(group.created_at)}
+                      {getGroupStatusLabel(group.status)} · {group.currency} · Created {formatDate(group.created_at)}
                     </p>
                   </div>
                 </div>

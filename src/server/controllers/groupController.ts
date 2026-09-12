@@ -117,7 +117,7 @@ export const groupController = {
         const countryParam = (qsOpt(req.query.country) ?? 'GB').toUpperCase();
         country = countryParam === 'NG' ? 'NG' : 'GB';
       }
-      const data = await groupService.search(country, qsOpt(req.query.query));
+      const data = await groupService.search(country, qsOpt(req.query.query), req.user?.userId);
       res.json({ success: true, data });
     } catch (e) { next(e); }
   },

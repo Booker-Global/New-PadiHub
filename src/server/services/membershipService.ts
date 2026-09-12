@@ -479,7 +479,20 @@ export const membershipService = {
     return { success: true, vote_id: voteId };
   },
 
-  async leave(userId: string, groupId: string, ipAddress?: string) {
+  /**
+   * `DELETE /api/memberships/:id` — `:id` here is the MEMBERSHIP row id (the
+   * same convention as approve/reject), not the group id. Resolve it to its
+   * group first; previously this value was passed straight through as a
+   * group id, so `groupService.getById()` always threw "Group not found."
+   * whenever a member tried to leave.
+   */
+  async leave(userId: string, membershipId: string, ipAddress?: string) {
+    const [membership] = await db.select().from(schema.memberships).where(eq(schema.memberships.id, membershipId)).limit(1);
+    if (!membership || membership.user_id !== userId || membership.status === 'removed') {
+      throw new AppError('Membership not found.', 404);
+    }
+
+    const groupId = membership.group_id;
     const group = await groupService.getById(groupId);
     if (group.leader_id === userId) {
       return this.departGroupOwner(userId, groupId, 'voluntary', ipAddress);

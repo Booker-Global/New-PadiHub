@@ -261,13 +261,13 @@ export const groupService = {
     return rows.length ? rows[0].country : null;
   },
 
-  async search(country: string, query?: string) {
+  async search(country: string, query?: string, viewerId?: string) {
     const rows = await db.select({
       id:                     schema.savingsGroups.id,
       name:                   schema.savingsGroups.name,
       description:            schema.savingsGroups.description,
       country:                schema.savingsGroups.country,
-      currency:               schema.savingsGroups.currency,
+      currency:                schema.savingsGroups.currency,
       contribution_amount:    schema.savingsGroups.contribution_amount,
       contribution_frequency: schema.savingsGroups.contribution_frequency,
       maximum_members:        schema.savingsGroups.maximum_members,
@@ -292,6 +292,23 @@ export const groupService = {
       .groupBy(schema.memberships.group_id);
     const memberCountByGroup = Object.fromEntries(memberCounts.map(m => [m.group_id, m.value]));
 
+    // The signed-in viewer's own membership status per group — so the
+    // frontend never shows "Request to join" for a group they've already
+    // joined (or already have a pending request for). Never shown to
+    // anonymous visitors since there's no viewerId to check.
+    const viewerStatusByGroup: Record<string, 'active' | 'pending'> = {};
+    if (viewerId) {
+      const viewerMemberships = await db.select({
+        group_id: schema.memberships.group_id,
+        status:   schema.memberships.status,
+      }).from(schema.memberships)
+        .where(and(
+          eq(schema.memberships.user_id, viewerId),
+          inArray(schema.memberships.status, ['active', 'pending']),
+        ));
+      for (const m of viewerMemberships) viewerStatusByGroup[m.group_id] = m.status as 'active' | 'pending';
+    }
+
     const normalizedQuery = query?.trim().toLowerCase();
     return rows
       .filter(g => !normalizedQuery || g.name.toLowerCase().includes(normalizedQuery))
@@ -300,8 +317,9 @@ export const groupService = {
         maximum_members: clampGroupMaximumMembers(g.maximum_members),
         member_count:    memberCountByGroup[g.id] ?? 0,
         spots_remaining: Math.max(0, clampGroupMaximumMembers(g.maximum_members) - (memberCountByGroup[g.id] ?? 0)),
+        viewer_membership_status: viewerStatusByGroup[g.id] ?? null,
       }))
-      .filter(g => g.spots_remaining > 0);
+      .filter(g => g.spots_remaining > 0 || g.viewer_membership_status);
   },
 
   async create(data: {
