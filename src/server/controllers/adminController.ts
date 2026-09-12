@@ -194,9 +194,11 @@ export const adminController = {
             identity_verified_pct: totalUsersCount > 0
               ? Math.round((verifiedUsersCount / totalUsersCount) * 100)
               : 0,
+            by_country: usersByCountry.map(r => ({ country: r.country, count: Number(r.count) })),
           },
           groups: {
             active: Number(activeGroups[0]?.count ?? 0),
+            by_country: groupsByCountry.map(r => ({ country: r.country, count: Number(r.count) })),
           },
           contributions: {
             total:           Number(contribData?.total ?? 0),
@@ -208,14 +210,39 @@ export const adminController = {
             active: Number(activeRotations[0]?.count ?? 0),
           },
           subscriptions: {
+            // Estimated MRR from current active-subscription counts.
             uk: { count: ukCount, mrr_gbp: (ukCount * 4.99).toFixed(2) },
             ng: { count: ngCount, mrr_ngn: (ngCount * 3500).toFixed(2) },
+          },
+          // Real revenue — actual successful charges (audit_logs billing history),
+          // not an estimate. This is what the admin dashboard KPI list asks for.
+          revenue: {
+            uk_gbp: revenueUkGbp.toFixed(2),
+            ng_ngn: revenueNgNgn.toFixed(2),
+          },
+          // Rolling 30-day daily-average contribution/payout volume by group country.
+          daily_averages: {
+            contribution_by_country: Object.fromEntries(
+              Object.entries(contribByCountry).map(([country, total]) => [country, Number((total / 30).toFixed(2))]),
+            ),
+            payout_by_country: Object.fromEntries(
+              Object.entries(payoutByCountry).map(([country, total]) => [country, Number((total / 30).toFixed(2))]),
+            ),
           },
           support: {
             open_tickets: Number(openTickets[0]?.count ?? 0),
           },
           monitoring: {
             errors_last_24h: Number(recentErrors[0]?.count ?? 0),
+          },
+          // Row counts per key table — a lightweight "database usage" KPI.
+          db_usage: dbUsageByKey,
+          // Email send volume, sourced from email_logs (populated by emailService.ts).
+          email_usage: {
+            sent:            Number(emailSent?.count ?? 0),
+            sent_last_24h:   Number(emailSent?.recent ?? 0),
+            failed:          Number(emailFailed?.count ?? 0),
+            failed_last_24h: Number(emailFailed?.recent ?? 0),
           },
         },
       });

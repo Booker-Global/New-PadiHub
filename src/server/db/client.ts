@@ -255,6 +255,18 @@ export async function ensureSchemaSync(): Promise<void> {
         \`responded_at\` TIMESTAMP NULL,
         \`created_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
       )`,
+    // Backs emailService.ts's logEmailSend() + the admin dashboard's email
+    // usage KPI — see schema.ts emailLogs doc comment.
+    email_logs: `CREATE TABLE IF NOT EXISTS \`email_logs\` (
+        \`id\` VARCHAR(36) NOT NULL PRIMARY KEY,
+        \`recipient\` VARCHAR(255) NOT NULL,
+        \`subject\` VARCHAR(255) NOT NULL,
+        \`status\` ENUM('sent','failed') NOT NULL,
+        \`error_message\` TEXT,
+        \`created_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX \`email_logs_status_idx\` (\`status\`),
+        INDEX \`email_logs_created_at_idx\` (\`created_at\`)
+      )`,
   };
   for (const [table, ddl] of Object.entries(newTableDdls)) {
     try {
