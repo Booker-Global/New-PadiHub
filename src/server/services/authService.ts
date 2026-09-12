@@ -235,6 +235,94 @@ export const authService = {
     return { token, user: safeUser };
   },
 
+  /**
+   * Separate admin-only sign-in — looks a user up by `username` instead of
+   * `email` and, unlike login(), never gates on `email_verified` (the
+   * dedicated admin account created by ensureDefaultAdminAccount() has no
+   * real inbox to verify). Still blocks suspended/deactivated accounts and
+   * requires role === 'admin', so this can never be used as a backdoor for a
+   * demoted or non-admin account even if it somehow acquired a username.
+   */
+  async adminLogin(username: string, password: string, ipAddress?: string) {
+    let rows: typeof schema.users.$inferSelect[];
+    try {
+      rows = await db.select().from(schema.users)
+        .where(eq(schema.users.username, username)).limit(1);
+    } catch (dbErr) {
+      console.error('[PadiHub] Database error during admin login lookup:', dbErr);
+      throw new AppError(
+        'Login is temporarily unavailable. Please try again later.',
+        503,
+        'DB_UNAVAILABLE',
+      );
+    }
+    // Same generic message whether the username doesn't exist, isn't an
+    // admin, or the password is wrong — never reveal which one it was.
+    if (!rows.length || rows[0].role !== 'admin') {
+      throw new AppError('Invalid username or password.', 401, 'INVALID_CREDENTIALS');
+    }
+    const user = rows[0];
+
+    if (user.account_status === 'suspended') throw new AppError('This admin account has been suspended.', 403, 'ACCOUNT_SUSPENDED');
+    if (user.account_status === 'deactivated') throw new AppError('This admin account has been deactivated.', 403, 'ACCOUNT_DEACTIVATED');
+
+    const valid = await bcrypt.compare(password, user.password_hash);
+    if (!valid) throw new AppError('Invalid username or password.', 401, 'INVALID_CREDENTIALS');
+
+    const token = jwt.sign(
+      { userId: user.id, email: user.email, role: user.role },
+      JWT_SECRET(),
+      { expiresIn: JWT_EXPIRES_IN } as jwt.SignOptions,
+    );
+
+    await createAuditLog({ userId: user.id, action: 'ADMIN_LOGIN', entity: 'users', entityId: user.id, ipAddress });
+
+    const { password_hash: _, ...safeUser } = user;
+    return { token, user: safeUser };
+  },
+
+  /**
+   * Boot-time self-heal: makes sure the default admin account
+   * (username 'padi_admin') always exists, so /admin is reachable out of
+   * the box in any environment without a manual script run. Only creates
+   * the row once — if it already exists (whatever its current password or
+   * role), this is a no-op, so an admin who has since changed the password
+   * via changePassword() is never overwritten on the next boot.
+   */
+  async ensureDefaultAdminAccount(): Promise<void> {
+    const DEFAULT_ADMIN_USERNAME = 'padi_admin';
+    const DEFAULT_ADMIN_PASSWORD = 'testing';
+    const DEFAULT_ADMIN_EMAIL = 'padi_admin@internal.padihub.local';
+
+    try {
+      const existing = await db.select().from(schema.users)
+        .where(eq(schema.users.username, DEFAULT_ADMIN_USERNAME)).limit(1);
+      if (existing.length) return;
+
+      const password_hash = await bcrypt.hash(DEFAULT_ADMIN_PASSWORD, BCRYPT_ROUNDS);
+      await db.insert(schema.users).values({
+        id:              uuidv4(),
+        first_name:      'Padi',
+        last_name:       'Admin',
+        display_name:    'Admin',
+        email:           DEFAULT_ADMIN_EMAIL,
+        password_hash,
+        username:        DEFAULT_ADMIN_USERNAME,
+        country:         'GB',
+        currency:        assignCurrency('GB'),
+        trust_score:     TRUST_SCORE_INITIAL,
+        account_status:  'active',
+        email_verified:  true,
+        role:            'admin',
+      });
+      console.log(`[PadiHub] ✓ Created default admin account (username='${DEFAULT_ADMIN_USERNAME}'). Sign in at /admin and change the default password immediately.`);
+    } catch (err) {
+      // Never block server startup over this — worst case, /admin remains
+      // reachable only via the pre-existing grantAdminRole.ts script.
+      console.error('[PadiHub] Failed to ensure default admin account:', err instanceof Error ? err.message : err);
+    }
+  },
+
   async forgotPassword(email: string, ipAddress?: string) {
     
     const rows = await db.select().from(schema.users)

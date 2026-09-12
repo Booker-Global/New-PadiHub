@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { voteService } from '../services/voteService.js';
 import { validate } from '../middleware/validate.js';
 import { qs, pp, ip } from '../lib/reqHelpers.js';
+import { AppError } from '../middleware/errorHandler.js';
 
 const createSchema = z.object({
   group_id:        z.string().uuid(),
@@ -138,15 +139,23 @@ export const voteController = {
    * GET /api/votes/respond — public, unauthenticated one-click email
    * accept/decline link (the token is the authentication). Used by
    * member_admission / contribution_claim / payout_swap governance emails.
+   * Redirects to a friendly frontend confirmation page instead of returning
+   * raw JSON, since this link is opened directly in a browser from email.
    */
   respond: async (req: Request, res: Response, next: NextFunction) => {
+    const appUrl = process.env.APP_URL ?? 'https://padihub.com';
     try {
       const parsed = respondSchema.safeParse(req.query);
       if (!parsed.success) {
-        return res.status(400).json({ success: false, message: 'Invalid or missing token/decision.' });
+        return res.redirect(`${appUrl}/vote-response?status=error&message=${encodeURIComponent('Invalid or missing token/decision.')}`);
       }
       const result = await voteService.respondViaToken(parsed.data.token, parsed.data.decision);
-      res.json(result);
-    } catch (e) { next(e); }
+      res.redirect(`${appUrl}/vote-response?status=success&message=${encodeURIComponent(result.message ?? 'Your response has been recorded.')}`);
+    } catch (e) {
+      if (e instanceof AppError) {
+        return res.redirect(`${appUrl}/vote-response?status=error&message=${encodeURIComponent(e.message)}`);
+      }
+      next(e);
+    }
   },
 };

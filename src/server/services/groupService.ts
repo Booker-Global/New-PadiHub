@@ -224,7 +224,11 @@ export const groupService = {
     try {
       const { subscriptionService } = await import('./subscriptionService.js');
       for (const userId of userIds) {
-        await subscriptionService.reconcileBillingForActiveGroupMembership(userId);
+        try {
+          await subscriptionService.reconcileBillingForActiveGroupMembership(userId);
+        } catch (error) {
+          console.error(`[GroupService] Failed to reconcile subscription billing for active group member ${userId}:`, error);
+        }
       }
     } catch (error) {
       console.error('[GroupService] Failed to reconcile subscription billing for active group membership:', error);

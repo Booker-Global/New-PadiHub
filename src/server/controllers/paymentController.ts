@@ -598,7 +598,12 @@ export const paymentController = {
         // hosted onboarding step to wait on (unlike Stripe Express), so the
         // payout destination is considered verified as soon as it's created.
         await db.update(schema.users)
-          .set({ flutterwave_subaccount_id: result.subaccountId, payout_verified_at: new Date() })
+          .set({
+            flutterwave_subaccount_id: result.subaccountId,
+            flutterwave_payout_bank_code: bank_code,
+            flutterwave_payout_account_number: account_number,
+            payout_verified_at: new Date(),
+          })
           .where(eq(schema.users.id, userId));
 
         await createAuditLog({ userId, action: 'FLW_SUBACCOUNT_CREATED', entity: 'users', entityId: userId });

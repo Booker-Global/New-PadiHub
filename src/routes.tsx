@@ -22,6 +22,7 @@ import GetStartedPage from './pages/get-started';
 import ForgotPasswordPage from './pages/forgot-password';
 import ResetPasswordPage from './pages/reset-password';
 import VerifyEmailPage from './pages/verify-email';
+const VoteResponsePage = lazy(() => import('./pages/vote-response'));
 
 // ── Statically imported: core dashboard pages ──────────────────────────────
 import TrustPage from './pages/trust';
@@ -95,6 +96,7 @@ export const routes: RouteObject[] = [
   { path: '/get-started', element: <GetStartedPage /> },
   { path: '/forgot-password', element: <ForgotPasswordPage /> },
   { path: '/verify-email', element: <VerifyEmailPage /> },
+  { path: '/vote-response', element: <VoteResponsePage /> },
   { path: '/onboarding', element: <OnboardingPage /> },
 
   // App (authenticated)

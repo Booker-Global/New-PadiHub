@@ -296,6 +296,7 @@ export default function SavingsGroupDetailPage() {
   const [editError, setEditError] = useState('');
   const [membershipActionId, setMembershipActionId] = useState<string | null>(null);
   const [membershipActionError, setMembershipActionError] = useState('');
+  const [membershipActionNotice, setMembershipActionNotice] = useState('');
   const [admissionVoteId, setAdmissionVoteId] = useState<string | null>(null);
   const [admissionVoteError, setAdmissionVoteError] = useState('');
   const [admissionVoteNotice, setAdmissionVoteNotice] = useState('');
@@ -827,16 +828,20 @@ export default function SavingsGroupDetailPage() {
 
     setMembershipActionId(membershipId);
     setMembershipActionError('');
+    setMembershipActionNotice('');
 
     try {
       const response = await window.fetch(`/api/memberships/${membershipId}/${decision}`, {
         method: 'POST',
         headers: { Authorization: 'Bearer ' + activeSession.token },
       });
-      const json = await response.json() as ApiResponse<null>;
+      const json = await response.json() as ApiResponse<{ vote_started?: boolean }> & { message?: string };
       if (!response.ok) {
         setMembershipActionError(getErrorMessage(json, `Could not ${decision} this join request.`));
         return;
+      }
+      if (json.data?.vote_started && json.message) {
+        setMembershipActionNotice(json.message);
       }
       await loadData();
     } catch {
@@ -1457,6 +1462,11 @@ export default function SavingsGroupDetailPage() {
                           <AlertTriangle size={15} /> {membershipActionError}
                         </div>
                       )}
+                      {membershipActionNotice && (
+                        <div className="rounded-2xl p-3 text-sm font-semibold flex items-center gap-2" style={{ background: 'rgba(46,175,111,0.08)', color: '#1d8a55', border: '1px solid rgba(46,175,111,0.2)' }}>
+                          <CheckCircle size={15} /> {membershipActionNotice}
+                        </div>
+                      )}
                       {orderedMembers.map((member) => {
                         const badge = getMembershipBadge(member.status);
                         const displayName = member.user_id === currentUserId ? 'You' : (member.user_name || shortId(member.user_id));
@@ -1499,14 +1509,16 @@ export default function SavingsGroupDetailPage() {
                             </div>
                             {isLeaderViewing && member.status === 'pending' && (
                               <div className="flex items-center gap-2 w-full sm:w-auto flex-wrap">
-                                <button
-                                  onClick={() => void handleMembershipDecision(member.id, 'approve')}
-                                  disabled={actionBusy}
-                                  className="flex-1 sm:flex-none px-3 py-2 rounded-xl text-xs font-bold text-white"
-                                  style={{ background: actionBusy ? '#D1D5DB' : 'linear-gradient(135deg, #2EAF6F, #1d8a55)', cursor: actionBusy ? 'not-allowed' : 'pointer' }}
-                                >
-                                  Approve
-                                </button>
+                                {!group.requires_admission_vote && (
+                                  <button
+                                    onClick={() => void handleMembershipDecision(member.id, 'approve')}
+                                    disabled={actionBusy}
+                                    className="flex-1 sm:flex-none px-3 py-2 rounded-xl text-xs font-bold text-white"
+                                    style={{ background: actionBusy ? '#D1D5DB' : 'linear-gradient(135deg, #2EAF6F, #1d8a55)', cursor: actionBusy ? 'not-allowed' : 'pointer' }}
+                                  >
+                                    Approve
+                                  </button>
+                                )}
                                 <button
                                   onClick={() => void handleMembershipDecision(member.id, 'reject')}
                                   disabled={actionBusy}
@@ -1515,7 +1527,18 @@ export default function SavingsGroupDetailPage() {
                                 >
                                   Decline
                                 </button>
-                                {activeMembers.length > 1 && (
+                                {group.requires_admission_vote && (
+                                  <button
+                                    onClick={() => void handleProposeAdmission(member.id)}
+                                    disabled={admissionVoteId === member.id}
+                                    title="This group requires every active member to unanimously accept new admissions — start that vote now"
+                                    className="flex-1 sm:flex-none px-3 py-2 rounded-xl text-xs font-bold text-white"
+                                    style={{ background: admissionVoteId === member.id ? '#D1D5DB' : 'linear-gradient(135deg, #2EAF6F, #1d8a55)', cursor: admissionVoteId === member.id ? 'not-allowed' : 'pointer' }}
+                                  >
+                                    {admissionVoteId === member.id ? 'Starting vote…' : 'Start admission vote'}
+                                  </button>
+                                )}
+                                {!group.requires_admission_vote && activeMembers.length > 1 && (
                                   <button
                                     onClick={() => void handleProposeAdmission(member.id)}
                                     disabled={admissionVoteId === member.id}
@@ -1603,6 +1626,8 @@ export default function SavingsGroupDetailPage() {
                           {openPayoutSwapVotes.map(vote => {
                             const { targetUserId, note } = parseSwapTarget(vote.proposal_text);
                             const busy = voteActionId === vote.id;
+                            const isTargetOfSwap = vote.target_member_id === currentUserId;
+                            const isProposerOfSwap = vote.proposer_id === currentUserId;
                             return (
                               <div key={vote.id} className="rounded-2xl p-3" style={{ background: '#F9FAFB', border: '1px solid #F3F4F6' }}>
                                 <p className="text-xs font-bold text-gray-900">
@@ -1610,7 +1635,7 @@ export default function SavingsGroupDetailPage() {
                                 </p>
                                 {note && <p className="text-xs text-gray-500 mt-0.5">{note}</p>}
                                 <p className="text-[11px] text-gray-400 mt-1">Voting closes {formatDate(vote.voting_deadline)}</p>
-                                {currentMembership?.status === 'active' && (
+                                {isTargetOfSwap ? (
                                   <div className="flex items-center gap-2 mt-2">
                                     <button
                                       onClick={() => void handleCastVote(vote.id, 'approve')}
@@ -1629,6 +1654,12 @@ export default function SavingsGroupDetailPage() {
                                       <ThumbsDown size={12} /> Reject
                                     </button>
                                   </div>
+                                ) : (
+                                  <p className="text-[11px] text-gray-400 mt-2 italic">
+                                    {isProposerOfSwap
+                                      ? `Waiting for ${getMemberDisplayName(targetUserId)} to respond to your swap request.`
+                                      : `Waiting for ${getMemberDisplayName(targetUserId)} to respond — no action needed from you.`}
+                                  </p>
                                 )}
                               </div>
                             );

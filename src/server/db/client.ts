@@ -104,6 +104,7 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
   // both the /profile banner and toast (and on /dashboard, which reads the
   // same row).
   users: [
+    { column: 'username',                   sqlType: 'VARCHAR(50) NULL UNIQUE' },
     { column: 'display_name',               sqlType: 'VARCHAR(100) NULL' },
     { column: 'phone_number',                sqlType: 'VARCHAR(30) NULL' },
     { column: 'stripe_customer_id',          sqlType: 'VARCHAR(100) NULL' },
@@ -112,6 +113,8 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
     { column: 'flutterwave_customer_id',     sqlType: 'VARCHAR(100) NULL' },
     { column: 'flutterwave_card_token',      sqlType: 'VARCHAR(255) NULL' },
     { column: 'flutterwave_subaccount_id',   sqlType: 'VARCHAR(100) NULL' },
+    { column: 'flutterwave_payout_bank_code',      sqlType: 'VARCHAR(20) NULL' },
+    { column: 'flutterwave_payout_account_number', sqlType: 'VARCHAR(34) NULL' },
     { column: 'payment_method_verified_at',  sqlType: 'TIMESTAMP NULL' },
     { column: 'payout_verified_at',          sqlType: 'TIMESTAMP NULL' },
     { column: 'payment_terms_accepted_at',   sqlType: 'TIMESTAMP NULL' },
@@ -252,6 +255,18 @@ export async function ensureSchemaSync(): Promise<void> {
         \`token\` VARCHAR(255) NOT NULL UNIQUE,
         \`responded_at\` TIMESTAMP NULL,
         \`created_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )`,
+    // Backs emailService.ts's logEmailSend() + the admin dashboard's email
+    // usage KPI — see schema.ts emailLogs doc comment.
+    email_logs: `CREATE TABLE IF NOT EXISTS \`email_logs\` (
+        \`id\` VARCHAR(36) NOT NULL PRIMARY KEY,
+        \`recipient\` VARCHAR(255) NOT NULL,
+        \`subject\` VARCHAR(255) NOT NULL,
+        \`status\` ENUM('sent','failed') NOT NULL,
+        \`error_message\` TEXT,
+        \`created_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX \`email_logs_status_idx\` (\`status\`),
+        INDEX \`email_logs_created_at_idx\` (\`created_at\`)
       )`,
   };
   for (const [table, ddl] of Object.entries(newTableDdls)) {

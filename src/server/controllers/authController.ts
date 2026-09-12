@@ -19,6 +19,11 @@ const loginSchema = z.object({
   password: z.string().min(1),
 });
 
+const adminLoginSchema = z.object({
+  username: z.string().min(1),
+  password: z.string().min(1),
+});
+
 const forgotSchema        = z.object({ email: z.string().email() });
 const verifySchema        = z.object({ token: z.string().uuid() });
 const resendVerifySchema  = z.object({ email: z.string().email() });
@@ -44,6 +49,16 @@ export const authController = {
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const result = await authService.login(req.body.email, req.body.password, ip(req.ip));
+        res.json({ success: true, data: result });
+      } catch (e) { next(e); }
+    },
+  ],
+
+  adminLogin: [
+    validate(adminLoginSchema),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const result = await authService.adminLogin(req.body.username, req.body.password, ip(req.ip));
         res.json({ success: true, data: result });
       } catch (e) { next(e); }
     },

@@ -85,8 +85,9 @@ async function refreshSubscriptionActivationStatus(userId: string, eligibleForAc
   }).from(schema.subscriptions).where(eq(schema.subscriptions.user_id, userId)).limit(1);
   const sub = subRows[0];
 
+  const hasExistingNonCancelledSubscription = Boolean(sub && sub.billing_status !== 'cancelled');
   const isConfirmedWithProvider = sub && (sub.billing_status === 'active' || sub.billing_status === 'paused');
-  if (isConfirmedWithProvider || fullyVerifiedSetup) {
+  if (isConfirmedWithProvider || (hasExistingNonCancelledSubscription && fullyVerifiedSetup)) {
     await db.update(schema.users).set({ subscription_status: 'active' as const }).where(eq(schema.users.id, userId));
     return true;
   }
@@ -195,6 +196,10 @@ export async function getPaymentEligibility(userId: string) {
   const emailVerified = Boolean(user.email_verified);
   const identityVerified = Boolean(user.identity_verified);
   const subscriptionTierSelected = user.subscription_tier === 'basic' || user.subscription_tier === 'premium';
+  const subRows = await db.select({ billing_status: schema.subscriptions.billing_status })
+    .from(schema.subscriptions).where(eq(schema.subscriptions.user_id, userId)).limit(1);
+  const sub = subRows[0];
+  const hasExistingNonCancelledSubscription = Boolean(sub && sub.billing_status !== 'cancelled');
   // Every OTHER onboarding prerequisite is met — if the subscription still
   // isn't marked active, it's worth actively retrying activation (see
   // refreshSubscriptionActivationStatus) rather than only passively reading
@@ -202,8 +207,10 @@ export async function getPaymentEligibility(userId: string) {
   // attempt would leave stuck forever.
   const eligibleForSubscriptionActivation = subscriptionTierSelected && paymentMethodVerified && payoutVerified && identityVerified;
   const fullyVerifiedSubscriptionSetup = hasFullyVerifiedSubscriptionSetup(user);
-  const subscriptionActive = (user.subscription_status === 'active' || user.subscription_status === 'trial')
-    || await refreshSubscriptionActivationStatus(user.id, eligibleForSubscriptionActivation, fullyVerifiedSubscriptionSetup);
+  const subscriptionActive = user.subscription_status !== 'cancelled' && (
+    ((user.subscription_status === 'active' || user.subscription_status === 'trial') && hasExistingNonCancelledSubscription)
+    || await refreshSubscriptionActivationStatus(user.id, eligibleForSubscriptionActivation, fullyVerifiedSubscriptionSetup)
+  );
 
   return {
     emailVerified,

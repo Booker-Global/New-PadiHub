@@ -11,6 +11,12 @@ export const users = mysqlTable('users', {
   display_name:                varchar('display_name', { length: 100 }),
   email:                       varchar('email', { length: 255 }).notNull().unique(),
   password_hash:               varchar('password_hash', { length: 255 }).notNull(),
+  // Admin-only login identifier — regular members always sign in with
+  // email/password (see authService.login). Populated only for the
+  // dedicated admin account (see authService.ensureDefaultAdminAccount) so
+  // an admin never needs a real, email-verified member profile just to
+  // reach /admin — see authService.adminLogin.
+  username:                    varchar('username', { length: 50 }).unique(),
   phone_number:                varchar('phone_number', { length: 30 }),
   country:                     varchar('country', { length: 2 }).notNull().default('GB'),
   currency:                    varchar('currency', { length: 3 }).notNull().default('GBP'),
@@ -27,6 +33,8 @@ export const users = mysqlTable('users', {
   flutterwave_customer_id:     varchar('flutterwave_customer_id', { length: 100 }),
   flutterwave_card_token:      varchar('flutterwave_card_token', { length: 255 }),
   flutterwave_subaccount_id:   varchar('flutterwave_subaccount_id', { length: 100 }),
+  flutterwave_payout_bank_code:      varchar('flutterwave_payout_bank_code', { length: 20 }),
+  flutterwave_payout_account_number: varchar('flutterwave_payout_account_number', { length: 34 }),
   // Set only after server-side verification with the provider (Stripe PaymentMethod
   // retrieval + customer match, or Flutterwave transaction verification), and after
   // the payout destination has been confirmed usable (Stripe charges_enabled &&

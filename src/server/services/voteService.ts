@@ -1,12 +1,12 @@
 import { v4 as uuidv4 } from 'uuid';
 import crypto from 'crypto';
-import { eq, and, inArray } from 'drizzle-orm';
+import { eq, and, inArray, lt } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { notificationService } from './notificationService.js';
-import { GOVERNANCE_VOTE_DEADLINE_MS } from '../lib/constants.js';
+import { GOVERNANCE_VOTE_DEADLINE_MS, resolveUserDisplayName } from '../lib/constants.js';
 import { sendGovernanceVoteEmail, sendVoteOutcomeEmail } from '../integrations/email/emailService.js';
 
 const APP_URL = process.env.APP_URL ?? 'https://padihub.com';
@@ -62,6 +62,32 @@ export const voteService = {
       requires_unanimous: false,
       voting_deadline:    new Date(Date.now() + GOVERNANCE_VOTE_DEADLINE_MS),
     }, ipAddress);
+  },
+
+  /**
+   * Find the currently-open member_admission vote (if any) tied to a
+   * specific pending membership row — used by membershipService to decide
+   * whether approving/declining a join request needs to auto-start a vote
+   * (none open yet) or just block/clean up an already-open one. `metadata`
+   * is a JSON column so this is filtered in JS rather than in SQL.
+   */
+  async getOpenAdmissionVoteForMembership(membershipId: string): Promise<VoteRow | null> {
+    const openVotes = await db.select().from(schema.votes)
+      .where(and(eq(schema.votes.proposal_type, 'member_admission'), eq(schema.votes.status, 'open')));
+    return openVotes.find(v => (v.metadata as { membership_id?: string } | null)?.membership_id === membershipId) ?? null;
+  },
+
+  /**
+   * When the group leader directly declines a pending join request that
+   * already has an open unanimous admission vote attached (e.g. it was
+   * auto-started when the request came in, or manually put to a vote),
+   * close that vote as 'rejected' immediately — declining is final, so the
+   * vote must not linger open for another 48 hours asking members to keep
+   * voting on a decision that's already made.
+   */
+  async closeOpenAdmissionVoteForMembership(membershipId: string): Promise<void> {
+    const vote = await this.getOpenAdmissionVoteForMembership(membershipId);
+    if (vote) await this._closeVote(vote, 'rejected');
   },
 
   /**
@@ -171,17 +197,30 @@ export const voteService = {
     }, ipAddress, { autoApproveProposer: true });
   },
 
-  /** Swaps rotation_order between the proposer and the target member once a payout_swap vote is approved. */
-  async executePayoutSwapIfApproved(vote: VoteRow) {
-    if (vote.proposal_type !== 'payout_swap' || !vote.target_member_id) return;
+  /**
+   * Swaps rotation_order between the proposer and the target member once a
+   * payout_swap vote is approved. If the group's CURRENT cycle already has
+   * its `rotations` row created (recipient locked in at cycle-creation time,
+   * separate from the live `memberships.rotation_order` used for future
+   * cycles), that row's recipient is patched too so "who's next"/"current
+   * recipient" reflects the swap immediately rather than only affecting
+   * cycles that haven't been created yet. Returns swap details used by
+   * _resolvePayoutSwap to notify the rest of the group of the exact change.
+   */
+  async executePayoutSwapIfApproved(vote: VoteRow): Promise<{
+    proposerId: string; targetMemberId: string;
+    proposerOrder: number; targetOrder: number;
+    currentCycleRecipientSwapped: boolean; currentCycleNumber?: number;
+  } | null> {
+    if (vote.proposal_type !== 'payout_swap' || !vote.target_member_id) return null;
     const targetMemberId = vote.target_member_id;
 
     const [proposerMembership] = await db.select().from(schema.memberships)
       .where(and(eq(schema.memberships.group_id, vote.group_id), eq(schema.memberships.user_id, vote.proposer_id))).limit(1);
     const [targetMembership] = await db.select().from(schema.memberships)
       .where(and(eq(schema.memberships.group_id, vote.group_id), eq(schema.memberships.user_id, targetMemberId))).limit(1);
-    if (!proposerMembership || !targetMembership) return;
-    if (proposerMembership.rotation_order == null || targetMembership.rotation_order == null) return;
+    if (!proposerMembership || !targetMembership) return null;
+    if (proposerMembership.rotation_order == null || targetMembership.rotation_order == null) return null;
 
     const proposerOrder = proposerMembership.rotation_order;
     const targetOrder = targetMembership.rotation_order;
@@ -194,6 +233,29 @@ export const voteService = {
       metadata: { group_id: vote.group_id, swapped_with: targetMemberId, proposer_new_order: targetOrder, target_new_order: proposerOrder },
     });
 
+    // Patch the current, already-created cycle's locked-in recipient (if any)
+    // so "Rotation — Who's Next" reflects the swap immediately.
+    let currentCycleRecipientSwapped = false;
+    let currentCycleNumber: number | undefined;
+    const [group] = await db.select().from(schema.savingsGroups).where(eq(schema.savingsGroups.id, vote.group_id)).limit(1);
+    if (group) {
+      const [currentRotation] = await db.select().from(schema.rotations).where(and(
+        eq(schema.rotations.group_id, vote.group_id),
+        eq(schema.rotations.cycle_number, group.current_cycle),
+        inArray(schema.rotations.payout_status, ['pending', 'processing']),
+      )).limit(1);
+      if (currentRotation) {
+        currentCycleNumber = currentRotation.cycle_number;
+        if (currentRotation.recipient_id === vote.proposer_id) {
+          await db.update(schema.rotations).set({ recipient_id: targetMemberId }).where(eq(schema.rotations.id, currentRotation.id));
+          currentCycleRecipientSwapped = true;
+        } else if (currentRotation.recipient_id === targetMemberId) {
+          await db.update(schema.rotations).set({ recipient_id: vote.proposer_id }).where(eq(schema.rotations.id, currentRotation.id));
+          currentCycleRecipientSwapped = true;
+        }
+      }
+    }
+
     for (const userId of [vote.proposer_id, targetMemberId]) {
       await notificationService.create({
         userId, type: 'payout_swap_completed',
@@ -201,6 +263,8 @@ export const voteService = {
         message: 'Your payout rotation swap was accepted — your payout position has been updated.',
       });
     }
+
+    return { proposerId: vote.proposer_id, targetMemberId, proposerOrder, targetOrder, currentCycleRecipientSwapped, currentCycleNumber };
   },
 
   async create(data: {
@@ -481,7 +545,7 @@ export const voteService = {
   },
 
   async _resolvePayoutSwap(vote: VoteRow, status: 'approved' | 'rejected' | 'expired') {
-    if (status === 'approved') await this.executePayoutSwapIfApproved(vote);
+    const executed = status === 'approved' ? await this.executePayoutSwapIfApproved(vote) : null;
     if (!vote.target_member_id) return;
 
     const groupRows = await db.select({ name: schema.savingsGroups.name }).from(schema.savingsGroups)
@@ -495,6 +559,63 @@ export const voteService = {
       : 'The payout swap request was declined or timed out — nothing has changed.';
     for (const p of parties) {
       await sendVoteOutcomeEmail(p.email, groupName, status === 'approved' ? 'Payout Swap Accepted' : 'Payout Swap Not Completed', outcomeText);
+    }
+
+    // Every OTHER active group member must also be told a swap went through
+    // and exactly what changed in the payout schedule, since it affects
+    // everyone's position in the rotation, not just the two parties.
+    if (status === 'approved' && executed) {
+      await this._notifyOtherMembersOfPayoutSwap(vote.group_id, groupName, executed);
+    }
+  },
+
+  /**
+   * Extracted from _resolvePayoutSwap so the retroactive migration below can
+   * send the exact same "other members" notification for swaps that were
+   * approved under the old code (which never sent it at all).
+   */
+  async _notifyOtherMembersOfPayoutSwap(
+    groupId: string, groupName: string,
+    executed: {
+      proposerId: string; targetMemberId: string;
+      proposerOrder: number; targetOrder: number;
+      currentCycleRecipientSwapped: boolean; currentCycleNumber?: number;
+    },
+  ): Promise<void> {
+    const proposerRow = await db.select({ first_name: schema.users.first_name, last_name: schema.users.last_name, display_name: schema.users.display_name, email: schema.users.email })
+      .from(schema.users).where(eq(schema.users.id, executed.proposerId)).limit(1);
+    const targetRow = await db.select({ first_name: schema.users.first_name, last_name: schema.users.last_name, display_name: schema.users.display_name, email: schema.users.email })
+      .from(schema.users).where(eq(schema.users.id, executed.targetMemberId)).limit(1);
+    const proposerName = proposerRow.length ? resolveUserDisplayName(proposerRow[0]) : 'A member';
+    const targetName = targetRow.length ? resolveUserDisplayName(targetRow[0]) : 'a member';
+
+    const otherMembers = await db.select({ user_id: schema.memberships.user_id })
+      .from(schema.memberships)
+      .where(and(
+        eq(schema.memberships.group_id, groupId),
+        eq(schema.memberships.status, 'active'),
+      ));
+    const otherMemberIds = otherMembers
+      .map(m => m.user_id)
+      .filter(uid => uid !== executed.proposerId && uid !== executed.targetMemberId);
+
+    if (!otherMemberIds.length) return;
+
+    const otherEmails = await db.select({ id: schema.users.id, email: schema.users.email })
+      .from(schema.users).where(inArray(schema.users.id, otherMemberIds));
+    const changeText = `${proposerName} (payout position ${executed.targetOrder}) and ${targetName} (payout position ${executed.proposerOrder}) swapped payout positions in "${groupName}"`
+      + (executed.currentCycleRecipientSwapped
+        ? `, including who receives the payout in the current cycle (cycle ${executed.currentCycleNumber}).`
+        : '.');
+    for (const m of otherEmails) {
+      await sendVoteOutcomeEmail(m.email, groupName, 'Payout Schedule Updated', changeText);
+    }
+    for (const uid of otherMemberIds) {
+      await notificationService.create({
+        userId: uid, type: 'payout_swap_completed',
+        title: 'Payout Schedule Updated',
+        message: changeText,
+      });
     }
   },
 
@@ -593,6 +714,111 @@ export const voteService = {
     for (const vote of openVotes) {
       if (vote.voting_deadline > now) continue;
       await this._tallyAndMaybeClose(vote, true);
+    }
+  },
+
+  /**
+   * Retroactive self-heal, run once at boot (see entry.ts). Before this
+   * change, an approved payout_swap vote correctly swapped the two members'
+   * `memberships.rotation_order` (that part always worked), but never (a)
+   * patched an already-locked-in current-cycle `rotations.recipient_id`, so
+   * "Rotation — Who's Next" kept showing the pre-swap recipient, nor (b)
+   * told the rest of the group anything changed. Finds every approved
+   * payout_swap vote not yet covered by a PAYOUT_SWAP_RETRO_SYNC_APPLIED
+   * marker, re-derives what changed from the PAYOUT_SWAP_EXECUTED audit log
+   * written at the time (the only durable record, since `votes` has no
+   * resolved_at column), patches the current-cycle rotation ONLY if it's
+   * both still unpaid and was created before the swap actually happened
+   * (never touches a cycle that has nothing to do with this swap, or one
+   * that's already been paid out), sends the "other members" notification,
+   * then writes the marker — so a vote is only ever processed here once,
+   * which is essential since blindly re-matching proposer/target against a
+   * rotation's recipient on every boot would otherwise flip it back and
+   * forth forever.
+   */
+  async retroactivelySyncApprovedPayoutSwaps(): Promise<void> {
+    try {
+      const approvedSwapVotes = await db.select().from(schema.votes).where(and(
+        eq(schema.votes.proposal_type, 'payout_swap'),
+        eq(schema.votes.status, 'approved'),
+      ));
+      if (!approvedSwapVotes.length) return;
+
+      for (const vote of approvedSwapVotes) {
+        try {
+          if (!vote.target_member_id) continue;
+
+          const alreadyApplied = await db.select({ id: schema.auditLogs.id }).from(schema.auditLogs).where(and(
+            eq(schema.auditLogs.action, 'PAYOUT_SWAP_RETRO_SYNC_APPLIED'),
+            eq(schema.auditLogs.entity, 'votes'),
+            eq(schema.auditLogs.entity_id, vote.id),
+          )).limit(1);
+          if (alreadyApplied.length) continue;
+
+          const executedLogs = await db.select().from(schema.auditLogs).where(and(
+            eq(schema.auditLogs.action, 'PAYOUT_SWAP_EXECUTED'),
+            eq(schema.auditLogs.user_id, vote.proposer_id),
+            eq(schema.auditLogs.entity, 'memberships'),
+          ));
+          const executedLog = executedLogs.find((log) => {
+            const metadata = log.metadata as { group_id?: string; swapped_with?: string } | null;
+            return metadata?.group_id === vote.group_id && metadata?.swapped_with === vote.target_member_id;
+          });
+          if (!executedLog) continue; // swap never actually executed (shouldn't happen for an 'approved' vote, but be defensive)
+          const executionMetadata = executedLog.metadata as {
+            proposer_new_order?: number; target_new_order?: number;
+          } | null;
+          const proposerOrder = executionMetadata?.target_new_order; // proposer's order BEFORE the swap = target's new order
+          const targetOrder = executionMetadata?.proposer_new_order;
+
+          let currentCycleRecipientSwapped = false;
+          let currentCycleNumber: number | undefined;
+          const [group] = await db.select().from(schema.savingsGroups).where(eq(schema.savingsGroups.id, vote.group_id)).limit(1);
+          if (group) {
+            const [currentRotation] = await db.select().from(schema.rotations).where(and(
+              eq(schema.rotations.group_id, vote.group_id),
+              eq(schema.rotations.cycle_number, group.current_cycle),
+              inArray(schema.rotations.payout_status, ['pending', 'processing']),
+              lt(schema.rotations.created_at, executedLog.created_at),
+            )).limit(1);
+            if (currentRotation) {
+              currentCycleNumber = currentRotation.cycle_number;
+              if (currentRotation.recipient_id === vote.proposer_id) {
+                await db.update(schema.rotations).set({ recipient_id: vote.target_member_id }).where(eq(schema.rotations.id, currentRotation.id));
+                currentCycleRecipientSwapped = true;
+              } else if (currentRotation.recipient_id === vote.target_member_id) {
+                await db.update(schema.rotations).set({ recipient_id: vote.proposer_id }).where(eq(schema.rotations.id, currentRotation.id));
+                currentCycleRecipientSwapped = true;
+              }
+            }
+          }
+
+          if (currentCycleRecipientSwapped) {
+            console.log(`[PadiHub] Retroactive payout-swap migration: patched stale current-cycle recipient for group ${vote.group_id} (vote ${vote.id}).`);
+          }
+
+          const groupRows = await db.select({ name: schema.savingsGroups.name }).from(schema.savingsGroups)
+            .where(eq(schema.savingsGroups.id, vote.group_id)).limit(1);
+          const groupName = groupRows.length ? groupRows[0].name : 'your group';
+          await this._notifyOtherMembersOfPayoutSwap(vote.group_id, groupName, {
+            proposerId: vote.proposer_id,
+            targetMemberId: vote.target_member_id,
+            proposerOrder: proposerOrder ?? 0,
+            targetOrder: targetOrder ?? 0,
+            currentCycleRecipientSwapped,
+            currentCycleNumber,
+          });
+
+          await createAuditLog({
+            action: 'PAYOUT_SWAP_RETRO_SYNC_APPLIED', entity: 'votes', entityId: vote.id,
+            metadata: { group_id: vote.group_id, current_cycle_recipient_swapped: currentCycleRecipientSwapped },
+          });
+        } catch (err) {
+          console.error(`[PadiHub] Retroactive payout-swap migration failed for vote ${vote.id}:`, err instanceof Error ? err.message : err);
+        }
+      }
+    } catch (err) {
+      console.error('[PadiHub] Retroactive payout-swap migration failed:', err instanceof Error ? err.message : err);
     }
   },
 };
