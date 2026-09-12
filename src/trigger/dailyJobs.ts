@@ -10,6 +10,9 @@
  *          concurrency-safe (see advanceIfCycleComplete's doc comment), so re-running it here is
  *          always a safe no-op for cycles already advanced.
  *   06:00  contribution reminders
+ *   06:05  upcoming payout reminders (Section 22 follow-up — sent ~7 days before
+ *          scheduled_payout_date, deduplicated via upcoming_payout_reminder_sent_at, never at
+ *          rotation-creation time which could be a full cycle length in advance)
  *   06:50  overdue check (still only touches contributions due from PRIOR days)
  *   07:00  PRIMARY charge trigger: trust-score status flip (scheduled → due)
  *   07:05  PRIMARY charge trigger: auto-charge newly-due contributions
@@ -49,6 +52,7 @@ import {
   monthlyGenerateContributionSchedule,
   monthlyAdvanceRotation,
   dailyContributionReminders,
+  dailyUpcomingPayoutReminders,
   dailyOverdueCheck,
   dailyTrustScoreUpdates,
   dailyAutoChargeDueContributions,
@@ -90,6 +94,15 @@ export const dailyContributionRemindersTask = schedules.task({
   run: async () => {
     await dailyContributionReminders();
     return { ok: true, task: 'daily-contribution-reminders' };
+  },
+});
+
+export const dailyUpcomingPayoutRemindersTask = schedules.task({
+  id: 'daily-upcoming-payout-reminders',
+  cron: '5 6 * * *',
+  run: async () => {
+    await dailyUpcomingPayoutReminders();
+    return { ok: true, task: 'daily-upcoming-payout-reminders' };
   },
 });
 

@@ -608,7 +608,7 @@ export async function sendContributionReminderEmail(
 ): Promise<void> {
   await send(to, `Contribution reminder — ${groupName}`, wrap(`
     ${h2('Your contribution is due soon')}
-    ${p(`A reminder that your contribution to <strong>${groupName}</strong> is due in 3 days.`)}
+    ${p(`A reminder that your contribution to <strong>${groupName}</strong> is coming up soon.`)}
     ${table(
       detail('Group', groupName) +
       detail('Amount due', amount) +

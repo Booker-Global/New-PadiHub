@@ -287,4 +287,44 @@ export const contributionService = {
     }
     return ids;
   },
+
+  /**
+   * The real monetary size of a cycle's payout pot: the sum of what the
+   * members who are ACTUALLY contributing this cycle owe (or have already
+   * paid) — never the group's `maximum_members` capacity. A group can have
+   * up to `maximum_members` slots but only however-many are currently
+   * active/contributing; one contribution row is created per active member
+   * when a cycle's schedule is generated (see generateCycleSchedule above),
+   * so summing amount_paid ?? amount_due across those rows is ground truth
+   * for "who is actually contributing", fixing the PR38 regression where
+   * the pot was calculated as contribution_amount × maximum_members instead
+   * (e.g. a group contributing £100/month with 10 slots but only 3 active
+   * members showed a £1,000 payout instead of the correct £300).
+   *
+   * Falls back to (contributionAmount × current active member count) when
+   * the cycle's schedule hasn't been generated yet — e.g. the "upcoming
+   * payout" rotation record for the next cycle is created by
+   * rotationService.advance() before the nightly schedule-generation job
+   * has run for that cycle. This fallback still reflects real active
+   * headcount, never capacity.
+   */
+  async getCyclePotAmount(groupId: string, cycleNumber: number, contributionAmount: number): Promise<number> {
+    const cycleContributions = await db.select({
+      amount_due:  schema.contributions.amount_due,
+      amount_paid: schema.contributions.amount_paid,
+    }).from(schema.contributions)
+      .where(and(eq(schema.contributions.group_id, groupId), eq(schema.contributions.cycle_number, cycleNumber)));
+
+    if (cycleContributions.length > 0) {
+      return cycleContributions.reduce((sum, c) => {
+        const raw = c.amount_paid ?? c.amount_due;
+        const parsed = parseFloat(raw);
+        return sum + (Number.isFinite(parsed) ? parsed : 0);
+      }, 0);
+    }
+
+    const activeMembers = await db.select({ id: schema.memberships.id }).from(schema.memberships)
+      .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')));
+    return (Number.isFinite(contributionAmount) ? contributionAmount : 0) * activeMembers.length;
+  },
 };

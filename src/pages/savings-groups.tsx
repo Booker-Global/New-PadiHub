@@ -55,6 +55,7 @@ interface Rotation {
   recipient_id: string;
   payout_status: 'pending' | 'processing' | 'completed' | 'failed';
   completed_date?: string | null;
+  pot_amount?: number | string;
 }
 
 interface ApiResponse<T> {
@@ -194,22 +195,15 @@ export default function SavingsGroupsPage() {
   // user belongs to shares one currency; safe to pick it from any group.
   const primaryCurrency: SavingsGroup['currency'] = groups[0]?.currency ?? 'GBP';
 
-  const groupById = useMemo(
-    () => Object.fromEntries(groups.map(group => [group.id, group])),
-    [groups],
-  );
-
-  // Mirrors the per-group payoutPotAmount calc in savings-groups/[id].tsx
-  // (contribution_amount × maximum_members) so the totals shown here always
-  // match the amount actually transferred when a rotation completes.
-  const potAmountForGroup = useCallback((groupId: string) => {
-    const group = groupById[groupId];
-    if (!group) return 0;
-    const numericContribution = typeof group.contribution_amount === 'number'
-      ? group.contribution_amount
-      : Number.parseFloat(group.contribution_amount);
-    return (Number.isFinite(numericContribution) ? numericContribution : 0) * group.maximum_members;
-  }, [groupById]);
+  // pot_amount now comes from the API (rotationService.getCyclePotAmount —
+  // sum of what THIS cycle's actual active/contributing members owe or
+  // paid), never contribution_amount × maximum_members capacity.
+  const potAmountForRotation = useCallback((rotation: Rotation) => {
+    const value = rotation.pot_amount;
+    if (value === undefined || value === null) return 0;
+    const numeric = typeof value === 'number' ? value : Number.parseFloat(value);
+    return Number.isFinite(numeric) ? numeric : 0;
+  }, []);
 
   const totalContributed = useMemo(
     () => timeline
@@ -228,8 +222,8 @@ export default function SavingsGroupsPage() {
   );
 
   const totalReceived = useMemo(
-    () => completedPayouts.reduce((sum, entry) => sum + potAmountForGroup(entry.group_id), 0),
-    [completedPayouts, potAmountForGroup],
+    () => completedPayouts.reduce((sum, entry) => sum + potAmountForRotation(entry), 0),
+    [completedPayouts, potAmountForRotation],
   );
 
   const summaryStats = useMemo(() => {
