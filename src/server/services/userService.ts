@@ -401,6 +401,8 @@ export const userService = {
           flutterwave_customer_id:     null,
           flutterwave_card_token:      null,
           flutterwave_subaccount_id:   null,
+          flutterwave_payout_bank_code: null,
+          flutterwave_payout_account_number: null,
           payment_method_verified_at:  null,
           payout_verified_at:          null,
           payment_terms_accepted_at:   null,

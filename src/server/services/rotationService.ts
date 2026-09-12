@@ -8,7 +8,7 @@ import { notificationService } from './notificationService.js';
 import { trustScoreService } from './trustScoreService.js';
 import { monitoringService } from './monitoringService.js';
 import { groupService } from './groupService.js';
-import { getStripeProvider } from '../integrations/payments/PaymentProviderFactory.js';
+import { getStripeProvider, getFlutterwaveProvider } from '../integrations/payments/PaymentProviderFactory.js';
 import { TRUST_SCORE_DELTA_CYCLE_COMPLETED, resolveUserDisplayName, UPCOMING_PAYOUT_REMINDER_ADVANCE_DAYS } from '../lib/constants.js';
 import { computeNextPayoutDate } from '../lib/payoutSchedule.js';
 import {
@@ -23,25 +23,21 @@ type SavingsGroupRow = typeof schema.savingsGroups.$inferSelect;
 type RotationRow = typeof schema.rotations.$inferSelect;
 
 /**
- * Move a completed cycle's collected pot from the platform's Stripe balance
- * (where every contribution charge lands — see StripeProvider.chargeContribution,
- * which never sets on_behalf_of/transfer_data) to that cycle's recipient's
- * Express connected account, via a separate Transfer. NG/Flutterwave payouts
- * are unaffected by this — that wiring is tracked separately.
+ * Move a completed cycle's collected pot from the platform's provider balance
+ * to that cycle's recipient using the group's configured payout provider.
  */
-async function transferCyclePotToStripeRecipient(
+async function transferCyclePotToRecipient(
   group: SavingsGroupRow, rotation: RotationRow,
 ): Promise<{ success: boolean; reference?: string }> {
   const recipientRows = await db.select({
     stripe_connected_account_id: schema.users.stripe_connected_account_id,
+    flutterwave_payout_bank_code: schema.users.flutterwave_payout_bank_code,
+    flutterwave_payout_account_number: schema.users.flutterwave_payout_account_number,
     payout_verified_at:          schema.users.payout_verified_at,
+    first_name:                  schema.users.first_name,
+    last_name:                   schema.users.last_name,
   }).from(schema.users).where(eq(schema.users.id, rotation.recipient_id)).limit(1);
   const recipient = recipientRows[0];
-
-  if (!recipient?.stripe_connected_account_id || !recipient.payout_verified_at) {
-    await recordTransferFailure(group, rotation, 'Recipient has no verified Stripe Express payout account.');
-    return { success: false };
-  }
 
   const cycleContributions = await db.select({
     amount_paid: schema.contributions.amount_paid,
@@ -60,12 +56,40 @@ async function transferCyclePotToStripeRecipient(
   }
 
   try {
-    const result = await getStripeProvider().createTransfer({
-      recipientAccountId: recipient.stripe_connected_account_id,
-      amount:              potMinorUnits,
-      currency:            group.currency,
-      rotationId:          rotation.id,
-      description:         `PadiHub payout — ${group.name} cycle ${rotation.cycle_number}`,
+    if (group.payment_provider === 'stripe') {
+      if (!recipient?.stripe_connected_account_id || !recipient.payout_verified_at) {
+        await recordTransferFailure(group, rotation, 'Recipient has no verified Stripe Express payout account.');
+        return { success: false };
+      }
+
+      const result = await getStripeProvider().createTransfer({
+        recipientAccountId: recipient.stripe_connected_account_id,
+        amount:              potMinorUnits,
+        currency:            group.currency,
+        rotationId:          rotation.id,
+        description:         `PadiHub payout — ${group.name} cycle ${rotation.cycle_number}`,
+      });
+      return { success: true, reference: result.providerTransferReference };
+    }
+
+    if (
+      !recipient?.flutterwave_payout_bank_code
+      || !recipient.flutterwave_payout_account_number
+      || !recipient.payout_verified_at
+    ) {
+      await recordTransferFailure(group, rotation, 'Recipient has no verified Flutterwave payout bank account.');
+      return { success: false };
+    }
+
+    const result = await getFlutterwaveProvider().createTransfer({
+      recipientAccountId:    recipient.flutterwave_payout_account_number,
+      amount:                potMinorUnits,
+      currency:              group.currency,
+      rotationId:            rotation.id,
+      description:           `PadiHub payout — ${group.name} cycle ${rotation.cycle_number}`,
+      recipientBankCode:     recipient.flutterwave_payout_bank_code,
+      recipientAccountNumber: recipient.flutterwave_payout_account_number,
+      recipientName:         `${recipient.first_name} ${recipient.last_name}`,
     });
     return { success: true, reference: result.providerTransferReference };
   } catch (err) {
@@ -268,14 +292,13 @@ export const rotationService = {
     if (!groupRows.length) throw new AppError('Group not found.', 404);
     const group = groupRows[0];
 
-    // Mark current rotation complete — for Stripe (UK) groups, a Transfer
-    // must actually move the collected pot to the recipient's Express
-    // account first; the platform never holds the transferred funds.
+    // Mark current rotation complete — for provider-backed payout groups, a
+    // Transfer must actually move the collected pot to the recipient first.
     const current = await this.getCurrent(groupId);
     if (current) {
       let transferReference: string | undefined;
-      if (group.payment_provider === 'stripe' && current.payout_status !== 'completed') {
-        const transfer = await transferCyclePotToStripeRecipient(group, current);
+      if ((group.payment_provider === 'stripe' || group.payment_provider === 'flutterwave') && current.payout_status !== 'completed') {
+        const transfer = await transferCyclePotToRecipient(group, current);
         if (!transfer.success) {
           // Leave this cycle's rotation un-advanced so the daily job retries
           // the transfer tomorrow — createTransfer's idempotency key is the

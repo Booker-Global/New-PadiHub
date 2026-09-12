@@ -314,6 +314,15 @@ export const membershipService = {
    * Group leader approves a pending join request. Assigns the new member the
    * next rotation slot (amending the payout schedule) and emails the new
    * member, the leader, and every other existing active member.
+   *
+   * If the group requires a unanimous admission vote, this never admits the
+   * member directly. If a vote for this membership is already open, it
+   * blocks with an explanatory error (nothing to do but wait). Otherwise —
+   * this used to just throw here, leaving the leader stuck with no vote
+   * ever created (e.g. the request was submitted before "Require voting for
+   * new members" was turned on, so membershipService.join()'s auto-vote
+   * never ran for it) — auto-start the admission vote on the leader's
+   * behalf instead, so every other member is actually asked to weigh in.
    */
   async approveJoinRequest(leaderId: string, membershipId: string, ipAddress?: string) {
     const membershipRows = await db.select().from(schema.memberships).where(eq(schema.memberships.id, membershipId)).limit(1);
@@ -324,11 +333,22 @@ export const membershipService = {
     const group = await groupService.getById(membership.group_id);
     if (group.leader_id !== leaderId) throw new AppError('Only the group leader can approve join requests.', 403);
     if (group.requires_admission_vote) {
-      throw new AppError(
-        'This group requires a unanimous member vote for new admissions — use "Start admission vote" instead of approving directly.',
-        403,
-        'ADMISSION_VOTE_REQUIRED',
-      );
+      const { voteService } = await import('./voteService.js');
+      const existingVote = await voteService.getOpenAdmissionVoteForMembership(membershipId);
+      if (existingVote) {
+        throw new AppError(
+          'This group requires a unanimous member vote for new admissions — a vote is already open for this request. Wait for every active member to respond (or the 48-hour deadline) before it can be decided.',
+          403,
+          'ADMISSION_VOTE_REQUIRED',
+        );
+      }
+      const voteId = await voteService.proposeMemberAdmission(group.id, leaderId, membershipId, ipAddress);
+      return {
+        success: true,
+        vote_started: true,
+        vote_id: voteId,
+        message: 'This group requires a unanimous member vote for new admissions — that vote has now been started. Every active member has 48 hours to respond by email.',
+      };
     }
 
     return this._activatePendingMembership(membershipId, ipAddress);
@@ -426,7 +446,17 @@ export const membershipService = {
     return { success: true, rotation_order: nextRotationOrder };
   },
 
-  /** Group leader rejects a pending join request. */
+  /**
+   * Group leader rejects a pending join request. Unlike approval, this
+   * never requires the group's unanimous-admission-vote consensus — that
+   * requirement exists to protect the group from being changed (a new
+   * payout slot added) without everyone's agreement, which only matters for
+   * ADMITTING someone. Declining doesn't add anyone, so the leader can
+   * always do it unilaterally. If an admission vote happens to already be
+   * open for this membership (e.g. auto-started when the request came in,
+   * or manually put to a vote), it's closed as rejected too so it doesn't
+   * linger open asking members to keep voting on an already-decided outcome.
+   */
   async rejectJoinRequest(leaderId: string, membershipId: string, ipAddress?: string) {
     const membershipRows = await db.select().from(schema.memberships).where(eq(schema.memberships.id, membershipId)).limit(1);
     if (!membershipRows.length) throw new AppError('Join request not found.', 404);
@@ -435,13 +465,9 @@ export const membershipService = {
 
     const group = await groupService.getById(membership.group_id);
     if (group.leader_id !== leaderId) throw new AppError('Only the group leader can reject join requests.', 403);
-    if (group.requires_admission_vote) {
-      throw new AppError(
-        'This group requires a unanimous member vote for new admissions — the group vote already in progress will reject this request if any member declines.',
-        403,
-        'ADMISSION_VOTE_REQUIRED',
-      );
-    }
+
+    const { voteService } = await import('./voteService.js');
+    await voteService.closeOpenAdmissionVoteForMembership(membershipId);
 
     return this._invalidatePendingMembership(membershipId, ipAddress, leaderId);
   },
@@ -500,6 +526,8 @@ export const membershipService = {
     if (group.leader_id !== leaderId) throw new AppError('Only the group leader can start an admission vote.', 403);
 
     const { voteService } = await import('./voteService.js');
+    const existingVote = await voteService.getOpenAdmissionVoteForMembership(membershipId);
+    if (existingVote) throw new AppError('A vote is already open for this join request.', 409, 'ADMISSION_VOTE_ALREADY_OPEN');
     const voteId = await voteService.proposeMemberAdmission(group.id, leaderId, membershipId, ipAddress);
     return { success: true, vote_id: voteId };
   },

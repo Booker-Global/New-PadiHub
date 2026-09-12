@@ -112,6 +112,8 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
     { column: 'flutterwave_customer_id',     sqlType: 'VARCHAR(100) NULL' },
     { column: 'flutterwave_card_token',      sqlType: 'VARCHAR(255) NULL' },
     { column: 'flutterwave_subaccount_id',   sqlType: 'VARCHAR(100) NULL' },
+    { column: 'flutterwave_payout_bank_code',      sqlType: 'VARCHAR(20) NULL' },
+    { column: 'flutterwave_payout_account_number', sqlType: 'VARCHAR(34) NULL' },
     { column: 'payment_method_verified_at',  sqlType: 'TIMESTAMP NULL' },
     { column: 'payout_verified_at',          sqlType: 'TIMESTAMP NULL' },
     { column: 'payment_terms_accepted_at',   sqlType: 'TIMESTAMP NULL' },

@@ -336,9 +336,27 @@ export async function dailyBillingActiveGroupReconciliation(): Promise<void> {
     const subs = await db.select({ user_id: schema.subscriptions.user_id })
       .from(schema.subscriptions)
       .where(inArray(schema.subscriptions.billing_status, ['active', 'paused']));
+    const activeGroupMembersMissingSubscription = await db.select({ user_id: schema.memberships.user_id })
+      .from(schema.memberships)
+      .innerJoin(schema.savingsGroups, eq(schema.memberships.group_id, schema.savingsGroups.id))
+      .leftJoin(schema.subscriptions, eq(schema.subscriptions.user_id, schema.memberships.user_id))
+      .where(and(
+        eq(schema.memberships.status, 'active'),
+        eq(schema.savingsGroups.status, 'active'),
+        isNull(schema.subscriptions.id),
+      ));
 
-    for (const sub of subs) {
-      await subscriptionService.reconcileBillingForActiveGroupMembership(sub.user_id);
+    const userIds = new Set([
+      ...subs.map(sub => sub.user_id),
+      ...activeGroupMembersMissingSubscription.map(member => member.user_id),
+    ]);
+
+    for (const userId of userIds) {
+      try {
+        await subscriptionService.reconcileBillingForActiveGroupMembership(userId);
+      } catch (err) {
+        console.error(`[Job] daily_billing_active_group_reconciliation: failed for user ${userId}:`, err instanceof Error ? err.message : err);
+      }
     }
   });
 }

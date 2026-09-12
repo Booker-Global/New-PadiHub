@@ -107,6 +107,10 @@ type PlanSwitchResult = {
   effective_immediately?: boolean;
   effective_date?: Date;
 };
+type CreateSubscriptionOptions = {
+  deferBilling?: boolean;
+  suppressCreatedEmail?: boolean;
+};
 
 /**
  * Audit-log actions that represent a real billing/payment event for a
@@ -279,6 +283,7 @@ export const subscriptionService = {
     const existingSubRows = await db.select({ billing_status: schema.subscriptions.billing_status })
       .from(schema.subscriptions).where(eq(schema.subscriptions.user_id, userId)).limit(1);
     const existingSub = existingSubRows[0];
+    if (user.subscription_status === 'cancelled' || existingSub?.billing_status === 'cancelled') return;
     if (existingSub && (existingSub.billing_status === 'active' || existingSub.billing_status === 'paused')) return;
 
     // Every member-controlled onboarding input is already on file and
@@ -317,6 +322,24 @@ export const subscriptionService = {
     }
 
     try {
+      const activeGroupCount = existingSub ? 0 : await groupService.countActiveGroupMembershipsForUser(userId);
+      if (!existingSub && activeGroupCount > 0) {
+        // A member who somehow reached an already-active group with NO local
+        // subscription row yet (for example via an earlier self-heal that set
+        // users.subscription_status='active' without ever materialising the
+        // `subscriptions` row) must NOT go straight through createSubscription
+        // "live" on Flutterwave: that code path only creates the bookkeeping
+        // row and would mark billing active without ever charging the card.
+        // Seed the missing row in deferred/paused form first, then hand off to
+        // the normal active-group billing reconciliation below, which already
+        // performs the real immediate first charge for BOTH providers.
+        await this.createSubscription(userId, user.country, user.subscription_tier, {
+          deferBilling: true,
+          suppressCreatedEmail: true,
+        });
+        await this.reconcileBillingForActiveGroupMembership(userId);
+        return;
+      }
       await this.activateSubscription(userId);
     } catch (err) {
       // A missing Stripe/Flutterwave secret key or Price/Plan ID env var
@@ -366,7 +389,7 @@ export const subscriptionService = {
    * activateSubscription() once a payment method is verified, and by
    * reactivateSubscription()/switchPlan().
    */
-  async createSubscription(userId: string, country: string, tier: SubscriptionTierKey) {
+  async createSubscription(userId: string, country: string, tier: SubscriptionTierKey, options: CreateSubscriptionOptions = {}) {
     const userRows = await db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1);
     if (!userRows.length) throw new AppError('User not found.', 404);
     const user = userRows[0];
@@ -379,7 +402,7 @@ export const subscriptionService = {
     // this flips to live billing (and back to paused) as group membership
     // changes.
     const activeGroupCount = await groupService.countActiveGroupMembershipsForUser(userId);
-    const deferBilling = activeGroupCount === 0;
+    const deferBilling = options.deferBilling ?? activeGroupCount === 0;
 
     // Stamp the attempt on any PRE-EXISTING subscription row up front —
     // before contacting the provider at all — so a retry that ends up
@@ -517,13 +540,15 @@ export const subscriptionService = {
     });
 
     if (billingIsActive) {
-      await sendSubscriptionCreatedEmail(
-        user.email,
-        SUBSCRIPTION_TIERS[tier].name,
-        formatTierPrice(tier, country),
-        result.renewalDate ? result.renewalDate.toLocaleDateString('en-GB') : 'your next billing date',
-        deferBilling,
-      );
+      if (!options.suppressCreatedEmail) {
+        await sendSubscriptionCreatedEmail(
+          user.email,
+          SUBSCRIPTION_TIERS[tier].name,
+          formatTierPrice(tier, country),
+          result.renewalDate ? result.renewalDate.toLocaleDateString('en-GB') : 'your next billing date',
+          deferBilling,
+        );
+      }
     } else if (isStripeSubscriptionAwaitingConfirmation(country, result.status)) {
       await notificationService.create({
         userId,
@@ -882,9 +907,15 @@ export const subscriptionService = {
    * so NG renewals are equally deferred/resumed by this same flag flip.
    */
   async reconcileBillingForActiveGroupMembership(userId: string) {
+    const activeGroupCount = await groupService.countActiveGroupMembershipsForUser(userId);
     const subRows = await db.select().from(schema.subscriptions)
       .where(eq(schema.subscriptions.user_id, userId)).limit(1);
-    if (!subRows.length) return;
+    if (!subRows.length) {
+      if (activeGroupCount > 0) {
+        await this.activateSubscriptionIfEligible(userId);
+      }
+      return;
+    }
     const sub = subRows[0];
     if (sub.billing_status === 'cancelled') return;
 
@@ -892,8 +923,6 @@ export const subscriptionService = {
     if (!userRows.length) return;
     const user = userRows[0];
     const provider = getPaymentProvider(user.country);
-
-    const activeGroupCount = await groupService.countActiveGroupMembershipsForUser(userId);
 
     if (activeGroupCount === 0 && sub.billing_status !== 'paused') {
       if (sub.provider_subscription_id) {
@@ -1172,7 +1201,7 @@ export const subscriptionService = {
           eq(schema.users.identity_verified, true),
           isNotNull(schema.users.payment_method_verified_at),
           isNotNull(schema.users.payout_verified_at),
-          notInArray(schema.users.subscription_status, ['active', 'trial']),
+          notInArray(schema.users.subscription_status, ['active', 'trial', 'cancelled']),
         ));
 
       if (!candidates.length) return;
@@ -1225,6 +1254,7 @@ export const subscriptionService = {
     try {
       const candidates = await db.select({ id: schema.users.id })
         .from(schema.users)
+        .innerJoin(schema.subscriptions, eq(schema.subscriptions.user_id, schema.users.id))
         .where(and(
           eq(schema.users.account_status, 'active'),
           eq(schema.users.email_verified, true),
@@ -1236,6 +1266,7 @@ export const subscriptionService = {
           inArray(schema.users.subscription_tier, ['basic', 'premium']),
           or(isNotNull(schema.users.stripe_customer_id), isNotNull(schema.users.flutterwave_customer_id)),
           or(isNotNull(schema.users.stripe_connected_account_id), isNotNull(schema.users.flutterwave_subaccount_id)),
+          notInArray(schema.subscriptions.billing_status, ['cancelled']),
           notInArray(schema.users.subscription_status, ['active', 'trial']),
         ));
 
@@ -1284,4 +1315,3 @@ export const subscriptionService = {
     }
   },
 };
-

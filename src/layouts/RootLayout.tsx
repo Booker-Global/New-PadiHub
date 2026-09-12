@@ -11,7 +11,7 @@ import { MotionReadyProvider } from '@/lib/motion-safe';
 
 // Routes that manage their own full-screen layout (no shared header/footer)
 const FULL_SCREEN_ROUTES = [
-  '/login', '/get-started', '/forgot-password', '/verify-email', '/onboarding', '/reset-password',
+  '/login', '/get-started', '/forgot-password', '/verify-email', '/vote-response', '/onboarding', '/reset-password',
   '/dashboard', '/savings-groups', '/trust',
   '/notifications', '/profile', '/subscription',
   '/settings', '/leader-dashboard', '/leader', '/help', '/admin', '/payments',

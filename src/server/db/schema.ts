@@ -27,6 +27,8 @@ export const users = mysqlTable('users', {
   flutterwave_customer_id:     varchar('flutterwave_customer_id', { length: 100 }),
   flutterwave_card_token:      varchar('flutterwave_card_token', { length: 255 }),
   flutterwave_subaccount_id:   varchar('flutterwave_subaccount_id', { length: 100 }),
+  flutterwave_payout_bank_code:      varchar('flutterwave_payout_bank_code', { length: 20 }),
+  flutterwave_payout_account_number: varchar('flutterwave_payout_account_number', { length: 34 }),
   // Set only after server-side verification with the provider (Stripe PaymentMethod
   // retrieval + customer match, or Flutterwave transaction verification), and after
   // the payout destination has been confirmed usable (Stripe charges_enabled &&
