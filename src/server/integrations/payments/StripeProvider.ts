@@ -310,24 +310,37 @@ export class StripeProvider implements IPaymentProvider {
    * verification) are still outstanding on a connected account. `nextPath` is
    * an optional, already-sanitized return path (e.g. back to an invite's join
    * page) appended to both URLs so the member isn't stranded on /payments/payout
-   * after Stripe's hosted flow — see sanitizeReturnPath() in paymentController. */
+   * after Stripe's hosted flow — see sanitizeReturnPath() in paymentController.
+   *
+   * `for_account=<accountId>` is also stamped onto both URLs so the return
+   * page can detect a "wrong browser session" mid-flow (e.g. a different
+   * PadiHub account got logged into the same browser/tab while the member was
+   * on Stripe's hosted page) and warn instead of silently rendering whichever
+   * account happens to be logged in when the redirect lands. */
   async createOnboardingLink(accountId: string, mode: 'add' | 'change' = 'add', nextPath?: string): Promise<{ onboardingUrl: string }> {
     const stripe = getStripe();
     const nextParam = nextPath ? `&next=${encodeURIComponent(nextPath)}` : '';
+    const acctParam = `&for_account=${encodeURIComponent(accountId)}`;
     const accountLink = await stripe.accountLinks.create({
       account:     accountId,
-      refresh_url: `${process.env.APP_URL ?? 'https://padihub.com'}/payments/payout?stripe_refresh=1&payout_mode=${mode}${nextParam}`,
-      return_url:  `${process.env.APP_URL ?? 'https://padihub.com'}/payments/payout?stripe_connected=1&payout_mode=${mode}${nextParam}`,
+      refresh_url: `${process.env.APP_URL ?? 'https://padihub.com'}/payments/payout?stripe_refresh=1&payout_mode=${mode}${nextParam}${acctParam}`,
+      return_url:  `${process.env.APP_URL ?? 'https://padihub.com'}/payments/payout?stripe_connected=1&payout_mode=${mode}${nextParam}${acctParam}`,
       type:        'account_onboarding',
     });
     return { onboardingUrl: accountLink.url };
   }
 
   /** Whether a connected account still has outstanding onboarding requirements
-   * (e.g. identity verification) that only Stripe's hosted flow can collect. */
+   * (e.g. identity verification) that only Stripe's hosted flow can collect.
+   * Also self-heals accounts created before business_profile.url was added to
+   * createConnectedAccount() above, so pre-existing connected accounts skip
+   * Stripe's "Business details → website" question too. */
   async getOutstandingRequirements(accountId: string): Promise<string[]> {
     const stripe = getStripe();
     const account = await stripe.accounts.retrieve(accountId);
+    if (!account.business_profile?.url) {
+      await stripe.accounts.update(accountId, { business_profile: { url: 'https://www.padihub.com' } });
+    }
     return [
       ...(account.requirements?.currently_due ?? []),
       ...(account.requirements?.past_due ?? []),

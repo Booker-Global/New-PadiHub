@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
@@ -168,27 +168,50 @@ export default function ConnectPayoutPage() {
     }
   }, [loadProfile, profile?.country]);
 
+  const stripeReturnHandledRef = useRef(false);
+
   useEffect(() => {
-    if (searchParams.get('stripe_connected') === '1') {
-      setActionNotice(
-        searchParams.get('payout_mode') === 'change'
-          ? 'Your updated payout destination was received. Verifying now…'
-          : 'Your payout account is connected. Verifying now…',
-      );
-      setActionError('');
-      void handleVerify();
-    } else if (searchParams.get('stripe_refresh') === '1') {
+    if (searchParams.get('stripe_refresh') === '1') {
       setActionError(
         searchParams.get('payout_mode') === 'change'
           ? 'Your payout account change was not completed. Please try again.'
           : 'Payout onboarding was not completed. Please try connecting again.',
       );
+      return;
     }
-    // Only re-run when the URL search params change, not on every
-    // handleVerify identity change (which updates once profile loads) — an
-    // eslint-disable would otherwise be needed here, so we depend on the
-    // param values directly instead of the whole searchParams object/handler.
-  }, [searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (searchParams.get('stripe_connected') !== '1') return;
+    if (stripeReturnHandledRef.current || loading) return;
+
+    // Guard against a different PadiHub account being logged into this
+    // browser/tab than the one that actually completed Stripe's hosted
+    // onboarding (e.g. the member signed in as another account in the same
+    // browser while the Stripe tab was still open). Without this check the
+    // page would silently run verify-payout for whoever is currently signed
+    // in, making it look like the wrong account's payout got "verified".
+    const expectedAccountId = searchParams.get('for_account');
+    const currentAccountId = profile?.stripe_connected_account_id;
+    if (expectedAccountId && expectedAccountId !== currentAccountId) {
+      stripeReturnHandledRef.current = true;
+      setActionNotice('');
+      setActionError(
+        'This payout verification was completed for a different PadiHub account than the one you\'re currently signed in as. '
+        + 'Please sign out and sign back in as the account you used to connect your payout details, then try verifying again.',
+      );
+      return;
+    }
+
+    stripeReturnHandledRef.current = true;
+    setActionNotice(
+      searchParams.get('payout_mode') === 'change'
+        ? 'Your updated payout destination was received. Verifying now…'
+        : 'Your payout account is connected. Verifying now…',
+    );
+    setActionError('');
+    void handleVerify();
+    // Only re-run when the URL search params, loading state, or profile
+    // change — handleVerify's identity changes once profile loads too, but
+    // stripeReturnHandledRef guards against re-running the actual side effect.
+  }, [searchParams, loading, profile, handleVerify]);
 
   useEffect(() => {
     if (profile?.country !== 'NG' || (!changingPayoutDestination && hasConnectedDestination)) return;
