@@ -104,6 +104,7 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
   // both the /profile banner and toast (and on /dashboard, which reads the
   // same row).
   users: [
+    { column: 'username',                   sqlType: 'VARCHAR(50) NULL UNIQUE' },
     { column: 'display_name',               sqlType: 'VARCHAR(100) NULL' },
     { column: 'phone_number',                sqlType: 'VARCHAR(30) NULL' },
     { column: 'stripe_customer_id',          sqlType: 'VARCHAR(100) NULL' },

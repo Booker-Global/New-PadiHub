@@ -11,6 +11,12 @@ export const users = mysqlTable('users', {
   display_name:                varchar('display_name', { length: 100 }),
   email:                       varchar('email', { length: 255 }).notNull().unique(),
   password_hash:               varchar('password_hash', { length: 255 }).notNull(),
+  // Admin-only login identifier — regular members always sign in with
+  // email/password (see authService.login). Populated only for the
+  // dedicated admin account (see authService.ensureDefaultAdminAccount) so
+  // an admin never needs a real, email-verified member profile just to
+  // reach /admin — see authService.adminLogin.
+  username:                    varchar('username', { length: 50 }).unique(),
   phone_number:                varchar('phone_number', { length: 30 }),
   country:                     varchar('country', { length: 2 }).notNull().default('GB'),
   currency:                    varchar('currency', { length: 3 }).notNull().default('GBP'),

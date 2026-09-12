@@ -2,12 +2,12 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { MotionDiv } from '@/lib/motion-safe';
-import { getValidSession, logout, type SessionData } from '@/lib/session';
+import { getValidSession, storeSession, clearStoredSession, logout, type SessionData } from '@/lib/session';
 import { getApiErrorMessage } from '@/lib/api-error';
 import {
   Users, PiggyBank, CreditCard, AlertTriangle,
   HelpCircle, Activity, Shield, ChevronRight,
-  Bell, LogOut, BarChart2,
+  Bell, LogOut, BarChart2, KeyRound, Lock,
   CheckCircle, XCircle, RefreshCw, Mail, Database,
 } from 'lucide-react';
 
@@ -201,11 +201,194 @@ async function apiFetch<T>(path: string, session: SessionData, init?: Parameters
   return payload.data as T;
 }
 
+// Standalone sign-in surface shown in place of the dashboard whenever there's
+// no valid admin session — a dedicated username/password credential (see
+// authService.adminLogin) that never touches the member email/login flow,
+// so /admin never has to route through /login.
+function AdminLoginForm({ onSuccess, notice }: { onSuccess: (session: SessionData) => void; notice?: string | null }) {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!username || !password) { setError('Please enter both the admin username and password.'); return; }
+    setError(null);
+    setLoading(true);
+    try {
+      const response = await window.fetch('/api/auth/admin-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      const payload = await response.json().catch(() => null) as { success?: boolean; data?: { token: string; user: Record<string, unknown> }; message?: string } | null;
+      if (!response.ok || !payload?.success || !payload.data) {
+        throw new Error(getApiErrorMessage(payload, 'Invalid username or password.'));
+      }
+      const { token, user } = payload.data;
+      const sessionData: SessionData = {
+        token,
+        name: (user.display_name as string) || (user.first_name as string) || 'Admin',
+        email: user.email as string,
+        userId: user.id as string,
+        role: user.role as string,
+      };
+      storeSession(sessionData);
+      onSuccess(sessionData);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Invalid username or password.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center justify-center h-screen" style={{ background: 'linear-gradient(180deg, #0F172A 0%, #1A1A2E 100%)' }}>
+      <Helmet>
+        <title>Admin sign in — PadiHub</title>
+        <meta name="robots" content="noindex, nofollow" />
+      </Helmet>
+      <form onSubmit={handleSubmit} className="w-full max-w-sm rounded-3xl p-8" style={{ background: '#161B29', border: '1px solid rgba(255,255,255,0.07)' }}>
+        <div className="flex items-center gap-2 mb-6">
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: 'rgba(239,68,68,0.2)' }}>
+            <Shield size={18} style={{ color: '#EF4444' }} />
+          </div>
+          <div>
+            <p className="text-white text-sm font-extrabold" style={{ fontFamily: 'Nunito, sans-serif' }}>Admin Portal</p>
+            <p className="text-xs" style={{ color: 'rgba(255,255,255,0.35)' }}>PadiHub Platform</p>
+          </div>
+        </div>
+        {notice && !error && (
+          <div className="mb-4 rounded-2xl px-4 py-3 text-sm font-medium" style={{ background: 'rgba(46,175,111,0.1)', color: '#4ADE80' }}>
+            {notice}
+          </div>
+        )}
+        {error && (
+          <div className="mb-4 rounded-2xl px-4 py-3 text-sm font-medium" style={{ background: 'rgba(239,68,68,0.1)', color: '#F87171' }}>
+            {error}
+          </div>
+        )}
+        <label className="block mb-4">
+          <span className="block text-xs font-semibold mb-1.5" style={{ color: 'rgba(255,255,255,0.5)' }}>Username</span>
+          <input
+            type="text"
+            autoComplete="username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            className="w-full rounded-2xl px-4 py-2.5 text-sm text-white outline-none"
+            style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)' }}
+          />
+        </label>
+        <label className="block mb-6">
+          <span className="block text-xs font-semibold mb-1.5" style={{ color: 'rgba(255,255,255,0.5)' }}>Password</span>
+          <input
+            type="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className="w-full rounded-2xl px-4 py-2.5 text-sm text-white outline-none"
+            style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)' }}
+          />
+        </label>
+        <button type="submit" disabled={loading}
+          className="w-full rounded-2xl py-2.5 text-sm font-bold text-white transition-opacity disabled:opacity-60"
+          style={{ background: 'linear-gradient(135deg, #EF4444, #DC2626)' }}>
+          {loading ? 'Signing in…' : 'Sign in'}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+// Small modal, reachable from the sidebar once signed in, that lets an admin
+// change their own password at any time — reuses the same authenticated
+// /api/auth/change-password endpoint every member uses (authService.
+// changePassword), so no new backend password-change logic is needed.
+function AdminChangePasswordModal({ session, onClose, onChanged }: { session: SessionData; onClose: () => void; onChanged: () => void }) {
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentPassword || !newPassword || !confirmPassword) { setError('Please complete all fields.'); return; }
+    if (newPassword !== confirmPassword) { setError('New password and confirmation do not match.'); return; }
+    if (newPassword.length < 8 || !/[A-Z]/.test(newPassword) || !/[0-9]/.test(newPassword)) {
+      setError('Use at least 8 characters, including 1 uppercase letter and 1 number.');
+      return;
+    }
+    setError(null);
+    setSaving(true);
+    try {
+      await apiFetch('/api/auth/change-password', session, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+      });
+      onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to change the password right now.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(15,23,42,0.6)' }}>
+      <form onSubmit={handleSubmit} className="w-full max-w-sm rounded-3xl bg-white p-6">
+        <div className="flex items-center gap-2 mb-5">
+          <KeyRound size={18} style={{ color: '#EF4444' }} />
+          <p className="text-sm font-extrabold text-gray-900">Change admin password</p>
+        </div>
+        {error && (
+          <div className="mb-4 rounded-2xl px-4 py-3 text-sm font-medium" style={{ background: 'rgba(239,68,68,0.1)', color: '#B91C1C' }}>
+            {error}
+          </div>
+        )}
+        <label className="block mb-3">
+          <span className="block text-xs font-semibold text-gray-500 mb-1.5">Current password</span>
+          <input type="password" autoComplete="current-password" value={currentPassword}
+            onChange={(e) => setCurrentPassword(e.target.value)}
+            className="w-full rounded-xl px-3 py-2 text-sm border border-gray-200 outline-none" />
+        </label>
+        <label className="block mb-3">
+          <span className="block text-xs font-semibold text-gray-500 mb-1.5">New password</span>
+          <input type="password" autoComplete="new-password" value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+            className="w-full rounded-xl px-3 py-2 text-sm border border-gray-200 outline-none" />
+        </label>
+        <label className="block mb-5">
+          <span className="block text-xs font-semibold text-gray-500 mb-1.5">Confirm new password</span>
+          <input type="password" autoComplete="new-password" value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            className="w-full rounded-xl px-3 py-2 text-sm border border-gray-200 outline-none" />
+        </label>
+        <div className="flex gap-2">
+          <button type="button" onClick={onClose}
+            className="flex-1 rounded-2xl py-2.5 text-sm font-bold text-gray-600 border border-gray-200">
+            Cancel
+          </button>
+          <button type="submit" disabled={saving}
+            className="flex-1 rounded-2xl py-2.5 text-sm font-bold text-white disabled:opacity-60"
+            style={{ background: 'linear-gradient(135deg, #EF4444, #DC2626)' }}>
+            {saving ? 'Saving…' : 'Save password'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 export default function AdminPortal() {
   const navigate = useNavigate();
-  const [authStatus, setAuthStatus] = useState<'checking' | 'authorized' | 'denied'>('checking');
+  const [authStatus, setAuthStatus] = useState<'checking' | 'authorized' | 'denied' | 'login-required'>('checking');
   const [session, setSession] = useState<SessionData | null>(null);
   const [section, setSection] = useState<Section>('dashboard');
+  const [showChangePassword, setShowChangePassword] = useState(false);
+  const [loginNotice, setLoginNotice] = useState<string | null>(null);
 
   // Dashboard
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
@@ -249,16 +432,24 @@ export default function AdminPortal() {
   // rejects every real /api/admin/* and /api/system/{jobs,errors} call with
   // 403 for non-admins (requireRole('admin')) — this just stops the page
   // shell itself from rendering for anyone who isn't signed in as an admin,
-  // so the URL isn't a usable decoy for curious non-admin users.
+  // so the URL isn't a usable decoy for curious non-admin users. A signed-in
+  // non-admin member is redirected away entirely; a visitor with no session
+  // at all is shown the inline admin sign-in form below instead of being
+  // bounced to the member /login page (the admin account has no email/login
+  // page identity to sign in with there).
   useEffect(() => {
     const current = getValidSession();
-    if (!current?.token || current.role !== 'admin') {
+    if (current?.token && current.role !== 'admin') {
       setAuthStatus('denied');
-      navigate(current?.token ? '/dashboard' : '/login?redirect=/admin', { replace: true });
+      navigate('/dashboard', { replace: true });
       return;
     }
-    setSession(current);
-    setAuthStatus('authorized');
+    if (current?.token && current.role === 'admin') {
+      setSession(current);
+      setAuthStatus('authorized');
+      return;
+    }
+    setAuthStatus('login-required');
   }, [navigate]);
 
   const loadJobRuns = useCallback(() => {
@@ -424,12 +615,22 @@ export default function AdminPortal() {
 
   const handleSignOut = async () => {
     await logout();
-    navigate('/login');
+    setSession(null);
+    setAuthStatus('login-required');
   };
 
+  if (authStatus === 'login-required') {
+    return (
+      <AdminLoginForm
+        notice={loginNotice}
+        onSuccess={(next) => { setSession(next); setAuthStatus('authorized'); setLoginNotice(null); }}
+      />
+    );
+  }
+
   if (authStatus !== 'authorized') {
-    // Nothing meaningful to show a non-admin (or pre-check) visitor — the
-    // effect above already redirects them away.
+    // 'checking' (pre-check) or 'denied' (a signed-in non-admin being
+    // redirected away) — nothing meaningful to render either way.
     return null;
   }
 
@@ -446,6 +647,7 @@ export default function AdminPortal() {
   ] : [];
 
   return (
+    <>
     <div className="flex h-screen overflow-hidden" style={{ background: '#F8FAFC' }}>
       <Helmet>
         <title>Admin Portal — PadiHub</title>
@@ -488,7 +690,12 @@ export default function AdminPortal() {
             </button>
           ))}
         </nav>
-        <div className="px-3 py-3 border-t" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+        <div className="px-3 py-3 border-t space-y-0.5" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+          <button onClick={() => setShowChangePassword(true)} type="button"
+            className="w-full flex items-center gap-3 px-4 py-2.5 rounded-2xl text-sm font-semibold transition-colors"
+            style={{ color: 'rgba(255,255,255,0.6)' }}>
+            <Lock size={16} style={{ color: 'rgba(255,255,255,0.35)' }} /> Change password
+          </button>
           <button onClick={handleSignOut} type="button"
             className="w-full flex items-center gap-3 px-4 py-2.5 rounded-2xl text-sm font-semibold text-red-400 hover:bg-red-400/10 transition-colors">
             <LogOut size={16} /> Sign out
@@ -1013,5 +1220,19 @@ export default function AdminPortal() {
         </main>
       </div>
     </div>
+    {showChangePassword && session && (
+      <AdminChangePasswordModal
+        session={session}
+        onClose={() => setShowChangePassword(false)}
+        onChanged={() => {
+          setShowChangePassword(false);
+          clearStoredSession();
+          setSession(null);
+          setLoginNotice('Password changed successfully. Please sign in again with your new password.');
+          setAuthStatus('login-required');
+        }}
+      />
+    )}
+    </>
   );
 }

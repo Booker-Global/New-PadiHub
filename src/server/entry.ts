@@ -192,6 +192,7 @@ app.use('/api',      apiLimiter);
 // ── Auth ────────────────────────────────────────────────────────────[...]
 app.post('/api/auth/register',        ...authController.register);
 app.post('/api/auth/login',           ...authController.login);
+app.post('/api/auth/admin-login',     ...authController.adminLogin);
 app.post('/api/auth/logout',          authenticate, authController.logout);
 app.post('/api/auth/verify-email',         ...authController.verifyEmail);
 app.post('/api/auth/resend-verification',  ...authController.resendVerification);
@@ -651,6 +652,8 @@ if (import.meta.env.PROD) {
 				console.log('[PadiHub] ✓ Database connection verified.');
 				await ensureSchemaSync();
 				await normalizeLegacyTrustScores();
+				const { authService } = await import('./services/authService.js');
+				await authService.ensureDefaultAdminAccount();
 				const { subscriptionService } = await import('./services/subscriptionService.js');
 				await subscriptionService.activateRetroactiveEligibleSubscriptions();
 				await subscriptionService.healFullyVerifiedSubscriptionStatusRetroactively();
