@@ -108,8 +108,13 @@ type PlanSwitchResult = {
   effective_date?: Date;
 };
 
-/** Audit-log actions that represent a real billing/payment event for a member. */
-const BILLING_HISTORY_ACTIONS = [
+/**
+ * Audit-log actions that represent a real billing/payment event for a
+ * member. Exported so adminController.dashboard() can compute actual
+ * platform revenue from the same source of truth used by member-facing
+ * Billing History, rather than a separate/duplicated action list.
+ */
+export const BILLING_HISTORY_ACTIONS = [
   'SUBSCRIPTION_CREATED',
   'STRIPE_INVOICE_PAID',
   'STRIPE_INVOICE_FAILED',

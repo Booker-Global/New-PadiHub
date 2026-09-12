@@ -490,6 +490,23 @@ export const jobRuns = mysqlTable('job_runs', {
   jobNameIdx: index('job_runs_job_name_idx').on(t.job_name),
 }));
 
+// ─── Email Logs ───────────────────────────────────────────────────────────────
+// One row per outbound transactional email attempt, logged from the single
+// internal send() wrapper in integrations/email/emailService.ts (every one of
+// the ~60 sendXxxEmail() helpers funnels through it), so the admin dashboard's
+// "Email usage" KPI reflects real send volume/success rate, not an estimate.
+export const emailLogs = mysqlTable('email_logs', {
+  id:            varchar('id', { length: 36 }).primaryKey(),
+  recipient:     varchar('recipient', { length: 255 }).notNull(),
+  subject:       varchar('subject', { length: 255 }).notNull(),
+  status:        mysqlEnum('status', ['sent', 'failed']).notNull(),
+  error_message: text('error_message'),
+  created_at:    timestamp('created_at').notNull().defaultNow(),
+}, (t) => ({
+  statusIdx:    index('email_logs_status_idx').on(t.status),
+  createdAtIdx: index('email_logs_created_at_idx').on(t.created_at),
+}));
+
 // ─── Audit Logs ───────────────────────────────────────────────────────────────
 export const auditLogs = mysqlTable('audit_logs', {
   id:         varchar('id', { length: 36 }).primaryKey(),

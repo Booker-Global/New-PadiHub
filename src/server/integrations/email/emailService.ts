@@ -3,7 +3,10 @@
  * Every function is fire-and-forget safe: failures are caught and logged,
  * never thrown, so a failed email never crashes a payment or auth flow.
  */
+import { v4 as uuidv4 } from 'uuid';
 import { getResendClient, getFromEmail } from './resendClient.js';
+import { db } from '../../db/client.js';
+import * as schema from '../../db/schema.js';
 
 // ─── Shared HTML helpers ──────────────────────────────────────────────────────
 
@@ -75,13 +78,32 @@ export function escapeHtml(text: string): string {
 
 // ─── Safe send wrapper ────────────────────────────────────────────────────────
 
+// Records every outbound email attempt for the admin dashboard's "Email
+// usage" KPI. Fire-and-forget and never throws — a logging failure must
+// never affect (or be conflated with) the actual email send outcome.
+async function logEmailSend(to: string, subject: string, status: 'sent' | 'failed', errorMessage?: string): Promise<void> {
+  try {
+    await db.insert(schema.emailLogs).values({
+      id:            uuidv4(),
+      recipient:     to,
+      subject:       subject.slice(0, 255),
+      status,
+      error_message: errorMessage ?? null,
+    });
+  } catch (err) {
+    console.error('[EmailService] Failed to record email_logs entry:', err);
+  }
+}
+
 async function send(to: string, subject: string, html: string): Promise<void> {
   try {
     const resend = getResendClient();
     await resend.emails.send({ from: getFromEmail(), to, subject, html });
+    await logEmailSend(to, subject, 'sent');
   } catch (err) {
     // Log but never throw — a failed email must never crash a payment or auth flow
     console.error(`[EmailService] Failed to send "${subject}" to ${to}:`, err);
+    await logEmailSend(to, subject, 'failed', err instanceof Error ? err.message : String(err));
   }
 }
 

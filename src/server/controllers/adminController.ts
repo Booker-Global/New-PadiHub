@@ -2,16 +2,38 @@
  * Administrator Portal controller — all endpoints require requireRole('admin').
  */
 import type { Request, Response, NextFunction } from 'express';
-import { eq, desc, and, gte, lte, sql } from 'drizzle-orm';
+import { eq, desc, and, gte, lte, sql, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { notificationService } from '../services/notificationService.js';
 import { pp, qs, ip } from '../lib/reqHelpers.js';
+import { isSubscriptionTierKey, getTierMonthlyPrice } from '../lib/constants.js';
+import { BILLING_HISTORY_ACTIONS } from '../services/subscriptionService.js';
 import {
   notifySupportTicketUpdated,
   notifySupportTicketClosed,
 } from './supportController.js';
+
+// Tables whose row counts are surfaced as the "Database usage" dashboard KPI.
+const DB_USAGE_TABLES = [
+  { key: 'users',           table: schema.users },
+  { key: 'savings_groups',  table: schema.savingsGroups },
+  { key: 'memberships',     table: schema.memberships },
+  { key: 'contributions',   table: schema.contributions },
+  { key: 'rotations',       table: schema.rotations },
+  { key: 'subscriptions',   table: schema.subscriptions },
+  { key: 'support_tickets', table: schema.supportTickets },
+  { key: 'audit_logs',      table: schema.auditLogs },
+  { key: 'email_logs',      table: schema.emailLogs },
+  { key: 'job_runs',        table: schema.jobRuns },
+  { key: 'system_errors',   table: schema.systemErrors },
+] as const;
+
+/** Audit-log actions that represent an ACTUAL successful charge (never estimates). */
+const REVENUE_ACTIONS = BILLING_HISTORY_ACTIONS.filter(
+  (action) => action !== 'SUBSCRIPTION_CREATED' && action !== 'STRIPE_INVOICE_FAILED',
+);
 
 export const adminController = {
   // ── Dashboard Metrics ───────────────────────────────────────────────────────
@@ -30,6 +52,13 @@ export const adminController = {
         activeSubscriptions,
         openTickets,
         recentErrors,
+        usersByCountry,
+        groupsByCountry,
+        contributionVolumeByCountry,
+        payoutCyclesByCountry,
+        revenueAuditRows,
+        dbUsageCounts,
+        emailUsage,
       ] = await Promise.all([
         db.select({ count: sql<number>`count(*)` }).from(schema.users),
         db.select({ count: sql<number>`count(*)` }).from(schema.users)
@@ -60,6 +89,61 @@ export const adminController = {
             eq(schema.systemErrors.resolved, false),
             gte(schema.systemErrors.created_at, twentyFourHoursAgo),
           )),
+        // Location/user stats — breakdown of signed-up users by country.
+        db.select({ country: schema.users.country, count: sql<number>`count(*)` })
+          .from(schema.users)
+          .groupBy(schema.users.country),
+        // Location/group stats — breakdown of groups by country.
+        db.select({ country: schema.savingsGroups.country, count: sql<number>`count(*)` })
+          .from(schema.savingsGroups)
+          .groupBy(schema.savingsGroups.country),
+        // Rolling 30-day contribution volume by country (actual money collected).
+        db.select({
+          country: schema.savingsGroups.country,
+          total:   sql<number>`sum(cast(${schema.contributions.amount_paid} as decimal(12,2)))`,
+        })
+          .from(schema.contributions)
+          .innerJoin(schema.savingsGroups, eq(schema.contributions.group_id, schema.savingsGroups.id))
+          .where(and(
+            eq(schema.contributions.payment_status, 'paid'),
+            gte(schema.contributions.paid_date, thirtyDaysAgo),
+          ))
+          .groupBy(schema.savingsGroups.country),
+        // Rolling 30-day completed rotations by country, with the matching
+        // cycle's paid contributions so payout volume can be derived (the
+        // rotations table itself has no payout-amount column).
+        db.select({
+          country: schema.savingsGroups.country,
+          total:   sql<number>`sum(cast(${schema.contributions.amount_paid} as decimal(12,2)))`,
+        })
+          .from(schema.rotations)
+          .innerJoin(schema.savingsGroups, eq(schema.rotations.group_id, schema.savingsGroups.id))
+          .innerJoin(schema.contributions, and(
+            eq(schema.contributions.group_id, schema.rotations.group_id),
+            eq(schema.contributions.cycle_number, schema.rotations.cycle_number),
+            eq(schema.contributions.payment_status, 'paid'),
+          ))
+          .where(and(
+            eq(schema.rotations.payout_status, 'completed'),
+            gte(schema.rotations.completed_date, thirtyDaysAgo),
+          ))
+          .groupBy(schema.savingsGroups.country),
+        // Actual successful charges (never an estimate) — the same source of
+        // truth used by member-facing Billing History.
+        db.select({ action: schema.auditLogs.action, metadata: schema.auditLogs.metadata })
+          .from(schema.auditLogs)
+          .where(inArray(schema.auditLogs.action, REVENUE_ACTIONS)),
+        // Database usage — row counts per key table.
+        Promise.all(DB_USAGE_TABLES.map(async ({ key, table }) => {
+          const rows = await db.select({ count: sql<number>`count(*)` }).from(table);
+          return { key, count: Number(rows[0]?.count ?? 0) };
+        })),
+        // Email usage — from email_logs, populated by emailService.ts's send() wrapper.
+        db.select({
+          status: schema.emailLogs.status,
+          count:  sql<number>`count(*)`,
+          recent: sql<number>`sum(case when ${schema.emailLogs.created_at} >= ${twentyFourHoursAgo} then 1 else 0 end)`,
+        }).from(schema.emailLogs).groupBy(schema.emailLogs.status),
       ]);
 
       const totalUsersCount    = Number(totalUsers[0]?.count ?? 0);
@@ -71,6 +155,34 @@ export const adminController = {
       const ngSubs = activeSubscriptions.filter(s => s.provider === 'flutterwave');
       const ukCount = ukSubs.reduce((a, s) => a + Number(s.count), 0);
       const ngCount = ngSubs.reduce((a, s) => a + Number(s.count), 0);
+
+      // Actual revenue — resolve each charge event to its country/tier price
+      // rather than parsing the pre-formatted amount_display string.
+      let revenueUkGbp = 0;
+      let revenueNgNgn = 0;
+      for (const row of revenueAuditRows) {
+        const metadata = (row.metadata ?? {}) as Record<string, unknown>;
+        const tier = isSubscriptionTierKey(metadata.tier) ? metadata.tier : null;
+        if (!tier) continue;
+        if (row.action.startsWith('STRIPE')) {
+          revenueUkGbp += getTierMonthlyPrice(tier, 'GB');
+        } else if (row.action.startsWith('FLW')) {
+          // Renewal/first-charge FLW rows also log failed attempts —
+          // only count ones that actually succeeded.
+          if (metadata.status !== undefined && metadata.status !== 'succeeded') continue;
+          revenueNgNgn += getTierMonthlyPrice(tier, 'NG');
+        }
+      }
+
+      const contribByCountry = Object.fromEntries(
+        contributionVolumeByCountry.map(r => [r.country, Number(r.total ?? 0)]),
+      );
+      const payoutByCountry = Object.fromEntries(
+        payoutCyclesByCountry.map(r => [r.country, Number(r.total ?? 0)]),
+      );
+      const dbUsageByKey = Object.fromEntries(dbUsageCounts.map(r => [r.key, r.count]));
+      const emailSent  = emailUsage.find(r => r.status === 'sent');
+      const emailFailed = emailUsage.find(r => r.status === 'failed');
 
       res.json({
         success: true,
