@@ -82,11 +82,11 @@ export default function TermsPage() {
               These terms govern your use of PadiHub. We've written them in plain language so you know exactly what to expect.
             </div>
             <div className="flex flex-wrap gap-4 text-sm text-gray-400">
-              <span>Last updated: 2 September 2026</span>
+              <span>Last updated: 13 September 2026</span>
               <span>·</span>
-              <span>Effective: 2 September 2026</span>
+              <span>Effective: 13 September 2026</span>
               <span>·</span>
-              <span>Version 2.0</span>
+              <span>Version 2.1</span>
             </div>
           </div>
         </div>

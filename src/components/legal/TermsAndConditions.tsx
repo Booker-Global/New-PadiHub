@@ -345,7 +345,11 @@ export const TERMS_SECTIONS: TermsSection[] = [
       },
       {
         subtitle: 'Owner Departure & Succession',
-        text: 'If the Group Owner departs a group that is still in Draft (fewer than 3 verified members and no contributions yet collected), the draft is cancelled and any members who had already joined are notified by email. If the group is already Active, the Owner departs through the standard Compensated Compression process above, and Owner status automatically transfers to whichever remaining active member has been in the group the longest (earliest join date — tenure, not Trust Score™). If no other active member remains, the group is closed.',
+        text: 'If the Group Owner departs a group that is still in Draft (fewer than 3 verified members and no contributions yet collected), the draft is cancelled and any members who had already joined are notified by email. If the group is already Active, the Owner departs through the standard Compensated Compression process above, and Owner status automatically transfers to whichever remaining active member has been in the group the longest (earliest join date — tenure, not Trust Score™). This succession applies regardless of the successor\'s current subscription plan or existing group-count limits; as an exceptional circumstance, inheriting Owner status is never blocked, delayed, or counted against their plan\'s usual limits. If no other active member remains, the group is closed.',
+      },
+      {
+        subtitle: 'Suspension & Grace Period for Low Membership',
+        text: 'Whenever an Active group\'s active member count drops below the platform\'s 3-member minimum — for any reason, including but not limited to an Owner or member departure — the group is automatically suspended and contribution collection pauses. A suspended group is given a 30-day grace period to recover: reaching 3 or more active members again within that window automatically reactivates the group and resumes collection. If the group remains below the minimum once the 30-day grace period lapses, it is automatically closed; any payouts already collected or already in progress at the time of closure are still paid out in full. The Owner and remaining members are notified by email at every stage of this process.',
       },
       {
         subtitle: 'Group Lifecycle Length',
