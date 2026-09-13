@@ -391,10 +391,12 @@ export async function dailyApplyPendingPayoutFrequencyChanges(): Promise<void> {
       const newFrequency = group.pending_contribution_frequency;
       const newPayoutDay = group.pending_payout_day;
 
-      // Apply the pending change
+      // Apply the pending change. newFrequency is guaranteed non-null by the
+      // isNotNull(pending_contribution_frequency) filter above — the `!`
+      // just narrows the type, it doesn't change behavior.
       await db.update(schema.savingsGroups)
         .set({
-          contribution_frequency: newFrequency,
+          contribution_frequency: newFrequency!,
           payout_day: newPayoutDay,
           pending_contribution_frequency: null,
           pending_payout_day: null,
