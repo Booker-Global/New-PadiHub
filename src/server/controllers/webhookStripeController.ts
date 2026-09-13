@@ -262,7 +262,6 @@ async function handleStripeEvent(event: Stripe.Event) {
       const shouldNotifyUser = !isInitialInvoiceFailure && (
         subForFailedInvoice.billing_status === 'active'
         || subForFailedInvoice.billing_status === 'trialing'
-        || subForFailedInvoice.billing_status === 'paused'
         || user.subscription_status === 'active'
         || user.subscription_status === 'trial'
       );

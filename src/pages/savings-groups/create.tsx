@@ -841,7 +841,7 @@ export default function CreateGroupWizard() {
                           <Shield size={16} style={{ color: '#8B5CF6' }} />
                           <div>
                             <p className="font-bold text-sm text-gray-900">Require voting for key decisions</p>
-                            <p className="text-xs text-gray-400">Every new join request must be unanimously approved by all active members via a group vote, instead of you deciding alone</p>
+                            <p className="text-xs text-gray-400">When enabled, unanimous approval by all active group members is required for: New Member Admission, Member Removal, and Monthly Contribution Increase Proposals. Without this option, the group leader decides these matters alone.</p>
                           </div>
                         </div>
                       </OptionCard>

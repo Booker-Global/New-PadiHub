@@ -140,7 +140,7 @@ export const groupService = {
       members,
       contributionAmountDisplay: `${group.currency} ${parseFloat(group.contribution_amount).toFixed(2)}`,
       payoutScheduleLabel: describePayoutSchedule(group.contribution_frequency, group.payout_day),
-      votingOutThresholdPercent: group.voting_threshold,
+      requiresAdmissionVote: group.requires_admission_vote,
       maxDefaultsForSuspension: group.suspension_threshold,
       allowPayoutSwaps: group.allow_payout_swaps,
     };
