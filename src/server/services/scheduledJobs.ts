@@ -20,6 +20,7 @@ import { resolveFirstScheduleDate } from '../lib/payoutSchedule.js';
 import {
   SUBSCRIPTION_TIERS, isSubscriptionTierKey, getTierMonthlyPrice, formatTierPrice,
   GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH, GROUP_STUCK_BELOW_MIN_EXPIRY_DAYS, GROUP_STUCK_EXPIRY_REMINDER_DAYS_BEFORE,
+  GROUP_SUSPENSION_GRACE_PERIOD_DAYS,
   ACCOUNT_LIFECYCLE_REMINDER_INTERVAL_DAYS, PENDING_CHARGE_GROUP_JOIN_EXPIRY_DAYS,
   INCOMPLETE_PROFILE_EXPIRY_DAYS, CANCELLED_SUBSCRIPTION_EXPIRY_DAYS,
   CONTRIBUTION_REMINDER_ADVANCE_DAYS,
@@ -31,6 +32,7 @@ import {
   sendSubscriptionRenewalReminderEmail,
   sendGroupExpiredEmail,
   sendGroupExpiryReminderEmail,
+  sendGroupClosedDueToGracePeriodExpiry,
   sendSubscriptionPaymentFailedEmail,
   sendSubscriptionRenewalChargedEmail,
   sendPendingChargeGroupJoinReminderEmail,
@@ -278,19 +280,67 @@ export async function dailyNotificationCleanup(): Promise<void> {
  * never-launched Draft (anchored on created_at) or a launched-then-dropped
  * Suspended group (anchored on suspended_at). Sends reminder nudges at
  * 7/3/1 days before the deadline so the leader has a chance to refill it.
+ * 
+ * ADDITIONALLY: Suspended groups with a suspension_grace_period_ends_at set
+ * are auto-closed when the grace period expires (group status transitions from
+ * 'suspended' to 'closed', members notified). Any pending payouts already
+ * contributed are still paid out.
  */
 export async function dailyGroupLifecycleExpiry(): Promise<void> {
   await runJob('daily_group_lifecycle_expiry', async () => {
+    const now = new Date();
+
+    // First: Check for suspended groups whose grace period has expired
+    const expiredGraceGroups = await db.select().from(schema.savingsGroups)
+      .where(and(
+        eq(schema.savingsGroups.status, 'suspended'),
+        isNotNull(schema.savingsGroups.suspension_grace_period_ends_at),
+        lte(schema.savingsGroups.suspension_grace_period_ends_at, now),
+      ));
+
+    for (const group of expiredGraceGroups) {
+      // Close the group — any pending payouts already contributed will still be paid
+      await db.update(schema.savingsGroups)
+        .set({ status: 'closed', suspension_grace_period_ends_at: null })
+        .where(eq(schema.savingsGroups.id, group.id));
+
+      await createAuditLog({
+        action: 'GROUP_CLOSED_GRACE_PERIOD_EXPIRED',
+        entity: 'savings_groups',
+        entityId: group.id,
+        metadata: { reason: 'suspension_grace_period_expired', graceEndsAt: group.suspension_grace_period_ends_at?.toISOString() },
+      });
+
+      // Notify all active members
+      const activeMembers = await db.select({
+        id: schema.users.id,
+        email: schema.users.email,
+      }).from(schema.memberships)
+        .innerJoin(schema.users, eq(schema.memberships.user_id, schema.users.id))
+        .where(and(eq(schema.memberships.group_id, group.id), eq(schema.memberships.status, 'active')));
+
+      for (const member of activeMembers) {
+        await notificationService.create({
+          userId: member.id,
+          type: 'group_closed',
+          title: 'Group Closed',
+          message: `"${group.name}" has been automatically closed after remaining below the minimum member count for 30 days. Any pending payouts already in progress will still be paid.`,
+        });
+        await sendGroupClosedDueToGracePeriodExpiry(member.email, group.name);
+      }
+    }
+
+    // Second: Check for stuck groups that auto-expire (legacy Draft/Suspended without grace period)
     const stuckGroups = await db.select().from(schema.savingsGroups)
       .where(inArray(schema.savingsGroups.status, ['draft', 'suspended']));
 
-    const now = Date.now();
+    const nowMs = Date.now();
     for (const group of stuckGroups) {
       const activeCount = await groupService.countActiveMembers(group.id);
       if (activeCount >= GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH) continue;
 
       const anchor = (group.status === 'suspended' ? group.suspended_at : null) ?? group.created_at;
-      const daysStuck = (now - new Date(anchor).getTime()) / (24 * 60 * 60 * 1000);
+      const daysStuck = (nowMs - new Date(anchor).getTime()) / (24 * 60 * 60 * 1000);
       const daysRemaining = Math.ceil(GROUP_STUCK_BELOW_MIN_EXPIRY_DAYS - daysStuck);
 
       if (daysStuck >= GROUP_STUCK_BELOW_MIN_EXPIRY_DAYS) {
@@ -314,6 +364,93 @@ export async function dailyGroupLifecycleExpiry(): Promise<void> {
         });
         const leaderRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, group.leader_id)).limit(1);
         if (leaderRow.length) await sendGroupExpiryReminderEmail(leaderRow[0].email, group.name, daysRemaining);
+      }
+    }
+  });
+}
+
+/**
+ * Apply pending payout frequency changes when their effective_date arrives.
+ * This allows leaders to schedule frequency changes for a future date
+ * (e.g., "switch from weekly to monthly next Monday").
+ */
+export async function dailyApplyPendingPayoutFrequencyChanges(): Promise<void> {
+  await runJob('daily_apply_pending_payout_frequency_changes', async () => {
+    const now = new Date();
+
+    // Find all groups with pending frequency changes whose effective_date has arrived
+    const groupsWithPendingChanges = await db.select().from(schema.savingsGroups)
+      .where(and(
+        isNotNull(schema.savingsGroups.pending_contribution_frequency),
+        isNotNull(schema.savingsGroups.contribution_frequency_change_effective_date),
+        lte(schema.savingsGroups.contribution_frequency_change_effective_date, now),
+      ));
+
+    for (const group of groupsWithPendingChanges) {
+      const oldFrequency = group.contribution_frequency;
+      const newFrequency = group.pending_contribution_frequency;
+      const newPayoutDay = group.pending_payout_day;
+
+      // Apply the pending change
+      await db.update(schema.savingsGroups)
+        .set({
+          contribution_frequency: newFrequency,
+          payout_day: newPayoutDay,
+          pending_contribution_frequency: null,
+          pending_payout_day: null,
+          contribution_frequency_change_effective_date: null,
+        })
+        .where(eq(schema.savingsGroups.id, group.id));
+
+      await createAuditLog({
+        action: 'GROUP_PAYOUT_FREQUENCY_CHANGED',
+        entity: 'savings_groups',
+        entityId: group.id,
+        metadata: {
+          from: oldFrequency,
+          to: newFrequency,
+          newPayoutDay,
+          effectiveDate: group.contribution_frequency_change_effective_date?.toISOString(),
+        },
+      });
+
+      // If the group is active, recalculate the next payout date for current cycle
+      if (group.status === 'active') {
+        const { dueDate } = resolveFirstScheduleDate(newFrequency!, newPayoutDay ?? group.payout_day, new Date());
+        const pendingContributions = await db.select({ id: schema.contributions.id })
+          .from(schema.contributions)
+          .where(and(
+            eq(schema.contributions.group_id, group.id),
+            eq(schema.contributions.cycle_number, group.current_cycle),
+            eq(schema.contributions.payment_status, 'scheduled'),
+          ));
+
+        if (pendingContributions.length) {
+          await db.update(schema.contributions)
+            .set({ due_date: dueDate })
+            .where(and(
+              eq(schema.contributions.group_id, group.id),
+              eq(schema.contributions.cycle_number, group.current_cycle),
+              eq(schema.contributions.payment_status, 'scheduled'),
+            ));
+        }
+      }
+
+      // Notify all active members of the frequency change taking effect
+      const activeMembers = await db.select({
+        id: schema.users.id,
+        email: schema.users.email,
+      }).from(schema.memberships)
+        .innerJoin(schema.users, eq(schema.memberships.user_id, schema.users.id))
+        .where(and(eq(schema.memberships.group_id, group.id), eq(schema.memberships.status, 'active')));
+
+      for (const member of activeMembers) {
+        await notificationService.create({
+          userId: member.id,
+          type: 'group_settings_updated',
+          title: 'Payout Frequency Changed',
+          message: `"${group.name}"'s payout frequency has changed from ${oldFrequency} to ${newFrequency} effective today.`,
+        });
       }
     }
   });
@@ -885,6 +1022,7 @@ export const dailyJobs = [
   dailyContributionDefaultRetry,
   dailyFailedPaymentCheck,
   dailyGroupLifecycleExpiry,
+  dailyApplyPendingPayoutFrequencyChanges,
   dailyBillingActiveGroupReconciliation,
   dailyGovernanceVoteExpiry,
   dailyNotificationCleanup,
