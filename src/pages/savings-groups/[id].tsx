@@ -894,6 +894,15 @@ export default function SavingsGroupDetailPage() {
           : 'Group settings saved successfully. Active members have been notified.',
       );
       closeEditModal();
+      // A payout day/date change (immediate or with today as the effective
+      // date) reschedules the CURRENT cycle's rotation.scheduled_payout_date
+      // and any still-'scheduled' contributions.due_date server-side (see
+      // groupService.update). Without refetching here, the "Next payout
+      // date"/"Next contribution date" boxes below kept showing the stale
+      // pre-edit values — set via loadData() on initial page load — until
+      // the member manually reloaded the page, even though the save itself
+      // had already succeeded (as confirmed by the green banner above).
+      await loadData();
     } catch {
       setEditError('Network error. Please check your connection and try again.');
     } finally {
