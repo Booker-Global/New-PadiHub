@@ -1391,7 +1391,6 @@ export default function SavingsGroupDetailPage() {
                         { label: 'Active', value: membershipSummary.active.toString(), color: '#2EAF6F' },
                         { label: 'Pending', value: membershipSummary.pending.toString(), color: '#2eafaf' },
                         { label: 'Suspended', value: membershipSummary.suspended.toString(), color: '#F59E0B' },
-                        { label: 'Removed', value: membershipSummary.removed.toString(), color: '#EF4444' },
                       ].map(summary => (
                         <div key={summary.label} className="rounded-2xl p-4 text-center" style={{ background: '#F9FAFB' }}>
                           <p className="text-2xl font-black mb-0.5" style={{ color: summary.color, fontFamily: 'Nunito, sans-serif' }}>{summary.value}</p>

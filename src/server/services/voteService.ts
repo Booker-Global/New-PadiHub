@@ -26,8 +26,21 @@ function subjectFor(type: ProposalType): string {
 }
 
 export const voteService = {
-  async getForGroup(groupId: string) {
-    return db.select().from(schema.votes).where(eq(schema.votes.group_id, groupId));
+  async getForGroup(groupId: string, currentUserId?: string) {
+    const votes = await db.select().from(schema.votes).where(eq(schema.votes.group_id, groupId));
+    
+    if (!currentUserId) return votes;
+    
+    // Fetch vote responses for the current user to determine if they've already voted
+    const responses = await db.select().from(schema.voteResponses)
+      .where(eq(schema.voteResponses.member_id, currentUserId));
+    const responsesByVoteId = new Map(responses.map(r => [r.vote_id, r.decision]));
+    
+    // Add user's vote response to each vote (if they voted)
+    return votes.map(vote => ({
+      ...vote,
+      user_response: responsesByVoteId.get(vote.id) || null,
+    }));
   },
 
   /**
