@@ -19,6 +19,11 @@
  *   07:10  failed-payment notifications
  *   07:15  72-hour contribution-default retry (Section 6)
  *   07:20  stuck (draft/suspended) group lifecycle expiry (Section 1)
+ *   07:22  apply pending payout day/frequency changes whose effective_date has
+ *          arrived — a leader who amends the payout date (monthly) or payout
+ *          day (weekly) picks a future start date on the "Edit group" screen;
+ *          this run flips the pending change live and reschedules the current
+ *          cycle's still-scheduled contributions/payout to the new date.
  *   07:25  Section D.2 billing/active-group-membership reconciliation safety net
  *   07:30  governance vote expiry (Section 4)
  *   07:35  72-hour subscription first-charge-on-join retry/removal (Section 7)
@@ -61,6 +66,7 @@ import {
   dailyNotificationCleanup,
   dailyContributionDefaultRetry,
   dailyGroupLifecycleExpiry,
+  dailyApplyPendingPayoutFrequencyChanges,
   dailyBillingActiveGroupReconciliation,
   dailyGovernanceVoteExpiry,
   dailySubscriptionFirstChargeRetry,
@@ -175,6 +181,15 @@ export const dailyGroupLifecycleExpiryTask = schedules.task({
   run: async () => {
     await dailyGroupLifecycleExpiry();
     return { ok: true, task: 'daily-group-lifecycle-expiry' };
+  },
+});
+
+export const dailyApplyPendingPayoutFrequencyChangesTask = schedules.task({
+  id: 'daily-apply-pending-payout-frequency-changes',
+  cron: '22 7 * * *',
+  run: async () => {
+    await dailyApplyPendingPayoutFrequencyChanges();
+    return { ok: true, task: 'daily-apply-pending-payout-frequency-changes' };
   },
 });
 

@@ -555,7 +555,8 @@ export const groupService = {
     strike_threshold: number; suspension_threshold: number;
     voting_threshold: number; allow_payout_swaps: boolean; is_public: boolean;
     requires_admission_vote: boolean;
-    contribution_frequency_change_effective_date?: string; // ISO string date when change takes effect
+    contribution_frequency_change_effective_date?: string; // ISO string date when a frequency change takes effect
+    payout_day_change_effective_date?: string; // ISO string date when a same-frequency payout_day change takes effect
   }>, ipAddress?: string) {
     
     const group = await this.getById(groupId);
@@ -577,9 +578,11 @@ export const groupService = {
     // Handle contribution_frequency changes with effective date
     let updateData: any = { ...data };
     let frequencyChangeEffectiveDate: Date | null = null;
+    let payoutDayChangeEffectiveDate: Date | null = null;
     let newPayoutDay = data.payout_day !== undefined ? data.payout_day : group.payout_day;
+    const changingFrequency = data.contribution_frequency !== undefined && data.contribution_frequency !== group.contribution_frequency;
 
-    if (data.contribution_frequency !== undefined && data.contribution_frequency !== group.contribution_frequency) {
+    if (changingFrequency) {
       // Leader is changing the contribution frequency — require an effective_date
       if (!data.contribution_frequency_change_effective_date) {
         throw new AppError(
@@ -598,8 +601,10 @@ export const groupService = {
         );
       }
 
-      // Validate new payout_day for the new frequency
-      const newFreqBounds = payoutDayBounds(data.contribution_frequency);
+      // Validate new payout_day for the new frequency. data.contribution_frequency
+      // is guaranteed defined here by changingFrequency's `!== undefined` check —
+      // the `!` just narrows the type, it doesn't change behavior.
+      const newFreqBounds = payoutDayBounds(data.contribution_frequency!);
       if (newFreqBounds) {
         if (data.payout_day === undefined) {
           throw new AppError(
@@ -633,14 +638,18 @@ export const groupService = {
         updateData.pending_contribution_frequency = data.contribution_frequency;
         updateData.pending_payout_day = data.payout_day;
         updateData.contribution_frequency_change_effective_date = frequencyChangeEffectiveDate;
-        // Don't change the current contribution_frequency yet
+        // Don't change the current contribution_frequency/payout_day yet
+        delete updateData.contribution_frequency;
+        delete updateData.payout_day;
+        newPayoutDay = group.payout_day;
+      }
+    } else {
+      if (data.contribution_frequency !== undefined) {
+        // Same frequency, just storing it (no-op, but allow it)
         delete updateData.contribution_frequency;
       }
-    } else if (data.contribution_frequency !== undefined) {
-      // Same frequency, just storing it (no-op, but allow it)
-      delete updateData.contribution_frequency;
-    } else {
-      // Validate payout_day against existing frequency
+
+      // Validate payout_day against the (unchanged) existing frequency
       if (data.payout_day !== undefined) {
         const bounds = payoutDayBounds(group.contribution_frequency);
         if (bounds && (data.payout_day < bounds.min || data.payout_day > bounds.max)) {
@@ -651,10 +660,63 @@ export const groupService = {
           );
         }
       }
+
+      // Item — amending the payout day (weekly) or payout date (monthly)
+      // without changing frequency must let the leader pick which upcoming
+      // occurrence of the new day the change starts from, exactly like a
+      // frequency change already does. Without this, the payout/contribution
+      // charge date for the CURRENT cycle (and every cycle after it) would
+      // silently jump the moment the leader saved, with no chance to line
+      // it up with a date members have been told about.
+      const changingPayoutDayOnly = group.contribution_frequency !== 'daily'
+        && data.payout_day !== undefined && data.payout_day !== group.payout_day;
+
+      if (changingPayoutDayOnly) {
+        if (!data.payout_day_change_effective_date) {
+          throw new AppError(
+            'Changing the payout day/date requires an effective date. Please choose one of the upcoming dates shown for the new payout day.',
+            400,
+            'PAYOUT_DAY_CHANGE_REQUIRES_EFFECTIVE_DATE',
+          );
+        }
+
+        payoutDayChangeEffectiveDate = new Date(data.payout_day_change_effective_date);
+        if (Number.isNaN(payoutDayChangeEffectiveDate.getTime())) {
+          throw new AppError('Invalid payout day change effective date.', 400, 'INVALID_PAYOUT_DAY_CHANGE_EFFECTIVE_DATE');
+        }
+
+        const now = new Date();
+        const isImmediate = payoutDayChangeEffectiveDate.toDateString() === now.toDateString();
+        if (!isImmediate && payoutDayChangeEffectiveDate < now) {
+          throw new AppError(
+            'Payout day change effective date cannot be in the past.',
+            400,
+            'PAYOUT_DAY_CHANGE_EFFECTIVE_DATE_IN_PAST',
+          );
+        }
+
+        if (isImmediate) {
+          // Apply change immediately
+          updateData.payout_day = data.payout_day;
+          updateData.pending_contribution_frequency = null;
+          updateData.pending_payout_day = null;
+          updateData.contribution_frequency_change_effective_date = null;
+        } else {
+          // Schedule change for the leader-chosen future date — don't touch
+          // the current payout_day until then.
+          updateData.pending_payout_day = data.payout_day;
+          updateData.contribution_frequency_change_effective_date = payoutDayChangeEffectiveDate;
+          delete updateData.payout_day;
+          newPayoutDay = group.payout_day;
+        }
+      }
     }
 
-    // Remove the effective_date from updateData if it was only used for validation
+    // Remove the effective_date fields from updateData — neither is a
+    // direct savings_groups column, they were only used above to compute
+    // the pending-change columns.
     delete updateData.contribution_frequency_change_effective_date;
+    delete updateData.payout_day_change_effective_date;
 
     await db.update(schema.savingsGroups).set(updateData).where(eq(schema.savingsGroups.id, groupId));
     await createAuditLog({ 
@@ -668,7 +730,12 @@ export const groupService = {
           from: group.contribution_frequency,
           to: data.contribution_frequency,
           effectiveDate: frequencyChangeEffectiveDate?.toISOString()
-        } : undefined
+        } : undefined,
+        payoutDayChange: payoutDayChangeEffectiveDate ? {
+          from: group.payout_day,
+          to: data.payout_day,
+          effectiveDate: payoutDayChangeEffectiveDate.toISOString(),
+        } : undefined,
       }
     });
 
@@ -708,6 +775,25 @@ export const groupService = {
           metadata: { newPayoutDay, newDueDate: dueDate.toISOString(), affectedContributions: pendingContributions.length },
         });
       }
+
+      // The "Next payout date" shown on the group/rotation-history screens
+      // comes from rotations.scheduled_payout_date (set once when the
+      // rotation record is created — see rotationService.createForCycle),
+      // never re-derived from payout_day afterwards. Without updating it
+      // here too, a leader's amended payout date would reschedule the
+      // underlying contribution charges but the payout date displayed to
+      // members would stay stuck on the old date. Only a still-'pending'
+      // (not yet 'processing'/'completed') rotation for the CURRENT cycle
+      // is touched — a payout already in flight must not be silently moved.
+      if (newPayoutDay !== group.payout_day) {
+        await db.update(schema.rotations)
+          .set({ scheduled_payout_date: dueDate })
+          .where(and(
+            eq(schema.rotations.group_id, groupId),
+            eq(schema.rotations.cycle_number, group.current_cycle),
+            eq(schema.rotations.payout_status, 'pending'),
+          ));
+      }
     }
 
     // A permanent contribution-amount or payout-date change materially
@@ -723,7 +809,7 @@ export const groupService = {
         await notificationService.create({
           userId: member.id, type: 'group_settings_updated',
           title: 'Group Settings Updated',
-          message: `"${group.name}"'s settings were updated by the group leader — check the group dashboard for the latest contribution amount, payout date, and membership rules.${frequencyChangeEffectiveDate ? ` Payout frequency changes take effect on ${frequencyChangeEffectiveDate.toLocaleDateString()}.` : ''}`,
+          message: `"${group.name}"'s settings were updated by the group leader — check the group dashboard for the latest contribution amount, payout date, and membership rules.${frequencyChangeEffectiveDate ? ` Payout frequency changes take effect on ${frequencyChangeEffectiveDate.toLocaleDateString()}.` : ''}${payoutDayChangeEffectiveDate ? ` The new payout ${group.contribution_frequency === 'weekly' ? 'day' : 'date'} takes effect on ${payoutDayChangeEffectiveDate.toLocaleDateString()}.` : ''}`,
         });
         await sendGroupSettingsUpdatedEmail(member.email, group.name);
       }

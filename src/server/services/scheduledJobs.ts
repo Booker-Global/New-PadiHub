@@ -5,7 +5,7 @@
  *
  * These are named exports ready for Trigger.dev or any cron runner.
  */
-import { eq, lt, lte, gt, and, inArray, isNotNull, isNull, ne } from 'drizzle-orm';
+import { eq, lt, lte, gt, and, or, inArray, isNotNull, isNull, ne } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { contributionService } from './contributionService.js';
@@ -370,33 +370,43 @@ export async function dailyGroupLifecycleExpiry(): Promise<void> {
 }
 
 /**
- * Apply pending payout frequency changes when their effective_date arrives.
- * This allows leaders to schedule frequency changes for a future date
- * (e.g., "switch from weekly to monthly next Monday").
+ * Apply pending payout schedule changes when their effective_date arrives —
+ * covers both a full contribution_frequency change (e.g. "switch from weekly
+ * to monthly next Monday") AND a same-frequency payout_day/payout-date-only
+ * change (e.g. "move payout day from the 5th to the 20th of the month,
+ * starting next month"). Either kind of pending change is recognised by
+ * pending_payout_day and/or pending_contribution_frequency being set —
+ * pending_contribution_frequency stays null when only the day is changing,
+ * so newFrequency falls back to the group's current (unchanged) frequency.
  */
 export async function dailyApplyPendingPayoutFrequencyChanges(): Promise<void> {
   await runJob('daily_apply_pending_payout_frequency_changes', async () => {
     const now = new Date();
 
-    // Find all groups with pending frequency changes whose effective_date has arrived
+    // Find all groups with a pending frequency and/or payout-day change whose
+    // effective_date has arrived.
     const groupsWithPendingChanges = await db.select().from(schema.savingsGroups)
       .where(and(
-        isNotNull(schema.savingsGroups.pending_contribution_frequency),
+        or(
+          isNotNull(schema.savingsGroups.pending_contribution_frequency),
+          isNotNull(schema.savingsGroups.pending_payout_day),
+        ),
         isNotNull(schema.savingsGroups.contribution_frequency_change_effective_date),
         lte(schema.savingsGroups.contribution_frequency_change_effective_date, now),
       ));
 
     for (const group of groupsWithPendingChanges) {
       const oldFrequency = group.contribution_frequency;
-      const newFrequency = group.pending_contribution_frequency;
-      const newPayoutDay = group.pending_payout_day;
+      const oldPayoutDay = group.payout_day;
+      // Frequency isn't changing when only the payout day is pending —
+      // fall back to the group's current frequency in that case.
+      const newFrequency = group.pending_contribution_frequency ?? group.contribution_frequency;
+      const newPayoutDay = group.pending_payout_day ?? group.payout_day;
+      const isFrequencyChange = group.pending_contribution_frequency !== null && group.pending_contribution_frequency !== oldFrequency;
 
-      // Apply the pending change. newFrequency is guaranteed non-null by the
-      // isNotNull(pending_contribution_frequency) filter above — the `!`
-      // just narrows the type, it doesn't change behavior.
       await db.update(schema.savingsGroups)
         .set({
-          contribution_frequency: newFrequency!,
+          contribution_frequency: newFrequency,
           payout_day: newPayoutDay,
           pending_contribution_frequency: null,
           pending_payout_day: null,
@@ -405,12 +415,13 @@ export async function dailyApplyPendingPayoutFrequencyChanges(): Promise<void> {
         .where(eq(schema.savingsGroups.id, group.id));
 
       await createAuditLog({
-        action: 'GROUP_PAYOUT_FREQUENCY_CHANGED',
+        action: isFrequencyChange ? 'GROUP_PAYOUT_FREQUENCY_CHANGED' : 'GROUP_PAYOUT_DAY_CHANGED',
         entity: 'savings_groups',
         entityId: group.id,
         metadata: {
           from: oldFrequency,
           to: newFrequency,
+          oldPayoutDay,
           newPayoutDay,
           effectiveDate: group.contribution_frequency_change_effective_date?.toISOString(),
         },
@@ -418,7 +429,7 @@ export async function dailyApplyPendingPayoutFrequencyChanges(): Promise<void> {
 
       // If the group is active, recalculate the next payout date for current cycle
       if (group.status === 'active') {
-        const { dueDate } = resolveFirstScheduleDate(newFrequency!, newPayoutDay ?? group.payout_day, new Date());
+        const { dueDate } = resolveFirstScheduleDate(newFrequency, newPayoutDay, new Date());
         const pendingContributions = await db.select({ id: schema.contributions.id })
           .from(schema.contributions)
           .where(and(
@@ -436,9 +447,21 @@ export async function dailyApplyPendingPayoutFrequencyChanges(): Promise<void> {
               eq(schema.contributions.payment_status, 'scheduled'),
             ));
         }
+
+        // Keep the "Next payout date" shown to members (rotations.scheduled_payout_date,
+        // set once at rotation creation — see rotationService.createForCycle) in sync with
+        // the newly-effective payout day, same as the immediate-apply path in
+        // groupService.update. Only a still-'pending' rotation is touched.
+        await db.update(schema.rotations)
+          .set({ scheduled_payout_date: dueDate })
+          .where(and(
+            eq(schema.rotations.group_id, group.id),
+            eq(schema.rotations.cycle_number, group.current_cycle),
+            eq(schema.rotations.payout_status, 'pending'),
+          ));
       }
 
-      // Notify all active members of the frequency change taking effect
+      // Notify all active members of the change taking effect
       const activeMembers = await db.select({
         id: schema.users.id,
         email: schema.users.email,
@@ -450,8 +473,10 @@ export async function dailyApplyPendingPayoutFrequencyChanges(): Promise<void> {
         await notificationService.create({
           userId: member.id,
           type: 'group_settings_updated',
-          title: 'Payout Frequency Changed',
-          message: `"${group.name}"'s payout frequency has changed from ${oldFrequency} to ${newFrequency} effective today.`,
+          title: isFrequencyChange ? 'Payout Frequency Changed' : 'Payout Day Changed',
+          message: isFrequencyChange
+            ? `"${group.name}"'s payout frequency has changed from ${oldFrequency} to ${newFrequency} effective today.`
+            : `"${group.name}"'s payout ${newFrequency === 'weekly' ? 'day' : 'date'} has changed effective today — check the group dashboard for the new schedule.`,
         });
       }
     }
