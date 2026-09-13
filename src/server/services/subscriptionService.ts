@@ -460,6 +460,10 @@ export const subscriptionService = {
         currency: user.currency,
         tier,
         deferBilling,
+        // The member's saved card — Stripe bills this as the subscription's
+        // default_payment_method so the first live invoice is actually
+        // charged (Flutterwave ignores it; its charges use the saved token).
+        paymentMethodId: user.stripe_payment_method_id ?? undefined,
       });
     } catch (err) {
       // Distinguish a PadiHub-side setup problem (missing Price/Plan ID —
@@ -475,16 +479,17 @@ export const subscriptionService = {
       );
     }
 
-    // Stripe's createSubscription uses payment_behavior: 'default_incomplete',
-    // which does NOT synchronously confirm/charge the card — if the card is
-    // declined or needs 3D-Secure, Stripe returns successfully but with
-    // status 'incomplete' (no exception thrown). Only treat the subscription
+    // Stripe's createSubscription uses payment_behavior: 'allow_incomplete'
+    // with the member's saved card as default_payment_method, so Stripe
+    // attempts the first charge immediately: a valid card comes back
+    // 'active' synchronously, while a declined/3D-Secure-pending card comes
+    // back 'incomplete' (no exception thrown). Only treat the subscription
     // as genuinely confirmed if the provider reports it active/trialing, so we
     // never show "Active" or send the welcome email for a card that hasn't
-    // actually been verified yet. invoice.payment_succeeded/failed webhooks
+    // actually been charged yet. invoice.payment_succeeded/failed webhooks
     // reconcile this to the real outcome once Stripe finishes processing.
     // When deferBilling is set, no charge is EVER attempted (pause_collection
-    // is set instead of default_incomplete — see StripeProvider), so there is
+    // is set instead — see StripeProvider), so there is
     // nothing that could have failed to confirm; treat deferBilling
     // unconditionally as activated rather than trusting the provider's status
     // field to happen to read 'active'/'trialing'. Getting this wrong is what

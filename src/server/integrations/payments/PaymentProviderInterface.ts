@@ -106,6 +106,11 @@ export interface IPaymentProvider {
     currency: string;
     tier?: 'basic' | 'premium'; // which SUBSCRIPTION_TIERS plan to bill — defaults to 'basic'
     deferBilling?: boolean;
+    // The member's saved card/token to bill (e.g. users.stripe_payment_method_id).
+    // Stripe uses it as the subscription's default_payment_method so the
+    // first live invoice is genuinely charged; Flutterwave ignores it (its
+    // charges are driven by the saved card token at charge time instead).
+    paymentMethodId?: string;
   }): Promise<SubscriptionResult>;
 
   /** Cancel a subscription */

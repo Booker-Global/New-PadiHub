@@ -100,7 +100,7 @@ export class StripeProvider implements IPaymentProvider {
 
   async createSubscription(params: {
     customerId: string; userId: string; email: string; currency: string; tier?: 'basic' | 'premium';
-    deferBilling?: boolean;
+    deferBilling?: boolean; paymentMethodId?: string;
   }): Promise<SubscriptionResult> {
     const stripe = getStripe();
     // Basic (£4.99/mo) and Premium (£14.99/mo) are separate Stripe
@@ -120,26 +120,35 @@ export class StripeProvider implements IPaymentProvider {
     // provider-level defer, not just a DB flag subscriptionService also
     // keeps in sync (see resumeBilling/pauseBilling below).
     //
-    // payment_behavior: 'default_incomplete' must NEVER be combined with
-    // pause_collection at creation time: Stripe still generates (and
-    // immediately voids, because of pause_collection) the first invoice,
-    // but default_incomplete forces the subscription's status to stay
-    // 'incomplete' until an invoice is actually paid — which, once voided,
-    // can never happen. That previously left every deferred-billing member
-    // (i.e. everyone who hasn't yet joined a 3+ member active group)
-    // permanently stuck "awaiting payment confirmation" even after
-    // completing every onboarding step, and fired the payment-failed
-    // notification/email for a charge that was never even attempted. There
-    // is nothing to confirm when billing is deferred (no invoice is ever
-    // due), so only request default_incomplete confirmation when billing is
-    // genuinely live.
+    // When billing is live (not deferred), the saved card MUST actually be
+    // charged for the first invoice at creation time. The previous
+    // payment_behavior: 'default_incomplete' deliberately does NOT attempt
+    // payment — Stripe finalizes the first invoice and then waits for a
+    // client-side PaymentIntent confirmation that PadiHub never performs
+    // (the card was saved server-side via a SetupIntent, there is no
+    // Stripe.js payment form in this flow). The result: even a perfectly
+    // valid card (e.g. Stripe's 4242 test card) was never charged, the
+    // subscription sat in 'incomplete' forever, and the member was told
+    // their payment failed for a charge that was never attempted.
+    // 'allow_incomplete' + an explicit default_payment_method makes Stripe
+    // attempt the off-session charge immediately with the saved card: on
+    // success the subscription comes back 'active' synchronously; on a real
+    // decline it comes back 'incomplete'/'past_due' and the normal
+    // invoice.payment_failed webhook flow reports the genuine outcome.
+    //
+    // Neither payment_behavior nor default_payment_method applies when
+    // billing is deferred (Section D.2): pause_collection: 'void' means no
+    // invoice is ever due, so there is nothing to charge or confirm.
     const subscription = await stripe.subscriptions.create({
       customer: params.customerId,
       items:    [{ price: priceId }],
       metadata: { padihub_user_id: params.userId },
       ...(params.deferBilling
         ? { pause_collection: { behavior: 'void' as const } }
-        : { payment_behavior: 'default_incomplete' as const }),
+        : {
+            payment_behavior: 'allow_incomplete' as const,
+            ...(params.paymentMethodId ? { default_payment_method: params.paymentMethodId } : {}),
+          }),
     }) as unknown as Stripe.Subscription & { current_period_end: number };
 
     const renewalDate = new Date(subscription.current_period_end * 1000);
@@ -186,6 +195,24 @@ export class StripeProvider implements IPaymentProvider {
 
     const subscription = await stripe.subscriptions.retrieve(subscriptionId);
     const customerId = typeof subscription.customer === 'string' ? subscription.customer : subscription.customer.id;
+
+    // Make sure the subscription actually has a card to bill before paying
+    // the invoice below. Deferred subscriptions are created without a
+    // default_payment_method (nothing was ever going to be charged), so if
+    // the customer's saved default card exists, pin it onto the
+    // subscription now — otherwise stripe.invoices.pay below fails with
+    // "no payment method" even though the member's card is saved and valid,
+    // which surfaces to the member as a bogus "payment failed" email.
+    if (!subscription.default_payment_method) {
+      const customer = await stripe.customers.retrieve(customerId);
+      const customerDefaultPm = !customer.deleted
+        ? customer.invoice_settings?.default_payment_method
+        : null;
+      const customerDefaultPmId = typeof customerDefaultPm === 'string' ? customerDefaultPm : customerDefaultPm?.id;
+      if (customerDefaultPmId) {
+        await stripe.subscriptions.update(subscriptionId, { default_payment_method: customerDefaultPmId });
+      }
+    }
 
     let invoice: Stripe.Invoice;
     try {

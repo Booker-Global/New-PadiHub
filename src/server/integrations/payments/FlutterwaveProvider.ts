@@ -180,7 +180,7 @@ export class FlutterwaveProvider implements IPaymentProvider {
 
   async createSubscription(params: {
     customerId: string; userId: string; email: string; currency: string; tier?: 'basic' | 'premium';
-    deferBilling?: boolean;
+    deferBilling?: boolean; paymentMethodId?: string;
   }): Promise<SubscriptionResult> {
     // Basic (₦5,000/mo) and Premium (₦10,000/mo) map to separate
     // Flutterwave payment plans — see SUBSCRIPTION_TIERS in

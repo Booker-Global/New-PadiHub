@@ -15,6 +15,7 @@ import { notificationService } from '../services/notificationService.js';
 import { isSubscriptionTierKey, SUBSCRIPTION_TIERS, formatTierPrice, type SubscriptionTierKey } from '../lib/constants.js';
 import { planCode, subscriptionService } from '../services/subscriptionService.js';
 import { sendSubscriptionPaymentFailedEmail, sendSubscriptionBillingResumedEmail, sendSubscriptionRenewalChargedEmail } from '../integrations/email/emailService.js';
+import { monitoringService } from '../services/monitoringService.js';
 
 /** Recover the tier key ('basic'/'premium') from a stored plan code like 'gb_premium'. */
 function tierFromPlanCode(plan?: string | null): SubscriptionTierKey | null {
@@ -278,6 +279,13 @@ async function handleStripeEvent(event: Stripe.Event) {
         await sendSubscriptionPaymentFailedEmail(user.email, formatInvoiceAmount(invoice.amount_due, invoice.currency) ?? '');
       }
 
+      // Capture Stripe's actual failure diagnostics so support can see WHY
+      // the charge failed (no attached payment method vs a genuine card
+      // decline) directly from the audit log / admin errors panel, instead
+      // of just knowing that an email went out.
+      const failureReason =
+        invoice.last_finalization_error?.message
+        ?? 'Stripe did not include a failure reason on the invoice — check the Stripe Dashboard event log for this invoice.';
       await createAuditLog({
         userId: user.id, action: 'STRIPE_INVOICE_FAILED', entity: 'subscriptions',
         metadata: {
@@ -286,7 +294,17 @@ async function handleStripeEvent(event: Stripe.Event) {
           amount_display: formatInvoiceAmount(invoice.amount_due, invoice.currency),
           billing_reason: invoice.billing_reason,
           initial_invoice_ignored_for_access: isInitialInvoiceFailure,
+          attempt_count: invoice.attempt_count,
+          next_payment_attempt: invoice.next_payment_attempt
+            ? new Date(invoice.next_payment_attempt * 1000).toISOString()
+            : null,
+          failure_reason: failureReason,
         },
+      });
+      await monitoringService.logError({
+        type: 'payment_error',
+        endpoint: 'stripe:invoice.payment_failed',
+        message: `Stripe invoice ${invoice.id} (${formatInvoiceAmount(invoice.amount_due, invoice.currency)}) failed for user ${user.id} — billing_reason=${invoice.billing_reason}, attempt=${invoice.attempt_count}: ${failureReason}`,
       });
       break;
     }
