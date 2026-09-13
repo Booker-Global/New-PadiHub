@@ -154,6 +154,18 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
     { column: 'closure_scheduled',        sqlType: 'BOOLEAN NOT NULL DEFAULT false' },
     { column: 'is_public',                sqlType: 'BOOLEAN NOT NULL DEFAULT true' },
     { column: 'requires_admission_vote',  sqlType: 'BOOLEAN NOT NULL DEFAULT false' },
+    // Added by PR #42's grace-period/payout-frequency-amendment work. These
+    // 4 were originally missing from this list, which meant any deploy that
+    // skipped `npm run db:push` left the live DB without them — since
+    // every plain `db.select().from(schema.savingsGroups)` (groupService.list/
+    // getById, admin listGroups, etc.) explicitly selects every column
+    // declared in schema.ts, that turned EVERY group-fetching query into an
+    // "Unknown column" 500, making groups vanish from every profile/dashboard
+    // even though no row was ever deleted. See schema.ts for column semantics.
+    { column: 'suspension_grace_period_ends_at', sqlType: 'TIMESTAMP NULL' },
+    { column: 'pending_contribution_frequency', sqlType: "ENUM('daily','weekly','monthly') NULL" },
+    { column: 'contribution_frequency_change_effective_date', sqlType: 'TIMESTAMP NULL' },
+    { column: 'pending_payout_day',       sqlType: 'INT NULL' },
   ],
   contributions: [
     { column: 'amount_paid',        sqlType: 'DECIMAL(12,2) NULL' },

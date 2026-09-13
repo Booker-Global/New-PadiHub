@@ -913,11 +913,11 @@ export default function AdminPortal() {
                   </MotionDiv>
                 )}
                 <MotionDiv variants={fadeUp} className="rounded-3xl bg-white overflow-hidden overflow-x-auto" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
-                  <table className="w-full">
+                  <table className="w-full min-w-[880px]">
                     <thead>
                       <tr className="border-b border-gray-50">
                         {['Name', 'Country', 'Trust Score', 'Status', 'Verified', 'Joined', 'Actions'].map(h => (
-                          <th key={h} className="text-left text-xs font-bold text-gray-400 px-5 py-3">{h}</th>
+                          <th key={h} className="text-left text-xs font-bold text-gray-400 px-5 py-3 whitespace-nowrap">{h}</th>
                         ))}
                       </tr>
                     </thead>
@@ -934,21 +934,21 @@ export default function AdminPortal() {
                                 <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
                                   style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}>{name[0]?.toUpperCase()}</div>
                                 <div>
-                                  <p className="text-sm font-bold text-gray-900">{name}</p>
-                                  <p className="text-xs text-gray-400">{u.email}</p>
+                                  <p className="text-sm font-bold text-gray-900 whitespace-nowrap">{name}</p>
+                                  <p className="text-xs text-gray-400 whitespace-nowrap">{u.email}</p>
                                 </div>
                               </div>
                             </td>
-                            <td className="px-5 py-3"><span className="text-sm text-gray-600">{countryLabel(u.country)}</span></td>
-                            <td className="px-5 py-3"><span className="text-sm font-bold" style={{ color: '#2EAF6F' }}>{u.trust_score || '—'}</span></td>
+                            <td className="px-5 py-3"><span className="text-sm text-gray-600 whitespace-nowrap">{countryLabel(u.country)}</span></td>
+                            <td className="px-5 py-3"><span className="text-sm font-bold whitespace-nowrap" style={{ color: '#2EAF6F' }}>{u.trust_score || '—'}</span></td>
                             <td className="px-5 py-3"><StatusBadge status={u.account_status} /></td>
                             <td className="px-5 py-3">{u.identity_verified ? <CheckCircle size={14} style={{ color: '#2EAF6F' }} /> : <XCircle size={14} className="text-gray-300" />}</td>
-                            <td className="px-5 py-3"><span className="text-xs text-gray-400">{formatTimestamp(u.created_at)}</span></td>
+                            <td className="px-5 py-3"><span className="text-xs text-gray-400 whitespace-nowrap">{formatTimestamp(u.created_at)}</span></td>
                             <td className="px-5 py-3">
                               {u.account_status === 'suspended' ? (
-                                <button onClick={() => reactivateUser(u)} type="button" className="text-xs font-bold px-3 py-1.5 rounded-lg" style={{ color: '#2EAF6F', background: 'rgba(46,175,111,0.1)' }}>Reactivate</button>
+                                <button onClick={() => reactivateUser(u)} type="button" className="text-xs font-bold px-3 py-1.5 rounded-lg whitespace-nowrap" style={{ color: '#2EAF6F', background: 'rgba(46,175,111,0.1)' }}>Reactivate</button>
                               ) : (
-                                <button onClick={() => suspendUser(u)} type="button" className="text-xs font-bold px-3 py-1.5 rounded-lg" style={{ color: '#EF4444', background: 'rgba(239,68,68,0.1)' }}>Suspend</button>
+                                <button onClick={() => suspendUser(u)} type="button" className="text-xs font-bold px-3 py-1.5 rounded-lg whitespace-nowrap" style={{ color: '#EF4444', background: 'rgba(239,68,68,0.1)' }}>Suspend</button>
                               )}
                             </td>
                           </tr>
@@ -977,11 +977,11 @@ export default function AdminPortal() {
                   </MotionDiv>
                 )}
                 <MotionDiv variants={fadeUp} className="rounded-3xl bg-white overflow-hidden overflow-x-auto" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
-                  <table className="w-full">
+                  <table className="w-full min-w-[880px]">
                     <thead>
                       <tr className="border-b border-gray-50">
                         {['Group Name', 'Country', 'Members', 'Contribution', 'Status', 'Created', 'Actions'].map(h => (
-                          <th key={h} className="text-left text-xs font-bold text-gray-400 px-5 py-3">{h}</th>
+                          <th key={h} className="text-left text-xs font-bold text-gray-400 px-5 py-3 whitespace-nowrap">{h}</th>
                         ))}
                       </tr>
                     </thead>
@@ -991,15 +991,15 @@ export default function AdminPortal() {
                       )}
                       {groups.map((g) => (
                         <tr key={g.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50 transition-colors">
-                          <td className="px-5 py-3"><p className="text-sm font-bold text-gray-900">{g.name}</p></td>
-                          <td className="px-5 py-3"><span className="text-sm text-gray-600">{countryLabel(g.country)}</span></td>
-                          <td className="px-5 py-3"><span className="text-sm text-gray-600">{g.member_count}</span></td>
-                          <td className="px-5 py-3"><span className="text-sm text-gray-600">{g.currency} {g.contribution_amount}</span></td>
+                          <td className="px-5 py-3"><p className="text-sm font-bold text-gray-900 whitespace-nowrap">{g.name}</p></td>
+                          <td className="px-5 py-3"><span className="text-sm text-gray-600 whitespace-nowrap">{countryLabel(g.country)}</span></td>
+                          <td className="px-5 py-3"><span className="text-sm text-gray-600 whitespace-nowrap">{g.member_count}</span></td>
+                          <td className="px-5 py-3"><span className="text-sm text-gray-600 whitespace-nowrap">{g.currency} {g.contribution_amount}</span></td>
                           <td className="px-5 py-3"><StatusBadge status={g.status} /></td>
-                          <td className="px-5 py-3"><span className="text-xs text-gray-400">{formatTimestamp(g.created_at)}</span></td>
+                          <td className="px-5 py-3"><span className="text-xs text-gray-400 whitespace-nowrap">{formatTimestamp(g.created_at)}</span></td>
                           <td className="px-5 py-3">
                             {g.status !== 'closed' && (
-                              <button onClick={() => forceCloseGroup(g)} type="button" className="text-xs font-bold px-3 py-1.5 rounded-lg" style={{ color: '#EF4444', background: 'rgba(239,68,68,0.1)' }}>Force Close</button>
+                              <button onClick={() => forceCloseGroup(g)} type="button" className="text-xs font-bold px-3 py-1.5 rounded-lg whitespace-nowrap" style={{ color: '#EF4444', background: 'rgba(239,68,68,0.1)' }}>Force Close</button>
                             )}
                           </td>
                         </tr>
@@ -1125,11 +1125,11 @@ export default function AdminPortal() {
                   </MotionDiv>
                 )}
                 <MotionDiv variants={fadeUp} className="rounded-3xl bg-white overflow-hidden overflow-x-auto" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
-                  <table className="w-full">
+                  <table className="w-full min-w-[820px]">
                     <thead>
                       <tr className="border-b border-gray-50">
                         {['Member', 'Provider', 'Plan', 'Status', 'Renews', 'Actions'].map(h => (
-                          <th key={h} className="text-left text-xs font-bold text-gray-400 px-5 py-3">{h}</th>
+                          <th key={h} className="text-left text-xs font-bold text-gray-400 px-5 py-3 whitespace-nowrap">{h}</th>
                         ))}
                       </tr>
                     </thead>
@@ -1140,16 +1140,16 @@ export default function AdminPortal() {
                       {subscriptions.map((s) => (
                         <tr key={s.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50 transition-colors">
                           <td className="px-5 py-3">
-                            <p className="text-sm font-bold text-gray-900">{s.user_display_name}</p>
-                            <p className="text-xs text-gray-400">{s.user_email}</p>
+                            <p className="text-sm font-bold text-gray-900 whitespace-nowrap">{s.user_display_name}</p>
+                            <p className="text-xs text-gray-400 whitespace-nowrap">{s.user_email}</p>
                           </td>
-                          <td className="px-5 py-3"><span className="text-sm text-gray-600 capitalize">{s.provider}</span></td>
-                          <td className="px-5 py-3"><span className="text-sm text-gray-600">{s.plan}</span></td>
+                          <td className="px-5 py-3"><span className="text-sm text-gray-600 capitalize whitespace-nowrap">{s.provider}</span></td>
+                          <td className="px-5 py-3"><span className="text-sm text-gray-600 whitespace-nowrap">{s.plan}</span></td>
                           <td className="px-5 py-3"><StatusBadge status={s.billing_status} /></td>
-                          <td className="px-5 py-3"><span className="text-xs text-gray-400">{formatTimestamp(s.renewal_date)}</span></td>
+                          <td className="px-5 py-3"><span className="text-xs text-gray-400 whitespace-nowrap">{formatTimestamp(s.renewal_date)}</span></td>
                           <td className="px-5 py-3">
                             {s.billing_status !== 'cancelled' && (
-                              <button onClick={() => cancelSubscription(s)} type="button" className="text-xs font-bold px-3 py-1.5 rounded-lg" style={{ color: '#EF4444', background: 'rgba(239,68,68,0.1)' }}>Cancel</button>
+                              <button onClick={() => cancelSubscription(s)} type="button" className="text-xs font-bold px-3 py-1.5 rounded-lg whitespace-nowrap" style={{ color: '#EF4444', background: 'rgba(239,68,68,0.1)' }}>Cancel</button>
                             )}
                           </td>
                         </tr>
@@ -1188,12 +1188,12 @@ export default function AdminPortal() {
                   </MotionDiv>
                 )}
 
-                <MotionDiv variants={fadeUp} className="rounded-3xl bg-white overflow-hidden" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
-                  <table className="w-full">
+                <MotionDiv variants={fadeUp} className="rounded-3xl bg-white overflow-hidden overflow-x-auto" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
+                  <table className="w-full min-w-[880px]">
                     <thead>
                       <tr className="border-b border-gray-50">
                         {['Job', 'Status', 'Started', 'Completed', 'Error'].map(h => (
-                          <th key={h} className="text-left text-xs font-bold text-gray-400 px-5 py-3">{h}</th>
+                          <th key={h} className="text-left text-xs font-bold text-gray-400 px-5 py-3 whitespace-nowrap">{h}</th>
                         ))}
                       </tr>
                     </thead>
@@ -1203,10 +1203,10 @@ export default function AdminPortal() {
                       )}
                       {jobRuns.map((run) => (
                         <tr key={run.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50 transition-colors">
-                          <td className="px-5 py-3"><p className="text-sm font-bold text-gray-900">{jobDisplayName(run.job_name)}</p></td>
+                          <td className="px-5 py-3"><p className="text-sm font-bold text-gray-900 whitespace-nowrap">{jobDisplayName(run.job_name)}</p></td>
                           <td className="px-5 py-3"><StatusBadge status={run.status} /></td>
-                          <td className="px-5 py-3"><span className="text-xs text-gray-400">{formatTimestamp(run.started_at)}</span></td>
-                          <td className="px-5 py-3"><span className="text-xs text-gray-400">{formatTimestamp(run.completed_at)}</span></td>
+                          <td className="px-5 py-3"><span className="text-xs text-gray-400 whitespace-nowrap">{formatTimestamp(run.started_at)}</span></td>
+                          <td className="px-5 py-3"><span className="text-xs text-gray-400 whitespace-nowrap">{formatTimestamp(run.completed_at)}</span></td>
                           <td className="px-5 py-3"><span className="text-xs text-red-500">{run.error_message || '—'}</span></td>
                         </tr>
                       ))}
