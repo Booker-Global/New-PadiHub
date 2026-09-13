@@ -389,6 +389,7 @@ export default function AdminPortal() {
   const [section, setSection] = useState<Section>('dashboard');
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [loginNotice, setLoginNotice] = useState<string | null>(null);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Dashboard
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
@@ -663,8 +664,20 @@ export default function AdminPortal() {
       </Helmet>
 
       {/* Sidebar */}
-      <aside className="hidden lg:flex w-60 flex-shrink-0 flex-col h-full"
+      <aside className={`${
+        mobileMenuOpen ? 'fixed inset-0 z-40' : 'hidden lg:flex'
+      } lg:relative w-60 flex-shrink-0 flex-col h-full`}
         style={{ background: 'linear-gradient(180deg, #0F172A 0%, #1A1A2E 100%)', borderRight: '1px solid rgba(255,255,255,0.07)' }}>
+        {/* Mobile close button */}
+        {mobileMenuOpen && (
+          <button
+            onClick={() => setMobileMenuOpen(false)}
+            className="absolute top-4 right-4 lg:hidden z-50 p-2 text-white hover:bg-white/10 rounded-lg"
+            type="button"
+          >
+            <span className="text-2xl">✕</span>
+          </button>
+        )}
         <div className="px-5 py-5 border-b" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: 'rgba(239,68,68,0.2)' }}>
@@ -678,7 +691,7 @@ export default function AdminPortal() {
         </div>
         <nav className="flex-1 px-3 py-3 space-y-0.5 overflow-y-auto">
           {navItems.map(item => (
-            <button key={item.id} onClick={() => setSection(item.id)} type="button"
+            <button key={item.id} onClick={() => { setSection(item.id); setMobileMenuOpen(false); }} type="button"
               className="w-full flex items-center gap-3 px-4 py-2.5 rounded-2xl text-sm font-semibold transition-all duration-200"
               style={{
                 background: section === item.id ? 'rgba(239,68,68,0.15)' : 'transparent',
@@ -707,6 +720,16 @@ export default function AdminPortal() {
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Top bar */}
         <header className="h-14 flex items-center gap-3 px-6 bg-white border-b border-gray-100 flex-shrink-0">
+          {/* Mobile menu button */}
+          <button
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            type="button"
+            className="lg:hidden p-2 hover:bg-gray-100 rounded-lg"
+          >
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={mobileMenuOpen ? "M6 18L18 6M6 6l12 12" : "M4 6h16M4 12h16M4 18h16"} />
+            </svg>
+          </button>
           <div className="flex-1">
             <p className="text-sm font-bold text-gray-900">{navItems.find(n => n.id === section)?.label}</p>
           </div>
