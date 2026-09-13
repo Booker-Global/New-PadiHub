@@ -167,6 +167,19 @@ export const savingsGroups = mysqlTable('savings_groups', {
   // to the last day of shorter months); ignored for 'daily'. Required at
   // group-creation time for weekly/monthly groups — see groupController.ts.
   payout_day:               int('payout_day'),
+  // When a leader changes the contribution_frequency, the new frequency
+  // is stored here along with an effective_date. On the effective_date,
+  // the contribution_frequency is updated to this value and this column
+  // is cleared back to null. Allows leaders to schedule frequency changes
+  // for a future date (e.g., "switch to weekly next Monday").
+  pending_contribution_frequency: mysqlEnum('pending_contribution_frequency', ['daily', 'weekly', 'monthly']),
+  // Effective date for the pending_contribution_frequency change.
+  // Once this date arrives, the change is applied and both this column and
+  // pending_contribution_frequency are reset to null.
+  contribution_frequency_change_effective_date: timestamp('contribution_frequency_change_effective_date'),
+  // Day for the pending payout frequency (e.g., new payout_day if changing weekly/monthly).
+  // Only used if pending_contribution_frequency is set.
+  pending_payout_day:       int('pending_payout_day'),
   maximum_members:          int('maximum_members').notNull().default(10),
   // Minimum Trust Score a prospective member must have to request to join
   // this group — set by the creator at group-creation time (0 = no minimum).

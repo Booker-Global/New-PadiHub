@@ -551,10 +551,11 @@ export const groupService = {
 
   async update(groupId: string, leaderId: string, data: Partial<{
     name: string; description: string; maximum_members: number; min_trust_score: number;
-    contribution_amount: string; payout_day: number;
+    contribution_amount: string; payout_day: number; contribution_frequency: 'daily' | 'weekly' | 'monthly';
     strike_threshold: number; suspension_threshold: number;
     voting_threshold: number; allow_payout_swaps: boolean; is_public: boolean;
     requires_admission_vote: boolean;
+    contribution_frequency_change_effective_date?: string; // ISO string date when change takes effect
   }>, ipAddress?: string) {
     
     const group = await this.getById(groupId);
@@ -573,22 +574,103 @@ export const groupService = {
       }
     }
 
-    // payout_day's valid range depends on contribution_frequency, which is
-    // fixed at creation and never editable here — re-validate against the
-    // group's existing (unchanged) frequency rather than trusting the caller.
-    if (data.payout_day !== undefined) {
-      const bounds = payoutDayBounds(group.contribution_frequency);
-      if (bounds && (data.payout_day < bounds.min || data.payout_day > bounds.max)) {
+    // Handle contribution_frequency changes with effective date
+    let updateData: any = { ...data };
+    let frequencyChangeEffectiveDate: Date | null = null;
+    let newPayoutDay = data.payout_day !== undefined ? data.payout_day : group.payout_day;
+
+    if (data.contribution_frequency !== undefined && data.contribution_frequency !== group.contribution_frequency) {
+      // Leader is changing the contribution frequency — require an effective_date
+      if (!data.contribution_frequency_change_effective_date) {
         throw new AppError(
-          `payout_day must be between ${bounds.min} and ${bounds.max} for ${group.contribution_frequency} groups.`,
+          'Payout frequency changes require an effective date. Please specify when this change should take effect.',
           400,
-          'INVALID_PAYOUT_DAY',
+          'PAYOUT_FREQUENCY_CHANGE_REQUIRES_EFFECTIVE_DATE',
         );
+      }
+
+      frequencyChangeEffectiveDate = new Date(data.contribution_frequency_change_effective_date);
+      if (frequencyChangeEffectiveDate < new Date()) {
+        throw new AppError(
+          'Payout frequency change effective date cannot be in the past.',
+          400,
+          'PAYOUT_FREQUENCY_CHANGE_EFFECTIVE_DATE_IN_PAST',
+        );
+      }
+
+      // Validate new payout_day for the new frequency
+      const newFreqBounds = payoutDayBounds(data.contribution_frequency);
+      if (newFreqBounds) {
+        if (data.payout_day === undefined) {
+          throw new AppError(
+            `payout_day is required when changing to ${data.contribution_frequency} frequency.`,
+            400,
+            'PAYOUT_DAY_REQUIRED_FOR_FREQUENCY',
+          );
+        }
+        if (data.payout_day < newFreqBounds.min || data.payout_day > newFreqBounds.max) {
+          throw new AppError(
+            `For ${data.contribution_frequency} frequency, payout_day must be between ${newFreqBounds.min} and ${newFreqBounds.max}.`,
+            400,
+            'INVALID_PAYOUT_DAY_FOR_FREQUENCY',
+          );
+        }
+      }
+
+      // Store the pending change — apply it immediately if effective_date is "now" or "today"
+      const now = new Date();
+      const isImmediate = frequencyChangeEffectiveDate.toDateString() === now.toDateString();
+
+      if (isImmediate) {
+        // Apply change immediately
+        updateData.contribution_frequency = data.contribution_frequency;
+        updateData.payout_day = data.payout_day;
+        updateData.pending_contribution_frequency = null;
+        updateData.pending_payout_day = null;
+        updateData.contribution_frequency_change_effective_date = null;
+      } else {
+        // Schedule change for future date
+        updateData.pending_contribution_frequency = data.contribution_frequency;
+        updateData.pending_payout_day = data.payout_day;
+        updateData.contribution_frequency_change_effective_date = frequencyChangeEffectiveDate;
+        // Don't change the current contribution_frequency yet
+        delete updateData.contribution_frequency;
+      }
+    } else if (data.contribution_frequency !== undefined) {
+      // Same frequency, just storing it (no-op, but allow it)
+      delete updateData.contribution_frequency;
+    } else {
+      // Validate payout_day against existing frequency
+      if (data.payout_day !== undefined) {
+        const bounds = payoutDayBounds(group.contribution_frequency);
+        if (bounds && (data.payout_day < bounds.min || data.payout_day > bounds.max)) {
+          throw new AppError(
+            `payout_day must be between ${bounds.min} and ${bounds.max} for ${group.contribution_frequency} groups.`,
+            400,
+            'INVALID_PAYOUT_DAY',
+          );
+        }
       }
     }
 
-    await db.update(schema.savingsGroups).set(data).where(eq(schema.savingsGroups.id, groupId));
-    await createAuditLog({ userId: leaderId, action: 'GROUP_UPDATED', entity: 'savings_groups', entityId: groupId, ipAddress });
+    // Remove the effective_date from updateData if it was only used for validation
+    delete updateData.contribution_frequency_change_effective_date;
+
+    await db.update(schema.savingsGroups).set(updateData).where(eq(schema.savingsGroups.id, groupId));
+    await createAuditLog({ 
+      userId: leaderId, 
+      action: 'GROUP_UPDATED', 
+      entity: 'savings_groups', 
+      entityId: groupId, 
+      ipAddress,
+      metadata: { 
+        frequencyChange: data.contribution_frequency && data.contribution_frequency !== group.contribution_frequency ? {
+          from: group.contribution_frequency,
+          to: data.contribution_frequency,
+          effectiveDate: frequencyChangeEffectiveDate?.toISOString()
+        } : undefined
+      }
+    });
 
     // Item 7 — changing an ACTIVE group's payout_day/contribution_amount
     // must actually reschedule the current cycle's still-pending charges,
@@ -601,8 +683,7 @@ export const groupService = {
     // has flipped to 'due' (the 07:00 UTC charge run has picked it up
     // today) or beyond, it's already in flight and must not be silently
     // rewritten.
-    if (group.status === 'active' && (data.payout_day !== undefined || data.contribution_amount !== undefined)) {
-      const newPayoutDay = data.payout_day !== undefined ? data.payout_day : group.payout_day;
+    if (group.status === 'active' && (newPayoutDay !== group.payout_day || data.contribution_amount !== undefined)) {
       const { dueDate } = resolveFirstScheduleDate(group.contribution_frequency, newPayoutDay, new Date());
       const pendingContributions = await db.select({ id: schema.contributions.id })
         .from(schema.contributions)
@@ -614,7 +695,7 @@ export const groupService = {
       if (pendingContributions.length) {
         await db.update(schema.contributions)
           .set({
-            ...(data.payout_day !== undefined ? { due_date: dueDate } : {}),
+            ...(newPayoutDay !== group.payout_day ? { due_date: dueDate } : {}),
             ...(data.contribution_amount !== undefined ? { amount_due: data.contribution_amount } : {}),
           })
           .where(and(
@@ -632,7 +713,7 @@ export const groupService = {
     // A permanent contribution-amount or payout-date change materially
     // affects every member's expectations going forward — notify everyone,
     // not just the Owner who made the change.
-    if (data.contribution_amount !== undefined || data.payout_day !== undefined || data.maximum_members !== undefined || data.min_trust_score !== undefined) {
+    if (data.contribution_amount !== undefined || data.payout_day !== undefined || data.contribution_frequency !== undefined || data.maximum_members !== undefined || data.min_trust_score !== undefined) {
       const activeMembers = await db.select({ id: schema.users.id, email: schema.users.email })
         .from(schema.memberships)
         .innerJoin(schema.users, eq(schema.memberships.user_id, schema.users.id))
@@ -642,7 +723,7 @@ export const groupService = {
         await notificationService.create({
           userId: member.id, type: 'group_settings_updated',
           title: 'Group Settings Updated',
-          message: `"${group.name}"'s settings were updated by the group leader — check the group dashboard for the latest contribution amount, payout date, and membership rules.`,
+          message: `"${group.name}"'s settings were updated by the group leader — check the group dashboard for the latest contribution amount, payout date, and membership rules.${frequencyChangeEffectiveDate ? ` Payout frequency changes take effect on ${frequencyChangeEffectiveDate.toLocaleDateString()}.` : ''}`,
         });
         await sendGroupSettingsUpdatedEmail(member.email, group.name);
       }
