@@ -184,20 +184,24 @@ async function handleStripeEvent(event: Stripe.Event) {
       if (isSubscriptionTierKey(user.subscription_tier)) {
         const tierName = SUBSCRIPTION_TIERS[user.subscription_tier].name;
         const priceDisplay = formatInvoiceAmount(invoice.amount_paid, invoice.currency) || formatTierPrice(user.subscription_tier, user.country);
-        if (wasFirstChargeOnJoin) {
-          await sendSubscriptionBillingResumedEmail(
-            user.email,
-            tierName,
-            priceDisplay,
-            nextRenewalDate ? nextRenewalDate.toLocaleDateString('en-GB') : 'next month',
-          );
-        } else {
-          await sendSubscriptionRenewalChargedEmail(
-            user.email,
-            tierName,
-            priceDisplay,
-            sub.renewal_date ? new Date(sub.renewal_date).toLocaleDateString('en-GB') : 'next month',
-          );
+        try {
+          if (wasFirstChargeOnJoin) {
+            await sendSubscriptionBillingResumedEmail(
+              user.email,
+              tierName,
+              priceDisplay,
+              nextRenewalDate ? nextRenewalDate.toLocaleDateString('en-GB') : 'next month',
+            );
+          } else {
+            await sendSubscriptionRenewalChargedEmail(
+              user.email,
+              tierName,
+              priceDisplay,
+              sub.renewal_date ? new Date(sub.renewal_date).toLocaleDateString('en-GB') : 'next month',
+            );
+          }
+        } catch (emailError) {
+          console.error(`[StripeWebhook] Failed to send subscription charge confirmation email to ${user.email} for subscription ${sub.id}:`, emailError);
         }
       }
       await notificationService.create({

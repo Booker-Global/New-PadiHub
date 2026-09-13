@@ -805,12 +805,16 @@ export async function monthlySubscriptionRenewalCharge(): Promise<void> {
           // it's traceable alongside its Billing History entry, matching
           // the same guarantee now given to first-charges-on-join and
           // Stripe renewals (see webhookStripeController.ts).
-          await sendSubscriptionRenewalChargedEmail(
-            user.email,
-            isSubscriptionTierKey(user.subscription_tier) ? SUBSCRIPTION_TIERS[user.subscription_tier].name : '',
-            isSubscriptionTierKey(user.subscription_tier) ? formatTierPrice(user.subscription_tier, user.country) : '',
-            nextRenewalDate.toLocaleDateString('en-GB'),
-          );
+          try {
+            await sendSubscriptionRenewalChargedEmail(
+              user.email,
+              isSubscriptionTierKey(user.subscription_tier) ? SUBSCRIPTION_TIERS[user.subscription_tier].name : '',
+              isSubscriptionTierKey(user.subscription_tier) ? formatTierPrice(user.subscription_tier, user.country) : '',
+              nextRenewalDate.toLocaleDateString('en-GB'),
+            );
+          } catch (emailError) {
+            console.error(`[ScheduledJobs] Failed to send subscription renewal email to ${user.email} for subscription ${sub.id}:`, emailError);
+          }
         } else {
           await db.update(schema.subscriptions).set({ billing_status: 'past_due' }).where(eq(schema.subscriptions.id, sub.id));
           await db.update(schema.users).set({ subscription_status: 'expired' }).where(eq(schema.users.id, user.id));

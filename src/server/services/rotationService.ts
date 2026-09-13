@@ -340,19 +340,29 @@ export const rotationService = {
         const { contributionService } = await import('./contributionService.js');
         const potAmountValue = await contributionService.getCyclePotAmount(groupId, current.cycle_number, parseFloat(g2.contribution_amount));
         const potAmount = `${g2.currency} ${potAmountValue.toFixed(2)}`;
-        await sendPayoutCompleteEmail(recipientRow[0].email, g2.name, potAmount, reference);
+        try {
+          await sendPayoutCompleteEmail(recipientRow[0].email, g2.name, potAmount, reference);
+        } catch (emailError) {
+          console.error(`[RotationService] Failed to send payout complete email for rotation ${current.id}:`, emailError);
+        }
 
         // Leader must know every payout as it happens, unless they're the recipient.
         if (g2.leader_id !== current.recipient_id) {
           const leaderRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, g2.leader_id)).limit(1);
           if (leaderRow.length) {
             const recipientName = resolveUserDisplayName(recipientRow[0]);
-            await sendGroupLeaderActivityEmail(leaderRow[0].email, g2.name, 'Payout completed', `
-              ${p(`The cycle ${current.cycle_number} payout for <strong>${g2.name}</strong> has been sent to <strong>${recipientName}</strong>.`)}
-              ${table(detail('Recipient', recipientName) + detail('Cycle', String(current.cycle_number)) + detail('Amount', potAmount) + detail('Reference', reference))}
-            `);
+            try {
+              await sendGroupLeaderActivityEmail(leaderRow[0].email, g2.name, 'Payout completed', `
+                ${p(`The cycle ${current.cycle_number} payout for <strong>${g2.name}</strong> has been sent to <strong>${recipientName}</strong>.`)}
+                ${table(detail('Recipient', recipientName) + detail('Cycle', String(current.cycle_number)) + detail('Amount', potAmount) + detail('Reference', reference))}
+              `);
+            } catch (emailError) {
+              console.error(`[RotationService] Failed to send payout completion notification to leader for group ${groupId}:`, emailError);
+            }
           }
         }
+      } else {
+        console.warn(`[RotationService] Could not send payout emails for rotation ${current.id}: recipient found=${recipientRow.length > 0}, group found=${groupRow2.length > 0}`);
       }
     }
 
