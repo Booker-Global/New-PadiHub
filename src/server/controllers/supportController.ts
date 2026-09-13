@@ -230,7 +230,10 @@ export async function notifySupportTicketClosed(ticketId: string, resolution: st
     .from(schema.users).where(eq(schema.users.id, ticket[0].user_id)).limit(1);
   if (userRow.length) {
     const ticketRef = `TKT-${ticketId.slice(0, 8).toUpperCase()}`;
+    // Send email to user
     await sendSupportTicketClosedEmail(userRow[0].email, ticketRef, resolution);
+    // Also send confirmation email to admin
+    await sendSupportTicketClosedEmail('hello@padihub.com', ticketRef, resolution);
   }
   await notificationService.create({
     userId: ticket[0].user_id, type: 'support_ticket_closed',

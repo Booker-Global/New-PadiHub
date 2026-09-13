@@ -385,7 +385,7 @@ export type GroupJoinSnapshot = {
   members: Array<{ name: string; trustScore: number; isLeader: boolean }>;
   contributionAmountDisplay: string;
   payoutScheduleLabel: string;
-  votingOutThresholdPercent: number;
+  requiresAdmissionVote: boolean;
   maxDefaultsForSuspension: number;
   allowPayoutSwaps: boolean;
 };
@@ -394,12 +394,15 @@ function groupJoinSnapshotHtml(groupName: string, snapshot: GroupJoinSnapshot): 
   const membersList = snapshot.members
     .map(m => `<li style="margin-bottom:4px;">${escapeHtml(m.name)}${m.isLeader ? ' <em>(Group Leader)</em>' : ''} — Trust Score ${m.trustScore}/100</li>`)
     .join('');
+  const votingText = snapshot.requiresAdmissionVote
+    ? 'Unanimous voting by all group members is required for: New Member Admission, Member Removal, and Monthly Contribution Increase Proposals'
+    : 'Voting not required — group leader decides on group decisions';
   return `
     ${table(
       detail('Group Leader', escapeHtml(snapshot.leaderName)) +
       detail('Contribution amount', snapshot.contributionAmountDisplay) +
       detail('Payout schedule', snapshot.payoutScheduleLabel) +
-      detail('Voting out a member requires', `${snapshot.votingOutThresholdPercent}% of members to agree`) +
+      detail('Key decisions', votingText) +
       detail('Suspension after', `${snapshot.maxDefaultsForSuspension} missed contribution${snapshot.maxDefaultsForSuspension === 1 ? '' : 's'}`) +
       detail('Payout swaps between members', snapshot.allowPayoutSwaps ? 'Allowed (by mutual agreement)' : 'Not allowed'),
     )}

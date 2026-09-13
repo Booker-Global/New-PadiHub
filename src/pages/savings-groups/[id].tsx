@@ -143,6 +143,7 @@ interface Vote {
   proposer_id: string;
   proposal_text: string;
   target_member_id?: string | null;
+  user_response?: 'approve' | 'reject' | null;
   voting_deadline: string;
   status: 'open' | 'approved' | 'rejected' | 'expired';
   created_at: string;
@@ -1391,7 +1392,6 @@ export default function SavingsGroupDetailPage() {
                         { label: 'Active', value: membershipSummary.active.toString(), color: '#2EAF6F' },
                         { label: 'Pending', value: membershipSummary.pending.toString(), color: '#2eafaf' },
                         { label: 'Suspended', value: membershipSummary.suspended.toString(), color: '#F59E0B' },
-                        { label: 'Removed', value: membershipSummary.removed.toString(), color: '#EF4444' },
                       ].map(summary => (
                         <div key={summary.label} className="rounded-2xl p-4 text-center" style={{ background: '#F9FAFB' }}>
                           <p className="text-2xl font-black mb-0.5" style={{ color: summary.color, fontFamily: 'Nunito, sans-serif' }}>{summary.value}</p>
@@ -1467,7 +1467,7 @@ export default function SavingsGroupDetailPage() {
                           <CheckCircle size={15} /> {membershipActionNotice}
                         </div>
                       )}
-                      {orderedMembers.map((member) => {
+                      {orderedMembers.filter(member => member.status !== 'removed').map((member) => {
                         const badge = getMembershipBadge(member.status);
                         const displayName = member.user_id === currentUserId ? 'You' : (member.user_name || shortId(member.user_id));
                         const isLeaderViewing = group.leader_id === currentUserId;
@@ -1628,6 +1628,7 @@ export default function SavingsGroupDetailPage() {
                             const busy = voteActionId === vote.id;
                             const isTargetOfSwap = vote.target_member_id === currentUserId;
                             const isProposerOfSwap = vote.proposer_id === currentUserId;
+                            const hasVoted = vote.user_response !== null && vote.user_response !== undefined;
                             return (
                               <div key={vote.id} className="rounded-2xl p-3" style={{ background: '#F9FAFB', border: '1px solid #F3F4F6' }}>
                                 <p className="text-xs font-bold text-gray-900">
@@ -1635,7 +1636,7 @@ export default function SavingsGroupDetailPage() {
                                 </p>
                                 {note && <p className="text-xs text-gray-500 mt-0.5">{note}</p>}
                                 <p className="text-[11px] text-gray-400 mt-1">Voting closes {formatDate(vote.voting_deadline)}</p>
-                                {isTargetOfSwap ? (
+                                {isTargetOfSwap && !hasVoted ? (
                                   <div className="flex items-center gap-2 mt-2">
                                     <button
                                       onClick={() => void handleCastVote(vote.id, 'approve')}
@@ -1655,11 +1656,17 @@ export default function SavingsGroupDetailPage() {
                                     </button>
                                   </div>
                                 ) : (
-                                  <p className="text-[11px] text-gray-400 mt-2 italic">
-                                    {isProposerOfSwap
-                                      ? `Waiting for ${getMemberDisplayName(targetUserId)} to respond to your swap request.`
-                                      : `Waiting for ${getMemberDisplayName(targetUserId)} to respond — no action needed from you.`}
-                                  </p>
+                                  hasVoted ? (
+                                    <p className="text-[11px] text-gray-400 mt-2 italic">
+                                      You {vote.user_response === 'approve' ? 'approved' : 'rejected'} this swap request
+                                    </p>
+                                  ) : (
+                                    <p className="text-[11px] text-gray-400 mt-2 italic">
+                                      {isProposerOfSwap
+                                        ? `Waiting for ${getMemberDisplayName(targetUserId)} to respond to your swap request.`
+                                        : `Waiting for ${getMemberDisplayName(targetUserId)} to respond — no action needed from you.`}
+                                    </p>
+                                  )
                                 )}
                               </div>
                             );
@@ -1764,12 +1771,24 @@ export default function SavingsGroupDetailPage() {
                           {openGovernanceVotes.map(vote => {
                             const busy = voteActionId === vote.id;
                             const isTargetOfRemoval = vote.proposal_type === 'member_removal' && vote.target_member_id === currentUserId;
+                            const isProposerOfVote = vote.proposer_id === currentUserId;
+                            const hasVoted = vote.user_response !== null && vote.user_response !== undefined;
                             return (
                               <div key={vote.id} className="rounded-2xl p-3" style={{ background: '#F9FAFB', border: '1px solid #F3F4F6' }}>
                                 <p className="text-xs font-bold text-gray-900">{describeGovernanceVote(vote)}</p>
                                 <p className="text-[11px] text-gray-400 mt-1">Voting closes {formatDate(vote.voting_deadline)}</p>
-                                {isTargetOfRemoval ? (
-                                  <p className="text-[11px] font-semibold mt-2" style={{ color: '#B91C1C' }}>A vote to remove you from this group is open — you can&apos;t vote on your own removal.</p>
+                                {isTargetOfRemoval || isProposerOfVote || hasVoted ? (
+                                  isTargetOfRemoval ? (
+                                    <p className="text-[11px] font-semibold mt-2" style={{ color: '#B91C1C' }}>A vote to remove you from this group is open — you can&apos;t vote on your own removal.</p>
+                                  ) : isProposerOfVote ? (
+                                    <p className="text-[11px] text-gray-400 mt-2 italic">
+                                      You proposed this vote and cannot vote on your own proposal.
+                                    </p>
+                                  ) : (
+                                    <p className="text-[11px] text-gray-400 mt-2 italic">
+                                      You {vote.user_response === 'approve' ? 'approved' : 'declined'} this proposal
+                                    </p>
+                                  )
                                 ) : (
                                   <div className="flex items-center gap-2 mt-2">
                                     <button

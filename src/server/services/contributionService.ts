@@ -127,11 +127,17 @@ export const contributionService = {
     if (userRow.length && groupRow.length) {
       const amount = `${groupRow[0].currency} ${parseFloat(c.amount_due).toFixed(2)}`;
       const date = new Date().toLocaleDateString('en-GB');
-      await sendContributionSuccessEmail(userRow[0].email, groupRow[0].name, amount, date, providerReference);
+      try {
+        await sendContributionSuccessEmail(userRow[0].email, groupRow[0].name, amount, date, providerReference);
+      } catch (emailError) {
+        console.error(`[ContributionService] Failed to send contribution success email for contribution ${contributionId}:`, emailError);
+      }
       await notifyGroupLeaderOfContributionActivity(c.group_id, c.member_id, 'Member contribution paid', (memberName, groupName) => `
         ${p(`<strong>${memberName}</strong>'s contribution for cycle ${c.cycle_number} in <strong>${groupName}</strong> has been successfully paid.`)}
         ${table(detail('Member', memberName) + detail('Cycle', String(c.cycle_number)) + detail('Amount', amount) + detail('Reference', providerReference))}
       `);
+    } else {
+      console.warn(`[ContributionService] Could not send contribution success email for ${contributionId}: user found=${userRow.length > 0}, group found=${groupRow.length > 0}`);
     }
 
     // Section 7/10 — if this was the last unpaid contribution in the cycle,

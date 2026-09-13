@@ -43,7 +43,7 @@ const respondSchema = z.object({
 export const voteController = {
   list: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const data = await voteService.getForGroup(qs(req.query.group_id));
+      const data = await voteService.getForGroup(qs(req.query.group_id), req.user?.userId);
       res.json({ success: true, data });
     } catch (e) { next(e); }
   },
