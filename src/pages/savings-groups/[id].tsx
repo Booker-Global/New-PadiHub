@@ -1467,7 +1467,7 @@ export default function SavingsGroupDetailPage() {
                           <CheckCircle size={15} /> {membershipActionNotice}
                         </div>
                       )}
-                      {orderedMembers.map((member) => {
+                      {orderedMembers.filter(member => member.status !== 'removed').map((member) => {
                         const badge = getMembershipBadge(member.status);
                         const displayName = member.user_id === currentUserId ? 'You' : (member.user_name || shortId(member.user_id));
                         const isLeaderViewing = group.leader_id === currentUserId;
