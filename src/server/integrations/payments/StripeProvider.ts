@@ -201,6 +201,29 @@ export class StripeProvider implements IPaymentProvider {
     }
     if (!invoice.id) return;
 
+    // `invoices.create` always returns the invoice in `draft` status — it is
+    // NOT automatically finalized (Stripe only auto-finalizes drafts on its
+    // own background schedule, up to ~1 hour later). `invoices.pay()` can
+    // only be called on a `finalized` ('open') invoice; calling it on a
+    // still-draft invoice throws immediately every time ("This invoice is
+    // not finalized..."), before Stripe ever attempts to charge the card at
+    // all. That silent, synchronous failure — not a genuine card decline —
+    // is what previously left every "first charge on joining an active
+    // group" stuck relying on Stripe's own delayed auto-finalize instead of
+    // being charged immediately as intended, while still (eventually, once
+    // Stripe's background job ran) firing genuine invoice.payment_failed
+    // webhooks for members whose card was fine all along. Finalizing here
+    // explicitly makes the immediate charge attempt actually happen.
+    try {
+      if (invoice.status === 'draft') {
+        invoice = await stripe.invoices.finalizeInvoice(invoice.id, undefined, { idempotencyKey: `sub-first-charge-finalize-${subscriptionId}` });
+      }
+    } catch (error) {
+      console.error(`[StripeProvider] Failed to finalize immediate first-charge invoice ${invoice.id} for subscription ${subscriptionId}:`, error);
+      return;
+    }
+    if (invoice.status !== 'open') return;
+
     try {
       await stripe.invoices.pay(invoice.id, undefined, { idempotencyKey: `sub-first-charge-pay-${subscriptionId}` });
     } catch (error) {
