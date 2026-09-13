@@ -82,6 +82,12 @@ const updateSchema = baseGroupSchema.partial().omit({
   // effective_date to determine when the change applies (see Section K.5.2).
   // This allows leaders to schedule frequency changes for future dates.
   contribution_frequency_change_effective_date: z.string().datetime().optional(),
+  // Amending payout_day (the payout date for monthly groups / payout day for
+  // weekly groups) while keeping the same frequency also requires an
+  // effective_date — the leader picks one of the upcoming dates the frontend
+  // displays for the new day, so members' next payout/contribution charge
+  // date is never silently moved without warning (see groupService.update).
+  payout_day_change_effective_date: z.string().datetime().optional(),
 });
 
 // A single invite (`email`) or a batch of them (`emails`) — the create-group

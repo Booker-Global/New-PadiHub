@@ -57,6 +57,12 @@ interface SavingsGroup {
   contribution_amount: string | number;
   contribution_frequency: 'daily' | 'weekly' | 'monthly';
   payout_day?: number | null;
+  // A pending payout day/frequency change the leader has scheduled for a
+  // future date (see groupService.update / dailyApplyPendingPayoutFrequencyChanges)
+  // — surfaced here so the group screen can show "takes effect on <date>".
+  pending_contribution_frequency?: 'daily' | 'weekly' | 'monthly' | null;
+  pending_payout_day?: number | null;
+  contribution_frequency_change_effective_date?: string | null;
   maximum_members: number;
   min_trust_score: number;
   is_public: boolean;
@@ -206,6 +212,57 @@ function describePayoutSchedule(frequency: SavingsGroup['contribution_frequency'
   return `Monthly on the ${day}${suffix}`;
 }
 
+function lastDayOfMonthUTC(year: number, monthIndex: number) {
+  return new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
+}
+
+/**
+ * Mirrors src/server/lib/payoutSchedule.ts computeNextPayoutDate() (allowToday: true) —
+ * used to show the group leader a real, upcoming calendar date for each occurrence of a
+ * candidate new payout day/date, so amending it isn't just an abstract "day number" but an
+ * actual date they pick to start the new schedule from (see Edit group settings modal).
+ */
+function computeUpcomingPayoutDateOptions(
+  frequency: SavingsGroup['contribution_frequency'],
+  payoutDay: number,
+  count = 6,
+): Date[] {
+  const options: Date[] = [];
+  const today = new Date();
+  const todayUTC = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+
+  if (frequency === 'weekly') {
+    const dayOfWeek = Math.min(6, Math.max(0, payoutDay));
+    const cursor = new Date(todayUTC);
+    while (cursor.getUTCDay() !== dayOfWeek) cursor.setUTCDate(cursor.getUTCDate() + 1);
+    for (let i = 0; i < count; i++) {
+      options.push(new Date(cursor));
+      cursor.setUTCDate(cursor.getUTCDate() + 7);
+    }
+    return options;
+  }
+
+  // monthly
+  const dayOfMonth = Math.min(31, Math.max(1, payoutDay));
+  let year = todayUTC.getUTCFullYear();
+  let month = todayUTC.getUTCMonth();
+  let candidate = new Date(Date.UTC(year, month, Math.min(dayOfMonth, lastDayOfMonthUTC(year, month))));
+  if (candidate < todayUTC) {
+    month += 1;
+    year += Math.floor(month / 12);
+    month = ((month % 12) + 12) % 12;
+    candidate = new Date(Date.UTC(year, month, Math.min(dayOfMonth, lastDayOfMonthUTC(year, month))));
+  }
+  for (let i = 0; i < count; i++) {
+    options.push(new Date(candidate));
+    month += 1;
+    year += Math.floor(month / 12);
+    month = ((month % 12) + 12) % 12;
+    candidate = new Date(Date.UTC(year, month, Math.min(dayOfMonth, lastDayOfMonthUTC(year, month))));
+  }
+  return options;
+}
+
 function shortId(value: string) {
   return `${value.slice(0, 8)}…`;
 }
@@ -293,6 +350,9 @@ export default function SavingsGroupDetailPage() {
   const [editRequiresAdmissionVote, setEditRequiresAdmissionVote] = useState(false);
   const [editContributionAmount, setEditContributionAmount] = useState('');
   const [editPayoutDay, setEditPayoutDay] = useState('');
+  // ISO date string (yyyy-mm-dd) the leader picked from the upcoming-dates
+  // list as the start date for an amended payout day/date.
+  const [editPayoutDayEffectiveDate, setEditPayoutDayEffectiveDate] = useState('');
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState('');
   const [membershipActionId, setMembershipActionId] = useState<string | null>(null);
@@ -579,6 +639,23 @@ export default function SavingsGroupDetailPage() {
     [group],
   );
 
+  // A leader-scheduled payout day/frequency change awaiting its effective
+  // date (see groupService.update / dailyApplyPendingPayoutFrequencyChanges)
+  // — shown so members/leaders aren't surprised when the schedule flips.
+  const pendingPayoutChangeLabel = useMemo(() => {
+    if (!group || !group.contribution_frequency_change_effective_date) return null;
+    const effective = new Date(group.contribution_frequency_change_effective_date);
+    const isFrequencyChange = group.pending_contribution_frequency && group.pending_contribution_frequency !== group.contribution_frequency;
+    const newFrequency = group.pending_contribution_frequency ?? group.contribution_frequency;
+    const newDayLabel = group.pending_payout_day !== null && group.pending_payout_day !== undefined
+      ? describePayoutSchedule(newFrequency, group.pending_payout_day)
+      : null;
+    if (isFrequencyChange) {
+      return `Payout frequency is changing to ${titleCase(newFrequency)}${newDayLabel ? ` (${newDayLabel})` : ''}, effective ${effective.toLocaleDateString()}.`;
+    }
+    return newDayLabel ? `Payout schedule is changing to "${newDayLabel}", effective ${effective.toLocaleDateString()}.` : null;
+  }, [group]);
+
   const myCompletedPayouts = useMemo(
     () => rotationHistory.filter(entry => entry.recipient_id === currentUserId && entry.payout_status === 'completed'),
     [rotationHistory, currentUserId],
@@ -724,6 +801,7 @@ export default function SavingsGroupDetailPage() {
     setEditRequiresAdmissionVote(group.requires_admission_vote ?? false);
     setEditContributionAmount(String(group.contribution_amount ?? ''));
     setEditPayoutDay(group.payout_day !== null && group.payout_day !== undefined ? String(group.payout_day) : '');
+    setEditPayoutDayEffectiveDate('');
     setEditError('');
     setGroupUpdateNotice('');
     setEditOpen(true);
@@ -735,12 +813,47 @@ export default function SavingsGroupDetailPage() {
     setEditError('');
   };
 
+  // Whenever the leader types in a new payout day/date that actually
+  // differs from the group's current one, they must choose which upcoming
+  // occurrence of it the new schedule starts from — the option list is
+  // recomputed live as they change the day.
+  const editPayoutDayChanged = Boolean(
+    group
+    && group.contribution_frequency !== 'daily'
+    && editPayoutDay !== ''
+    && Number(editPayoutDay) !== (group.payout_day ?? null),
+  );
+
+  const editPayoutDayOptions = useMemo(() => {
+    if (!group || !editPayoutDayChanged) return [];
+    return computeUpcomingPayoutDateOptions(group.contribution_frequency, Number(editPayoutDay));
+  }, [group, editPayoutDayChanged, editPayoutDay]);
+
+  // Keep the selected effective date valid — reset to the first (earliest)
+  // upcoming option whenever the candidate list changes (e.g. the leader
+  // edits the day again), and clear it once the day is no longer changing.
+  useEffect(() => {
+    if (!editPayoutDayChanged || !editPayoutDayOptions.length) {
+      setEditPayoutDayEffectiveDate('');
+      return;
+    }
+    setEditPayoutDayEffectiveDate(current => {
+      const stillValid = current && editPayoutDayOptions.some(option => option.toISOString().slice(0, 10) === current);
+      return stillValid ? current : editPayoutDayOptions[0].toISOString().slice(0, 10);
+    });
+  }, [editPayoutDayChanged, editPayoutDayOptions]);
+
   const handleSaveEdit = async () => {
     if (!id || !group) return;
 
     const activeSession = getValidSession();
     if (!activeSession?.token) {
       setEditError('Please log in to edit this group.');
+      return;
+    }
+
+    if (editPayoutDayChanged && !editPayoutDayEffectiveDate) {
+      setEditError('Please choose the date the new payout day/date should start from.');
       return;
     }
 
@@ -759,6 +872,9 @@ export default function SavingsGroupDetailPage() {
           min_trust_score: Number(editMinTrustScore),
           contribution_amount: editContributionAmount,
           payout_day: editPayoutDay !== '' ? Number(editPayoutDay) : undefined,
+          ...(editPayoutDayChanged
+            ? { payout_day_change_effective_date: new Date(`${editPayoutDayEffectiveDate}T00:00:00.000Z`).toISOString() }
+            : {}),
           is_public: editIsPublic,
           requires_admission_vote: editRequiresAdmissionVote,
         }),
@@ -771,7 +887,12 @@ export default function SavingsGroupDetailPage() {
       }
 
       if (json.data) setGroup(json.data);
-      setGroupUpdateNotice('Group settings saved successfully. Active members have been notified.');
+      const todayStr = new Date().toISOString().slice(0, 10);
+      setGroupUpdateNotice(
+        editPayoutDayChanged && editPayoutDayEffectiveDate && editPayoutDayEffectiveDate !== todayStr
+          ? `Group settings saved. The new payout ${group.contribution_frequency === 'weekly' ? 'day' : 'date'} takes effect on ${new Date(`${editPayoutDayEffectiveDate}T00:00:00.000Z`).toLocaleDateString()}.`
+          : 'Group settings saved successfully. Active members have been notified.',
+      );
       closeEditModal();
     } catch {
       setEditError('Network error. Please check your connection and try again.');
@@ -1332,6 +1453,11 @@ export default function SavingsGroupDetailPage() {
             <MotionDiv key={tab} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.25 }}>
               {tab === 'overview' && (
                 <div className="flex flex-col gap-5">
+                  {pendingPayoutChangeLabel && (
+                    <div className="rounded-2xl p-4 flex items-center gap-2 text-sm font-semibold" style={{ background: '#FFFBEB', color: '#92400E', border: '1px solid #FDE68A' }}>
+                      <Clock size={16} /> {pendingPayoutChangeLabel}
+                    </div>
+                  )}
                   <div className="rounded-3xl p-5 bg-white" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
                     <h2 className="font-extrabold text-gray-900 mb-4" style={{ fontFamily: 'Nunito, sans-serif' }}>Group Details</h2>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -2010,6 +2136,39 @@ export default function SavingsGroupDetailPage() {
                       {group.contribution_frequency === 'weekly' ? 'Payout day of week (0=Sunday .. 6=Saturday)' : 'Payout day of month (1-31)'}
                     </label>
                     <input value={editPayoutDay} onChange={event => setEditPayoutDay(event.target.value)} type="number" min={group.contribution_frequency === 'weekly' ? 0 : 1} max={group.contribution_frequency === 'weekly' ? 6 : 31} className="w-full px-4 py-3 rounded-2xl border border-gray-200 text-sm focus:outline-none focus:border-green-400 transition-colors mb-4" />
+
+                    {editPayoutDayChanged && (
+                      <div className="rounded-2xl p-4 mb-4" style={{ background: '#F0FDF4', border: '1px solid #BBF7D0' }}>
+                        <p className="text-sm font-bold text-gray-700 mb-1">
+                          When should the new payout {group.contribution_frequency === 'weekly' ? 'day' : 'date'} start?
+                        </p>
+                        <p className="text-xs text-gray-500 mb-3">
+                          Choose the date this change should take effect from. Members' next payout and contribution charge dates will update automatically to match.
+                        </p>
+                        {editPayoutDayOptions.length > 0 ? (
+                          <div className="flex flex-col gap-2">
+                            {editPayoutDayOptions.map(option => {
+                              const value = option.toISOString().slice(0, 10);
+                              const label = option.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' });
+                              return (
+                                <label key={value} className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                                  <input
+                                    type="radio"
+                                    name="payout-day-effective-date"
+                                    value={value}
+                                    checked={editPayoutDayEffectiveDate === value}
+                                    onChange={() => setEditPayoutDayEffectiveDate(value)}
+                                  />
+                                  {label}
+                                </label>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <p className="text-xs text-gray-400">No upcoming dates available.</p>
+                        )}
+                      </div>
+                    )}
                   </>
                 )}
 
@@ -2068,7 +2227,7 @@ export default function SavingsGroupDetailPage() {
 
                 <div className="flex gap-3">
                   <Button variant="outline" onClick={closeEditModal} className="flex-1 rounded-2xl font-semibold">Close</Button>
-                  <Button onClick={() => void handleSaveEdit()} disabled={editSaving} className="flex-1 rounded-2xl font-bold" style={{ background: '#2EAF6F', color: '#fff' }}>
+                  <Button onClick={() => void handleSaveEdit()} disabled={editSaving || (editPayoutDayChanged && !editPayoutDayEffectiveDate)} className="flex-1 rounded-2xl font-bold" style={{ background: '#2EAF6F', color: '#fff' }}>
                     {editSaving ? 'Saving…' : 'Save changes'}
                   </Button>
                 </div>
