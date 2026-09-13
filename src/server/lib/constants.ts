@@ -63,7 +63,8 @@ export const GROUP_MAX_MEMBERS                  = 20; // platform-wide hard cap 
  * scheduledJobs.dailyGroupLifecycleExpiry.
  */
 export const GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH = 3; // "Start Group" stays disabled below this
-export const GROUP_STUCK_BELOW_MIN_EXPIRY_DAYS  = 30; // draft/suspended groups auto-expire after this many days stuck below the minimum
+export const GROUP_SUSPENSION_GRACE_PERIOD_DAYS  = 30; // suspended groups have 30 days to recover before auto-closing
+export const GROUP_STUCK_BELOW_MIN_EXPIRY_DAYS  = 30; // draft/suspended groups auto-expire after this many days stuck below the minimum (legacy, may align with grace period)
 export const GROUP_STUCK_EXPIRY_REMINDER_DAYS_BEFORE = [7, 3, 1]; // reminder nudges before auto-expiry
 
 /**

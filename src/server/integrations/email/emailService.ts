@@ -502,13 +502,30 @@ export async function sendGroupActivatedEmail(to: string, groupName: string, sna
 
 /** Notify the group leader that an Active group dropped below the minimum member count and was Suspended. */
 export async function sendGroupSuspendedLowMembersEmail(
-  to: string, groupName: string, activeCount: number, minRequired: number,
+  to: string, groupName: string, activeCount: number, minRequired: number, gracePeriodDays?: number,
 ): Promise<void> {
+  const graceDaysText = gracePeriodDays 
+    ? `Groups left below the minimum for ${gracePeriodDays} days will be automatically closed.`
+    : 'Groups left below the minimum for 30 days will auto-expire.';
   await send(to, `${groupName} has been suspended — below minimum members`, wrap(`
     ${h2('Group suspended')}
     ${p(`<strong>${groupName}</strong> dropped to ${activeCount} active member(s), below the required minimum of ${minRequired}, and has been <strong>Suspended</strong>.`)}
-    ${p('Contribution collection is paused while suspended. Invite more members via your existing invite link to reactivate the group automatically. Groups left below the minimum for 30 days will auto-expire.')}
+    ${p(`Contribution collection is paused while suspended. ${graceDaysText} Invite more members via your existing invite link to reactivate the group automatically.`)}
     ${btn('Invite Members', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
+  `));
+}
+
+/** Notify the group leader that they have been succeeded as group organizer due to leader departure when group becomes inactive. */
+export async function sendGroupSuspendedWithLeaderSuccessionEmail(
+  to: string, groupName: string, activeCount: number, minRequired: number, newLeaderName: string, gracePeriodDays: number = 30,
+): Promise<void> {
+  await send(to, `${groupName} has been suspended and you are the new Organiser`, wrap(`
+    ${h2('Group suspended - Leadership transferred')}
+    ${p(`<strong>${groupName}</strong> has dropped below the required minimum of ${minRequired} active members and has been suspended.`)}
+    ${p(`Because the previous organiser has left, <strong>${newLeaderName}</strong> (you) have automatically become the new group Organiser.`)}
+    ${p(`<strong>Important:</strong> You now have <strong>${gracePeriodDays} days</strong> to invite more members and restore the group to ${minRequired} or more active members. If the group remains below the minimum after ${gracePeriodDays} days, it will be automatically closed.`)}
+    ${p('Contribution collection is currently paused. Invite members via your existing invite link to reactivate the group and lift the suspension.')}
+    ${btn('Invite Members & View Group', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
   `));
 }
 
@@ -520,6 +537,16 @@ export async function sendGroupReactivatedEmail(to: string, groupName: string, a
     ${activeCount !== undefined ? table(detail('Active members', String(activeCount))) : ''}
     ${p('Contribution collection has resumed and the payout rotation continues from where it left off. Check the group page for the current cycle, member positions, and next payout date.')}
     ${btn('View Group', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
+  `));
+}
+
+/** Notify the group leader and members that a suspended group's grace period has expired and it has been closed. */
+export async function sendGroupClosedDueToGracePeriodExpiry(to: string, groupName: string): Promise<void> {
+  await send(to, `${groupName} has been closed — suspended for too long`, wrap(`
+    ${h2('Group closed')}
+    ${p(`<strong>${groupName}</strong> remained below the minimum member count throughout the 30-day recovery period and has been automatically <strong>Closed</strong>. No further contributions or payouts will occur for this group.`)}
+    ${p('Any pending payouts that were already in progress will still be paid out. You can create a new group at any time.')}
+    ${btn('Create New Group', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
   `));
 }
 

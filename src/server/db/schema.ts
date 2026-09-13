@@ -216,6 +216,11 @@ export const savingsGroups = mysqlTable('savings_groups', {
   // dropped below 3). Cleared (set back to null) on refill/reactivation.
   // Drives the 30-day stuck-below-3 auto-expiry window.
   suspended_at:             timestamp('suspended_at'),
+  // Set when a group is suspended to track the deadline for grace period.
+  // If the group remains below minimum members until this date/time,
+  // the group auto-closes and is marked as 'closed'. Reset to null if the
+  // group is reactivated (reaches minimum members again).
+  suspension_grace_period_ends_at: timestamp('suspension_grace_period_ends_at'),
   // Temporary contribution-amount override approved by a unanimous
   // "contribution claim" governance vote (see votes.proposal_type
   // 'contribution_claim'). Non-null only while a claim is in effect; the

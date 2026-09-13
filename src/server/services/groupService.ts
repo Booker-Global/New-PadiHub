@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { eq, and, count, inArray } from 'drizzle-orm';
+import { eq, and, count, inArray, asc } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -11,6 +11,7 @@ import {
   GROUP_DEFAULT_VOTING_THRESHOLD, GROUP_DEFAULT_MIN_TRUST_SCORE,
   SUBSCRIPTION_TIERS, isSubscriptionTierKey,
   GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH, GROUP_MAX_MEMBERS, clampGroupMaximumMembers, isDailyFrequencyAllowed,
+  GROUP_SUSPENSION_GRACE_PERIOD_DAYS,
   countryDisplayName, resolveUserDisplayName,
 } from '../lib/constants.js';
 import {
@@ -18,11 +19,13 @@ import {
   sendGroupClosedEmail,
   sendGroupActivatedEmail,
   sendGroupSuspendedLowMembersEmail,
+  sendGroupSuspendedWithLeaderSuccessionEmail,
   sendGroupReactivatedEmail,
   sendGroupCreatedEmail,
   sendGroupSettingsUpdatedEmail,
 } from '../integrations/email/emailService.js';
 import { payoutDayBounds, CONTRIBUTION_SAME_DAY_CUTOFF_HOUR_UTC, resolveFirstScheduleDate, describePayoutSchedule } from '../lib/payoutSchedule.js';
+
 
 function assignProvider(country: string) {
   return country === 'NG' ? 'flutterwave' : 'stripe';
@@ -245,31 +248,78 @@ export const groupService = {
       const memberUserIds = (await db.select({ user_id: schema.memberships.user_id }).from(schema.memberships)
         .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')))).map(m => m.user_id);
 
+      // Calculate grace period expiry (30 days from now)
+      const graceEndsAt = new Date();
+      graceEndsAt.setDate(graceEndsAt.getDate() + GROUP_SUSPENSION_GRACE_PERIOD_DAYS);
+
       await db.update(schema.savingsGroups)
-        .set({ status: 'suspended', suspended_at: new Date() })
+        .set({ status: 'suspended', suspended_at: new Date(), suspension_grace_period_ends_at: graceEndsAt })
         .where(eq(schema.savingsGroups.id, groupId));
-      await createAuditLog({ action: 'GROUP_SUSPENDED_LOW_MEMBERS', entity: 'savings_groups', entityId: groupId, metadata: { activeCount } });
-      await notificationService.create({
-        userId: group.leader_id, type: 'group_suspended_low_members',
-        title: 'Group Suspended',
-        message: `"${group.name}" dropped below ${GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH} active members and has been suspended. Collection is paused — invite more members to reactivate it.`,
+      
+      await createAuditLog({ 
+        action: 'GROUP_SUSPENDED_LOW_MEMBERS', 
+        entity: 'savings_groups', 
+        entityId: groupId, 
+        metadata: { activeCount, graceEndsAt: graceEndsAt.toISOString() } 
       });
+
+      // Get all active members for notifications
+      const activeMembers = await db.select({ 
+        id: schema.users.id, 
+        email: schema.users.email, 
+        first_name: schema.users.first_name,
+        last_name: schema.users.last_name,
+      }).from(schema.memberships)
+        .innerJoin(schema.users, eq(schema.memberships.user_id, schema.users.id))
+        .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')));
+
+      // Notify leader
+      await notificationService.create({
+        userId: group.leader_id, 
+        type: 'group_suspended_low_members',
+        title: 'Group Suspended',
+        message: `"${group.name}" dropped below ${GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH} active members and has been suspended. Collection is paused. You have 30 days to invite more members to reactivate it, or the group will be automatically closed.`,
+      });
+
       const leaderRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, group.leader_id)).limit(1);
-      if (leaderRow.length) await sendGroupSuspendedLowMembersEmail(leaderRow[0].email, group.name, activeCount, GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH);
+      if (leaderRow.length) {
+        await sendGroupSuspendedLowMembersEmail(
+          leaderRow[0].email, 
+          group.name, 
+          activeCount, 
+          GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH,
+          GROUP_SUSPENSION_GRACE_PERIOD_DAYS
+        );
+      }
+
+      // Notify all other active members
+      for (const member of activeMembers) {
+        if (member.id === group.leader_id) continue;
+        await notificationService.create({
+          userId: member.id,
+          type: 'group_suspended_low_members',
+          title: 'Group Suspended',
+          message: `"${group.name}" has been suspended due to dropping below the minimum member count. The group leader has 30 days to invite more members to reactivate it.`,
+        });
+      }
+
       await this.reconcileMemberBilling(memberUserIds);
       return;
     }
 
     if (group.status === 'suspended' && activeCount >= GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH) {
       await db.update(schema.savingsGroups)
-        .set({ status: 'active', suspended_at: null })
+        .set({ status: 'active', suspended_at: null, suspension_grace_period_ends_at: null })
         .where(eq(schema.savingsGroups.id, groupId));
+      
       await createAuditLog({ action: 'GROUP_REACTIVATED', entity: 'savings_groups', entityId: groupId, metadata: { activeCount } });
+      
       await notificationService.create({
         userId: group.leader_id, type: 'group_reactivated',
         title: 'Group Reactivated',
         message: `"${group.name}" is back to ${activeCount} active members and collection has resumed.`,
       });
+
       const leaderRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, group.leader_id)).limit(1);
       if (leaderRow.length) await sendGroupReactivatedEmail(leaderRow[0].email, group.name, activeCount);
 
