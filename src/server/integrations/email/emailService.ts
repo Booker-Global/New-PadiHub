@@ -945,6 +945,58 @@ export async function sendPaymentProviderConfigErrorAlertEmail(
   `));
 }
 
+/**
+ * Internal alert (hello@padihub.com only, never the member) for a
+ * contribution charge attempt blocked by missing PadiHub-side configuration
+ * (PaymentProviderConfigError — a missing Stripe/Flutterwave secret key) —
+ * the same category of gap as sendPaymentProviderConfigErrorAlertEmail
+ * above, but for the group-contribution charge pipeline
+ * (chargeContributionForUser) rather than subscription activation. No
+ * charge was ever attempted, so the affected member must never see a
+ * "missed"/"failed" consequence for this — see contributions.provider_config_error_at.
+ */
+export async function sendContributionChargeConfigErrorAlertEmail(
+  contributionId: string, memberId: string, errorMessage: string,
+): Promise<void> {
+  const safeErrorMessage = escapeHtml(errorMessage);
+  await send('hello@padihub.com', '[URGENT] Contribution charge blocked by missing configuration', wrap(`
+    ${h2('Contribution charge blocked by missing configuration')}
+    ${p('A contribution charge attempt failed before any payment provider was even contacted — this is a PadiHub configuration problem, not a member-facing card decline. No customer has been emailed about this, and no Trust Score/strike consequence has been applied.')}
+    ${table(
+      detail('Contribution ID', escapeHtml(contributionId)) +
+      detail('Affected member ID', escapeHtml(memberId)) +
+      detail('Error', safeErrorMessage),
+    )}
+    ${p('Please check the required environment variables (Stripe/Flutterwave secret keys) on the server and redeploy.')}
+  `));
+}
+
+/**
+ * Internal alert (hello@padihub.com only) for a payout Transfer that could
+ * not be attempted/completed — e.g. the recipient's Stripe Express/
+ * Flutterwave payout account isn't verified yet. Previously this only
+ * logged to monitoringService (systemErrors table, no notification channel)
+ * and told the recipient "Payout Delayed" — leaving the team with no visible
+ * signal that a cycle's pot is sitting undelivered, retried blindly once a
+ * day by the safety-net job with nothing surfaced until someone manually
+ * checks the admin dashboard.
+ */
+export async function sendPayoutTransferFailedAlertEmail(params: {
+  groupId: string; groupName: string; cycleNumber: number; reason: string;
+}): Promise<void> {
+  const safeReason = escapeHtml(params.reason);
+  await send('hello@padihub.com', '[URGENT] Payout transfer failed', wrap(`
+    ${h2('Payout transfer failed')}
+    ${p(`The cycle payout transfer for <strong>${escapeHtml(params.groupName)}</strong> could not be completed. The recipient has been told their payout is delayed, but this needs manual follow-up — it will only be retried automatically once a day.`)}
+    ${table(
+      detail('Group ID', escapeHtml(params.groupId)) +
+      detail('Group name', escapeHtml(params.groupName)) +
+      detail('Cycle', String(params.cycleNumber)) +
+      detail('Reason', safeReason),
+    )}
+  `));
+}
+
 export async function sendSubscriptionCancelledEmail(
   to: string, accessEndDate: string,
 ): Promise<void> {

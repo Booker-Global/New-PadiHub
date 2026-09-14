@@ -16,11 +16,27 @@ import {
   sendPayoutCompleteEmail,
   sendGroupClosedEmail,
   sendGroupLeaderActivityEmail,
+  sendPayoutTransferFailedAlertEmail,
   p, table, detail,
 } from '../integrations/email/emailService.js';
 
 type SavingsGroupRow = typeof schema.savingsGroups.$inferSelect;
 type RotationRow = typeof schema.rotations.$inferSelect;
+
+// A single mis-verified/mis-configured recipient could otherwise re-trigger
+// this alert on every advance/advanceIfCycleComplete call within the same
+// run (webhook + auto-charge job both landing near-simultaneously, or the
+// same rotation being retried) — cooldown per rotation, same pattern as
+// subscriptionService's shouldSendConfigErrorAlertEmail, so the team is
+// still re-alerted once the cooldown lapses if it keeps failing daily.
+const PAYOUT_TRANSFER_FAILURE_ALERT_COOLDOWN_MS = 60 * 60 * 1000;
+const payoutTransferFailureAlertSentAt = new Map<string, number>();
+function shouldSendPayoutTransferFailureAlertEmail(rotationId: string): boolean {
+  const last = payoutTransferFailureAlertSentAt.get(rotationId) ?? 0;
+  if (Date.now() - last < PAYOUT_TRANSFER_FAILURE_ALERT_COOLDOWN_MS) return false;
+  payoutTransferFailureAlertSentAt.set(rotationId, Date.now());
+  return true;
+}
 
 /**
  * Move a completed cycle's collected pot from the platform's provider balance
@@ -123,6 +139,22 @@ async function recordTransferFailure(group: SavingsGroupRow, rotation: RotationR
     action: 'STRIPE_PAYOUT_TRANSFER_FAILED', entity: 'rotations', entityId: rotation.id,
     metadata: { groupId: group.id, cycleNumber: rotation.cycle_number, message },
   });
+
+  // monitoringService.logError only writes to the systemErrors table — no
+  // one is notified unless they happen to check the admin dashboard, and the
+  // recipient's "Payout Delayed" notification says "our team has been
+  // notified" when nobody actually has been. Without this, a cycle's pot can
+  // sit undelivered indefinitely, retried blindly once a day by the
+  // safety-net job, with no visible signal to anyone at PadiHub.
+  if (shouldSendPayoutTransferFailureAlertEmail(rotation.id)) {
+    try {
+      await sendPayoutTransferFailedAlertEmail({
+        groupId: group.id, groupName: group.name, cycleNumber: rotation.cycle_number, reason: message,
+      });
+    } catch (emailError) {
+      console.error('[RotationService] Failed to send payout transfer failed alert email:', emailError);
+    }
+  }
 }
 
 export const rotationService = {

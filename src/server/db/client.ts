@@ -179,6 +179,7 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
     { column: 'grace_period_ends_at', sqlType: 'TIMESTAMP NULL' },
     { column: 'retry_attempted',      sqlType: 'BOOLEAN NOT NULL DEFAULT false' },
     { column: 'reminder_sent_at',     sqlType: 'TIMESTAMP NULL' },
+    { column: 'provider_config_error_at', sqlType: 'TIMESTAMP NULL' },
   ],
   memberships: [
     { column: 'rotation_order', sqlType: 'INT NULL' },

@@ -347,6 +347,16 @@ export const contributions = mysqlTable('contributions', {
   grace_period_ends_at: timestamp('grace_period_ends_at'),
   retry_attempted:    boolean('retry_attempted').notNull().default(false),
   provider_reference: varchar('provider_reference', { length: 255 }),
+  // Set whenever the most recent charge attempt for this contribution never
+  // reached the payment provider at all (PaymentProviderConfigError — a
+  // missing PadiHub-side secret key/Price ID, not a member-facing card
+  // issue). Cleared the moment a REAL attempt happens (success or genuine
+  // decline). dailyOverdueCheck must never call markMissed — and
+  // dailyContributionDefaultRetry must never call markFailed — while this is
+  // set, since that would impose a customer-facing consequence (Trust Score
+  // penalty, strike, "missed"/"defaulted" status) for a charge Stripe never
+  // even saw. See chargeContributionForUser in paymentController.ts.
+  provider_config_error_at: timestamp('provider_config_error_at'),
   // Dedicated throttle/dedup column (never a generic onUpdateNow() column —
   // see contributionService.markPaid/markFailed which also touch this row)
   // for dailyContributionReminders: guarantees the "contribution due soon"
