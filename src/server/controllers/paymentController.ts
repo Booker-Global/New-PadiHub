@@ -11,6 +11,7 @@ import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { getStripeProvider, getFlutterwaveProvider } from '../integrations/payments/PaymentProviderFactory.js';
+import { PaymentProviderConfigError } from '../integrations/payments/PaymentProviderInterface.js';
 import {
   sendPaymentMethodUpdatedEmail,
   sendPayoutDestinationUpdatedEmail,
@@ -222,15 +223,50 @@ export async function chargeContributionForUser(userId: string, contributionId: 
   const { amountInSmallestUnit, breakdown } = await computeContributionFeeBreakdown(contribution, group);
   const totalChargeInSmallestUnit = amountInSmallestUnit + breakdown.totalFee;
 
-  const result = await provider.chargeContribution({
-    customerId,
-    paymentMethodId,
-    amount:         totalChargeInSmallestUnit,
-    currency:       group.currency,
-    countryCode:    group.country,
-    contributionId,
-    description:    `PadiHub contribution — ${group.name} cycle ${contribution.cycle_number}`,
-  });
+  let result;
+  try {
+    result = await provider.chargeContribution({
+      customerId,
+      paymentMethodId,
+      amount:         totalChargeInSmallestUnit,
+      currency:       group.currency,
+      countryCode:    group.country,
+      contributionId,
+      description:    `PadiHub contribution — ${group.name} cycle ${contribution.cycle_number}`,
+    });
+  } catch (err) {
+    // Distinguish a PadiHub-side setup problem (missing secret key — no
+    // request to the provider was ever made) from a genuine provider/card
+    // decline, exactly like subscriptionService.createSubscription does for
+    // subscription activation. Stripe throws (rather than returns a
+    // 'failed' status) for most real declines under confirm:true +
+    // off_session:true, so this catch is also where genuine decline
+    // failures are recorded.
+    if (err instanceof PaymentProviderConfigError) {
+      await db.update(schema.contributions)
+        .set({ provider_config_error_at: new Date() })
+        .where(eq(schema.contributions.id, contributionId));
+      throw new AppError(err.message, 500, 'CONTRIBUTION_PROVIDER_CONFIG_ERROR');
+    }
+
+    // A real attempt just happened (successfully reaching, then being
+    // declined by, the provider) — clear any stale config-error flag and
+    // apply the genuine failure consequence.
+    await db.update(schema.contributions)
+      .set({ provider_config_error_at: null })
+      .where(eq(schema.contributions.id, contributionId));
+    await contributionService.markFailed(contributionId, undefined, isGraceRetry);
+    throw new AppError(
+      describeProviderError(err, 'Your contribution payment could not be processed.'),
+      502, 'CONTRIBUTION_CHARGE_ERROR',
+    );
+  }
+
+  // A real attempt reached the provider and returned a definitive outcome —
+  // clear any stale config-error flag regardless of that outcome.
+  await db.update(schema.contributions)
+    .set({ provider_config_error_at: null })
+    .where(eq(schema.contributions.id, contributionId));
 
   const feeBreakdownStrings = {
     feeAmount:                  (breakdown.totalFee / 100).toFixed(2),

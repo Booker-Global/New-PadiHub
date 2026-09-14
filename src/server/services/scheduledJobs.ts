@@ -14,6 +14,7 @@ import { notificationService } from './notificationService.js';
 import { monitoringService } from './monitoringService.js';
 import { groupService } from './groupService.js';
 import { chargeContributionForUser } from '../controllers/paymentController.js';
+import { AppError } from '../middleware/errorHandler.js';
 import { getFlutterwaveProvider } from '../integrations/payments/PaymentProviderFactory.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { resolveFirstScheduleDate } from '../lib/payoutSchedule.js';
@@ -39,12 +40,25 @@ import {
   sendPendingChargeExpiredEmail,
   sendIncompleteProfileReminderEmail,
   sendResubscribeReminderEmail,
+  sendContributionChargeConfigErrorAlertEmail,
 } from '../integrations/email/emailService.js';
 
 // Nigeria "Basic" tier price is the default fallback if a user somehow has no
 // recognised subscription_tier recorded — see SUBSCRIPTION_TIERS in
 // ../lib/constants.ts for the authoritative tier pricing/limits.
 const DEFAULT_FLUTTERWAVE_SUBSCRIPTION_AMOUNT_NGN = SUBSCRIPTION_TIERS.basic.priceNGN;
+
+// Same 1-hour team-alert cooldown pattern as subscriptionService's
+// shouldSendConfigErrorAlertEmail — a single broken env var (e.g. a missing
+// STRIPE_SECRET_KEY) would otherwise fire one alert email PER contribution
+// in the due/retry batch, every run, potentially hundreds at once.
+const CONTRIBUTION_CONFIG_ERROR_ALERT_COOLDOWN_MS = 60 * 60 * 1000;
+let lastContributionConfigErrorAlertSentAt = 0;
+function shouldSendContributionConfigErrorAlertEmail(): boolean {
+  if (Date.now() - lastContributionConfigErrorAlertSentAt < CONTRIBUTION_CONFIG_ERROR_ALERT_COOLDOWN_MS) return false;
+  lastContributionConfigErrorAlertSentAt = Date.now();
+  return true;
+}
 
 function getFlutterwaveSubscriptionAmount(subscriptionTier?: string | null) {
   if (isSubscriptionTierKey(subscriptionTier)) {
@@ -148,6 +162,22 @@ export async function dailyAutoChargeDueContributions(): Promise<void> {
       try {
         await chargeContributionForUser(c.member_id, c.id);
       } catch (err) {
+        // A missing Stripe/Flutterwave secret key (PaymentProviderConfigError,
+        // surfaced here as AppError code CONTRIBUTION_PROVIDER_CONFIG_ERROR —
+        // see chargeContributionForUser in paymentController.ts) means no
+        // request was ever sent to the provider at all. That is a PadiHub-side
+        // setup problem, not a genuine card decline, so it must never be left
+        // to silently masquerade as the member's own missed payment — alert
+        // the team loudly instead (same pattern as the subscription-activation
+        // config-error fix).
+        if (err instanceof AppError && err.code === 'CONTRIBUTION_PROVIDER_CONFIG_ERROR') {
+          console.error(`[Job] daily_auto_charge_due_contributions: CONFIGURATION ERROR — contribution ${c.id} charge blocked: ${err.message}`);
+          if (shouldSendContributionConfigErrorAlertEmail()) {
+            await sendContributionChargeConfigErrorAlertEmail(c.id, c.member_id, err.message);
+          }
+          continue;
+        }
+
         // Expected failures (no saved payment method, provider decline, etc.)
         // are left for dailyFailedPaymentCheck / dailyOverdueCheck to handle —
         // just log so a single member's failure doesn't stop the whole batch.
@@ -160,7 +190,19 @@ export async function dailyAutoChargeDueContributions(): Promise<void> {
   });
 }
 
-/** Mark contributions as missed if past due date and still unpaid */
+/**
+ * Mark contributions as missed if past due date and still unpaid.
+ *
+ * A contribution can still be 'due' past its due_date purely because its
+ * most recent charge attempt (dailyAutoChargeDueContributions/
+ * dailyChargeCatchUp) never actually reached the payment provider — a
+ * PadiHub-side configuration problem (see
+ * contributions.provider_config_error_at), not a genuine non-payment. That
+ * must never be treated the same as a real missed payment: it must NOT cost
+ * the member a Trust Score penalty, a "Missed Contribution" email, or count
+ * towards a strike. Those contributions are left 'due' (retried again by the
+ * next auto-charge run) until a real attempt actually reaches the provider.
+ */
 export async function dailyOverdueCheck(): Promise<void> {
   await runJob('daily_overdue_check', async () => {
     const now = new Date();
@@ -171,6 +213,10 @@ export async function dailyOverdueCheck(): Promise<void> {
       ));
 
     for (const c of overdue) {
+      if (c.provider_config_error_at) {
+        console.warn(`[Job] daily_overdue_check: skipping contribution ${c.id} — last charge attempt never reached the payment provider (configuration error), not a genuine missed payment.`);
+        continue;
+      }
       await contributionService.markMissed(c.id);
     }
   });
@@ -251,6 +297,21 @@ export async function dailyContributionDefaultRetry(): Promise<void> {
       try {
         await chargeContributionForUser(c.member_id, c.id, true);
       } catch (err) {
+        // A missing Stripe/Flutterwave secret key means this retry never
+        // reached the provider at all — it must NOT be recorded as the
+        // member's one-and-only retry (that would push them straight to
+        // 'defaulted' — a strike/suspension consequence — for a charge
+        // Stripe never even saw). Leave retry_attempted=false so the retry
+        // is genuinely attempted again on the next run, once fixed, and
+        // alert the team instead of the member.
+        if (err instanceof AppError && err.code === 'CONTRIBUTION_PROVIDER_CONFIG_ERROR') {
+          console.error(`[Job] daily_contribution_default_retry: CONFIGURATION ERROR — contribution ${c.id} retry blocked: ${err.message}`);
+          if (shouldSendContributionConfigErrorAlertEmail()) {
+            await sendContributionChargeConfigErrorAlertEmail(c.id, c.member_id, err.message);
+          }
+          continue;
+        }
+
         // Whether the provider threw (e.g. a hard card decline) or simply
         // never got the chance to call markFailed, make sure the single
         // retry is always recorded as attempted — this is the one and only
