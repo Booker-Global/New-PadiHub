@@ -32,6 +32,32 @@ function deferredBillingTrialEnd(): number {
   return Math.floor(end.getTime() / 1000);
 }
 
+/** Shared shape returned by subscriptions.create/retrieve once expanded with
+ * `latest_invoice.payment_intent` — used by both createSubscription() and
+ * retryIncompleteSubscriptionCharge() below. */
+type SubscriptionWithExpandedInvoice = Stripe.Subscription & {
+  current_period_end: number;
+  latest_invoice?: (Stripe.Invoice & { payment_intent?: Stripe.PaymentIntent | string | null }) | string | null;
+};
+
+function toSubscriptionResult(subscription: SubscriptionWithExpandedInvoice): SubscriptionResult {
+  const renewalDate = new Date(subscription.current_period_end * 1000);
+  const latestInvoice = subscription.latest_invoice && typeof subscription.latest_invoice !== 'string'
+    ? subscription.latest_invoice
+    : undefined;
+  const paymentIntent = latestInvoice?.payment_intent && typeof latestInvoice.payment_intent !== 'string'
+    ? latestInvoice.payment_intent
+    : undefined;
+
+  return {
+    subscriptionId: subscription.id,
+    status:         subscription.status,
+    renewalDate,
+    latestInvoicePaymentIntentClientSecret: paymentIntent?.client_secret ?? undefined,
+    latestInvoicePaymentIntentStatus:       paymentIntent?.status,
+  };
+}
+
 export class StripeProvider implements IPaymentProvider {
   async createCustomer(params: {
     userId: string; email: string; name: string; currency: string;
@@ -198,10 +224,7 @@ export class StripeProvider implements IPaymentProvider {
     // it, the caller only gets back an invoice ID, not the PaymentIntent
     // client secret it may need to confirm/attach payment off-session
     // without a second round-trip to Stripe).
-    let subscription: Stripe.Subscription & {
-      current_period_end: number;
-      latest_invoice?: (Stripe.Invoice & { payment_intent?: Stripe.PaymentIntent | string | null }) | string | null;
-    };
+    let subscription: SubscriptionWithExpandedInvoice;
     try {
       subscription = await stripe.subscriptions.create({
         customer: params.customerId,
@@ -214,10 +237,7 @@ export class StripeProvider implements IPaymentProvider {
               payment_settings: { save_default_payment_method: 'on_subscription' as const },
               expand: ['latest_invoice.payment_intent'],
             }),
-      }) as unknown as Stripe.Subscription & {
-        current_period_end: number;
-        latest_invoice?: (Stripe.Invoice & { payment_intent?: Stripe.PaymentIntent | string | null }) | string | null;
-      };
+      }) as unknown as SubscriptionWithExpandedInvoice;
     } catch (err) {
       // Stripe validates `customer` and `items[0][price]` server-side, so a
       // malformed-but-plausible-looking env var (e.g. a Price ID copied from
@@ -247,21 +267,88 @@ export class StripeProvider implements IPaymentProvider {
       throw err;
     }
 
-    const renewalDate = new Date(subscription.current_period_end * 1000);
-    const latestInvoice = subscription.latest_invoice && typeof subscription.latest_invoice !== 'string'
+    // `default_incomplete` DOES auto-finalize the first invoice (it comes
+    // back already `open`, with a PaymentIntent attached using the
+    // customer's `invoice_settings.default_payment_method`) — but, contrary
+    // to what its name suggests, Stripe deliberately leaves that
+    // PaymentIntent in `requires_confirmation` rather than attempting to
+    // collect it, precisely so a *client* can drive SCA/3DS via
+    // stripe.confirmCardPayment(). PadiHub never does that (there is no
+    // client-side confirmation step anywhere in this codebase), so every
+    // such subscription was previously left permanently stuck `incomplete`
+    // with an unpaid, un-attempted invoice — even though the member's card
+    // was already verified and saved off-session earlier in onboarding
+    // (confirmSetupIntent → setCustomerDefaultPaymentMethod). Explicitly pay
+    // that invoice here, exactly the way resumeBilling() already does for
+    // the previously-live-then-paused case above — `invoices.pay()` is the
+    // correct server-initiated, off-session collection call (unlike
+    // `paymentIntents.confirm`, it needs no explicit `off_session` flag) and
+    // requires no client involvement at all. If the card genuinely still
+    // needs interactive SCA or was declined, this throws/leaves the invoice
+    // unpaid — in which case subscriptionService's existing
+    // pending/payment-failed handling below (keyed off `result.status`)
+    // takes over exactly as before; that residual case can't be avoided
+    // server-side without violating SCA rules.
+    if (!params.deferBilling) {
+      subscription = await this.payOpenInvoiceAndRefresh(subscription);
+    }
+
+    return toSubscriptionResult(subscription);
+  }
+
+  /**
+   * Off-session collection of a subscription's currently-open invoice
+   * (shared by createSubscription()'s live/non-deferred branch and
+   * retryIncompleteSubscriptionCharge() below) — calls `invoices.pay()`
+   * exactly as resumeBilling() does for the previously-live-then-paused
+   * case, then re-fetches the subscription so the returned status/renewal
+   * date reflect the real post-payment outcome rather than the stale
+   * pre-attempt state still held in `subscription`.
+   */
+  private async payOpenInvoiceAndRefresh(subscription: SubscriptionWithExpandedInvoice): Promise<SubscriptionWithExpandedInvoice> {
+    const stripe = getStripe();
+    const firstInvoice = subscription.latest_invoice && typeof subscription.latest_invoice !== 'string'
       ? subscription.latest_invoice
       : undefined;
-    const paymentIntent = latestInvoice?.payment_intent && typeof latestInvoice.payment_intent !== 'string'
-      ? latestInvoice.payment_intent
-      : undefined;
+    if (!firstInvoice?.id || firstInvoice.status !== 'open') return subscription;
 
-    return {
-      subscriptionId: subscription.id,
-      status:         subscription.status,
-      renewalDate,
-      latestInvoicePaymentIntentClientSecret: paymentIntent?.client_secret ?? undefined,
-      latestInvoicePaymentIntentStatus:       paymentIntent?.status,
-    };
+    try {
+      await stripe.invoices.pay(firstInvoice.id, undefined, { idempotencyKey: `sub-first-charge-pay-${subscription.id}` });
+    } catch (error) {
+      console.warn(`[StripeProvider] Off-session collection of invoice ${firstInvoice.id} for subscription ${subscription.id} did not succeed:`, error instanceof Error ? error.message : error);
+    }
+    return await stripe.subscriptions.retrieve(subscription.id, {
+      expand: ['latest_invoice.payment_intent'],
+    }) as unknown as SubscriptionWithExpandedInvoice;
+  }
+
+  /**
+   * Retroactive remediation for a subscription that was created BEFORE this
+   * off-session invoice-payment fix existed (see createSubscription() above)
+   * and has therefore been sitting `incomplete` with an unpaid, un-attempted
+   * first invoice ever since — `default_incomplete` auto-finalizes that
+   * invoice but never tries to collect it, and Stripe never retries an
+   * `incomplete` subscription's invoice on its own. Safe to call repeatedly:
+   * a subscription that's already past `incomplete` (paid, or genuinely
+   * failed into `incomplete_expired`/canceled) is simply re-reported as-is
+   * with no further Stripe calls. Called by
+   * subscriptionService.activateSubscriptionIfEligible's self-heal so
+   * accounts stuck this way before the fix shipped get actually billed the
+   * next time their eligibility is (re-)checked, instead of only having
+   * `users.subscription_status` optimistically flipped to 'active' with the
+   * underlying charge still never attempted.
+   */
+  async retryIncompleteSubscriptionCharge(subscriptionId: string): Promise<SubscriptionResult> {
+    const stripe = getStripe();
+    let subscription = await stripe.subscriptions.retrieve(subscriptionId, {
+      expand: ['latest_invoice.payment_intent'],
+    }) as unknown as SubscriptionWithExpandedInvoice;
+
+    if (subscription.status === 'incomplete') {
+      subscription = await this.payOpenInvoiceAndRefresh(subscription);
+    }
+
+    return toSubscriptionResult(subscription);
   }
 
   async cancelSubscription(params: { subscriptionId: string }): Promise<{ cancelled: boolean }> {
@@ -567,6 +654,48 @@ export class StripeProvider implements IPaymentProvider {
       ...(account.requirements?.currently_due ?? []),
       ...(account.requirements?.past_due ?? []),
     ];
+  }
+
+  /**
+   * SANDBOX/TEST-MODE-ONLY TEST UTILITY. Submits Stripe's special test-mode
+   * file token (`file_identity_document_success`) as the connected account's
+   * identity-document upload, satisfying the `individual.verification
+   * .document` requirement (the Dashboard's "Provide an identity document"
+   * warning) without any real document — see
+   * https://docs.stripe.com/connect/testing#test-file-tokens. In production,
+   * this requirement must always be satisfied by the account holder
+   * themselves via Stripe's hosted onboarding flow
+   * (createOnboardingLink() above) — never by this method.
+   *
+   * Hard-refuses to run unless BOTH `NODE_ENV !== 'production'` AND
+   * `STRIPE_SECRET_KEY` is itself a test-mode key (starts with `sk_test_`).
+   * Stripe would in any case reject `file_identity_document_success` as an
+   * invalid file ID against a live-mode key, but this does not rely on that
+   * alone — the check happens before any request reaches Stripe at all, so
+   * a misconfigured environment (e.g. NODE_ENV left unset in a prod-like
+   * deploy) can never silently attempt this against a real account.
+   *
+   * Deliberately NOT part of `IPaymentProvider`/never called from any
+   * controller or user-reachable route — it exists solely for the one-off
+   * sandbox scripts under src/server/scripts/ (e.g.
+   * submitSandboxIdentityTestDocuments.ts) to unblock test Connect accounts
+   * during manual QA.
+   */
+  async submitSandboxIdentityTestDocument(accountId: string): Promise<void> {
+    const key = process.env.STRIPE_SECRET_KEY ?? '';
+    if (process.env.NODE_ENV === 'production' || !key.startsWith('sk_test_')) {
+      throw new Error(
+        'submitSandboxIdentityTestDocument refused: this is a sandbox/test-mode-only utility and must never run in production or against a live Stripe key.',
+      );
+    }
+    const stripe = getStripe();
+    await stripe.accounts.update(accountId, {
+      individual: {
+        verification: {
+          document: { front: 'file_identity_document_success' },
+        },
+      },
+    });
   }
 
   /**

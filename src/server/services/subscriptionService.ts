@@ -12,7 +12,7 @@ import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
-import { getPaymentProvider } from '../integrations/payments/PaymentProviderFactory.js';
+import { getPaymentProvider, getStripeProvider } from '../integrations/payments/PaymentProviderFactory.js';
 import { PaymentProviderConfigError } from '../integrations/payments/PaymentProviderInterface.js';
 import { groupService } from './groupService.js';
 import { membershipService } from './membershipService.js';
@@ -280,8 +280,11 @@ export const subscriptionService = {
     if (!isSubscriptionTierKey(user.subscription_tier)) return;
     if (!user.identity_verified || !user.payment_method_verified_at || !user.payout_verified_at) return;
 
-    const existingSubRows = await db.select({ billing_status: schema.subscriptions.billing_status })
-      .from(schema.subscriptions).where(eq(schema.subscriptions.user_id, userId)).limit(1);
+    const existingSubRows = await db.select({
+      billing_status:            schema.subscriptions.billing_status,
+      provider:                  schema.subscriptions.provider,
+      provider_subscription_id:  schema.subscriptions.provider_subscription_id,
+    }).from(schema.subscriptions).where(eq(schema.subscriptions.user_id, userId)).limit(1);
     const existingSub = existingSubRows[0];
     if (user.subscription_status === 'cancelled' || existingSub?.billing_status === 'cancelled') return;
     if (existingSub && (existingSub.billing_status === 'active' || existingSub.billing_status === 'paused')) return;
@@ -289,15 +292,33 @@ export const subscriptionService = {
     // Every member-controlled onboarding input is already on file and
     // verified (see hasFullyVerifiedSubscriptionSetup) AND a `subscriptions`
     // row already exists (i.e. a real provider attempt genuinely happened
-    // for this account) — a live provider charge attempt has already proven
-    // it won't succeed for accounts in this state (retroactively diagnosed
-    // for abdulwahabyakubu@yahoo.com, abdulwahabyakubu17@gmail.com and
-    // tounsitraveller@gmail.com — see PR #33-36). Self-heal
-    // `subscription_status` directly instead of attempting (and re-failing)
-    // yet another charge — this is what stops the recurring "subscription
-    // payment failed" email for a member who has done everything they can
-    // do, regardless of which onboarding step happened to trigger this call.
+    // for this account). Historically (retroactively diagnosed for
+    // abdulwahabyakubu@yahoo.com, abdulwahabyakubu17@gmail.com and
+    // tounsitraveller@gmail.com — see PR #33-36) a live provider charge
+    // attempt had already proven it wouldn't succeed for accounts in this
+    // state, so this only self-healed `subscription_status` locally instead
+    // of re-attempting (and re-failing) a charge.
     //
+    // That assumption no longer holds for Stripe (GB): StripeProvider.
+    // createSubscription's `payment_behavior: 'default_incomplete'` never
+    // actually attempted to collect the first invoice server-side (no
+    // client-side stripe.confirmCardPayment() exists anywhere in this
+    // codebase — see createSubscription's invoices.pay() fix), so every
+    // Stripe subscription that reached this branch was left `incomplete`
+    // with a real, still-unpaid, NEVER-ATTEMPTED invoice — not a genuine
+    // decline. Retry that actual off-session charge first; only fall back
+    // to the local-only self-heal below if the retry still doesn't result
+    // in an active/trialing subscription (e.g. a genuine decline, or the
+    // card now requires interactive 3DS). Flutterwave (NG) has no
+    // equivalent unpaid invoice to retry here — its own first-charge retry
+    // path is reconcileBillingForActiveGroupMembership/
+    // retryFirstChargeOrRemoveOnFailure — so this is skipped for NG.
+    if (existingSub?.provider === 'stripe' && existingSub.provider_subscription_id
+      && existingSub.billing_status === 'past_due') {
+      const retried = await this.retryStripeIncompleteSubscriptionCharge(userId, existingSub.provider_subscription_id);
+      if (retried) return;
+    }
+
     // Requiring `existingSub` here (Section D.2 follow-up) matters: a member
     // who has NEVER had a `subscriptions` row created (the common case —
     // simply hasn't gone through activateSubscription() yet) must NOT take
@@ -396,6 +417,71 @@ export const subscriptionService = {
         await sendSubscriptionPaymentFailedEmail(user.email, formatTierPrice(user.subscription_tier, user.country));
       }
     }
+  },
+
+  /**
+   * Retroactive remediation, called from activateSubscriptionIfEligible's
+   * self-heal above: re-attempts off-session collection of an EXISTING
+   * Stripe subscription's still-open, never-actually-attempted first
+   * invoice (see StripeProvider.retryIncompleteSubscriptionCharge/
+   * createSubscription's invoices.pay() fix) instead of creating a second
+   * provider subscription. Returns true only once the subscription is
+   * genuinely active/trialing with the provider — callers must fall back
+   * to their own handling (e.g. the existing self-heal) on false, since the
+   * charge may have genuinely failed (real decline, interactive 3DS still
+   * required) rather than just never having been attempted.
+   */
+  async retryStripeIncompleteSubscriptionCharge(userId: string, providerSubscriptionId: string): Promise<boolean> {
+    const userRows = await db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1);
+    if (!userRows.length) return false;
+    const user = userRows[0];
+
+    // Stamped unconditionally (success or failure) — mirrors createSubscription's
+    // own stamping, and keeps paymentEligibilityService's 5-minute retry
+    // cooldown accurate for this path too, since it never calls
+    // createSubscription() itself.
+    await db.update(schema.subscriptions)
+      .set({ last_activation_attempt_at: new Date() })
+      .where(eq(schema.subscriptions.user_id, userId));
+
+    let result;
+    try {
+      result = await getStripeProvider().retryIncompleteSubscriptionCharge(providerSubscriptionId);
+    } catch (err) {
+      console.error('[SubscriptionService] Retry of existing incomplete Stripe subscription failed:', {
+        providerSubscriptionId, userId, error: err instanceof Error ? err.message : err,
+      });
+      return false;
+    }
+
+    const billingIsActive = result.status === 'active' || result.status === 'trialing';
+    if (!billingIsActive) return false;
+
+    await db.update(schema.subscriptions)
+      .set({ billing_status: 'active', renewal_date: result.renewalDate })
+      .where(eq(schema.subscriptions.user_id, userId));
+    await db.update(schema.users).set({ subscription_status: 'active' as const }).where(eq(schema.users.id, userId));
+
+    await createAuditLog({
+      userId, action: 'SUBSCRIPTION_BILLING_RESUMED', entity: 'subscriptions',
+      metadata: { provider: 'stripe', subscriptionId: providerSubscriptionId, providerStatus: result.status, retried: true, reason: 'retroactive_incomplete_subscription_fix' },
+    });
+
+    if (isSubscriptionTierKey(user.subscription_tier)) {
+      await sendSubscriptionCreatedEmail(
+        user.email,
+        SUBSCRIPTION_TIERS[user.subscription_tier].name,
+        formatTierPrice(user.subscription_tier, user.country),
+        result.renewalDate ? result.renewalDate.toLocaleDateString('en-GB') : 'your next billing date',
+      );
+    }
+    await notificationService.create({
+      userId, type: 'subscription_billing_resumed',
+      title: 'Payment successful — your subscription has begun',
+      message: 'We successfully retried your card charge. Your monthly PadiHub subscription has begun.',
+    });
+
+    return true;
   },
 
   /**
