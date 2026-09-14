@@ -351,6 +351,30 @@ export class StripeProvider implements IPaymentProvider {
     return toSubscriptionResult(subscription);
   }
 
+  /**
+   * Read-only lookup of every subscription object Stripe has on file for a
+   * customer, newest first — used by the one-off
+   * reconcileStaleSubscriptionReferences.ts script to find a customer's
+   * genuinely active/trialing subscription when the locally-stored
+   * `subscriptions.provider_subscription_id` points at a DIFFERENT, now-
+   * abandoned subscription object (see createSubscription()'s
+   * duplicate-subscription comments and activateSubscription()'s `past_due`
+   * branch above — before that fix shipped, a member could end up with more
+   * than one Stripe subscription object, only one of which ever actually
+   * went active). Never mutates anything.
+   */
+  async listSubscriptionsForCustomer(customerId: string): Promise<{ id: string; status: Stripe.Subscription.Status; currentPeriodEnd: number }[]> {
+    const stripe = getStripe();
+    const subscriptions = await stripe.subscriptions.list({ customer: customerId, limit: 100 });
+    return subscriptions.data
+      .map(sub => ({
+        id:              sub.id,
+        status:          sub.status,
+        currentPeriodEnd: (sub as unknown as { current_period_end: number }).current_period_end,
+      }))
+      .sort((a, b) => b.currentPeriodEnd - a.currentPeriodEnd);
+  }
+
   async cancelSubscription(params: { subscriptionId: string }): Promise<{ cancelled: boolean }> {
     const stripe = getStripe();
     await stripe.subscriptions.cancel(params.subscriptionId);
