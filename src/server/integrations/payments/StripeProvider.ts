@@ -6,7 +6,7 @@ import Stripe from 'stripe';
 import {
   PaymentProviderConfigError,
   type IPaymentProvider, type CreateCustomerResult, type SavePaymentMethodResult,
-  type ChargeResult, type TransferResult, type SubscriptionResult, type WebhookResult,
+  type ChargeResult, type TransferResult, type PayoutResult, type SubscriptionResult, type WebhookResult,
 } from './PaymentProviderInterface.js';
 
 function getStripe(): Stripe {
@@ -98,6 +98,36 @@ export class StripeProvider implements IPaymentProvider {
     return { providerTransferReference: transfer.id, status: 'completed' };
   }
 
+  /**
+   * Step 2 of the contribution-to-payout loop — instantly push the funds
+   * createTransfer() just moved into the recipient's connected account
+   * balance out to their linked external bank account. Must run "as" the
+   * connected account (the `stripeAccount` request option below), NOT the
+   * platform account, or Stripe rejects the call/pays out the platform's own
+   * balance instead of the recipient's.
+   */
+  async createPayout(params: {
+    connectedAccountId: string; amount: number; currency: string;
+    rotationId: string; description: string;
+  }): Promise<PayoutResult> {
+    const stripe = getStripe();
+    const payout = await stripe.payouts.create(
+      {
+        amount:      params.amount,
+        currency:    params.currency.toLowerCase(),
+        description: params.description,
+        metadata:    { rotation_id: params.rotationId },
+      },
+      {
+        idempotencyKey: `payout-${params.rotationId}`,
+        stripeAccount:  params.connectedAccountId,
+      },
+    );
+    const status = payout.status === 'canceled' || payout.status === 'failed' ? 'failed'
+      : payout.status === 'paid' ? 'completed' : 'pending';
+    return { providerPayoutReference: payout.id, status };
+  }
+
   async createSubscription(params: {
     customerId: string; userId: string; email: string; currency: string; tier?: 'basic' | 'premium';
     deferBilling?: boolean;
@@ -111,6 +141,16 @@ export class StripeProvider implements IPaymentProvider {
       : process.env.STRIPE_PRICE_ID_BASIC_MONTHLY;
     if (!priceId) {
       throw new PaymentProviderConfigError(`${params.tier === 'premium' ? 'STRIPE_PRICE_ID_PREMIUM_MONTHLY' : 'STRIPE_PRICE_ID_BASIC_MONTHLY'} environment variable is not set.`);
+    }
+    // A Product ID (prod_...), a live-mode Price used against a test/sandbox
+    // secret key, or any other non-Price value here makes Stripe reject the
+    // whole POST /v1/subscriptions call with a 400 invalid_request_error
+    // ("No such price") — fail fast with a clear, actionable config error
+    // instead of a confusing opaque 400 in the Stripe dashboard logs.
+    if (!priceId.startsWith('price_')) {
+      throw new PaymentProviderConfigError(
+        `${params.tier === 'premium' ? 'STRIPE_PRICE_ID_PREMIUM_MONTHLY' : 'STRIPE_PRICE_ID_BASIC_MONTHLY'} ("${priceId}") is not a valid Stripe Price ID (expected it to start with "price_") — check it matches a Price in your current Stripe Sandbox/Test catalog.`,
+      );
     }
 
     // Section D.2 — billing must stay inert until the member is verified in
@@ -133,20 +173,45 @@ export class StripeProvider implements IPaymentProvider {
     // is nothing to confirm when billing is deferred (no invoice is ever
     // due), so only request default_incomplete confirmation when billing is
     // genuinely live.
+    //
+    // payment_settings.save_default_payment_method + expanding
+    // latest_invoice.payment_intent are both required alongside
+    // default_incomplete: without save_default_payment_method the card used
+    // to confirm the first invoice is never persisted as the customer's
+    // default payment method (breaking future off-session renewal charges),
+    // and without the expand the caller only gets back an invoice ID, not
+    // the PaymentIntent client secret it may need to confirm/attach payment
+    // off-session without a second round-trip to Stripe.
     const subscription = await stripe.subscriptions.create({
       customer: params.customerId,
       items:    [{ price: priceId }],
       metadata: { padihub_user_id: params.userId },
       ...(params.deferBilling
         ? { pause_collection: { behavior: 'void' as const } }
-        : { payment_behavior: 'default_incomplete' as const }),
-    }) as unknown as Stripe.Subscription & { current_period_end: number };
+        : {
+            payment_behavior: 'default_incomplete' as const,
+            payment_settings: { save_default_payment_method: 'on_subscription' as const },
+            expand: ['latest_invoice.payment_intent'],
+          }),
+    }) as unknown as Stripe.Subscription & {
+      current_period_end: number;
+      latest_invoice?: (Stripe.Invoice & { payment_intent?: Stripe.PaymentIntent | string | null }) | string | null;
+    };
 
     const renewalDate = new Date(subscription.current_period_end * 1000);
+    const latestInvoice = subscription.latest_invoice && typeof subscription.latest_invoice !== 'string'
+      ? subscription.latest_invoice
+      : undefined;
+    const paymentIntent = latestInvoice?.payment_intent && typeof latestInvoice.payment_intent !== 'string'
+      ? latestInvoice.payment_intent
+      : undefined;
+
     return {
       subscriptionId: subscription.id,
       status:         subscription.status,
       renewalDate,
+      latestInvoicePaymentIntentClientSecret: paymentIntent?.client_secret ?? undefined,
+      latestInvoicePaymentIntentStatus:       paymentIntent?.status,
     };
   }
 
