@@ -32,6 +32,32 @@ function deferredBillingTrialEnd(): number {
   return Math.floor(end.getTime() / 1000);
 }
 
+/** Shared shape returned by subscriptions.create/retrieve once expanded with
+ * `latest_invoice.payment_intent` — used by both createSubscription() and
+ * retryIncompleteSubscriptionCharge() below. */
+type SubscriptionWithExpandedInvoice = Stripe.Subscription & {
+  current_period_end: number;
+  latest_invoice?: (Stripe.Invoice & { payment_intent?: Stripe.PaymentIntent | string | null }) | string | null;
+};
+
+function toSubscriptionResult(subscription: SubscriptionWithExpandedInvoice): SubscriptionResult {
+  const renewalDate = new Date(subscription.current_period_end * 1000);
+  const latestInvoice = subscription.latest_invoice && typeof subscription.latest_invoice !== 'string'
+    ? subscription.latest_invoice
+    : undefined;
+  const paymentIntent = latestInvoice?.payment_intent && typeof latestInvoice.payment_intent !== 'string'
+    ? latestInvoice.payment_intent
+    : undefined;
+
+  return {
+    subscriptionId: subscription.id,
+    status:         subscription.status,
+    renewalDate,
+    latestInvoicePaymentIntentClientSecret: paymentIntent?.client_secret ?? undefined,
+    latestInvoicePaymentIntentStatus:       paymentIntent?.status,
+  };
+}
+
 export class StripeProvider implements IPaymentProvider {
   async createCustomer(params: {
     userId: string; email: string; name: string; currency: string;
@@ -198,10 +224,7 @@ export class StripeProvider implements IPaymentProvider {
     // it, the caller only gets back an invoice ID, not the PaymentIntent
     // client secret it may need to confirm/attach payment off-session
     // without a second round-trip to Stripe).
-    let subscription: Stripe.Subscription & {
-      current_period_end: number;
-      latest_invoice?: (Stripe.Invoice & { payment_intent?: Stripe.PaymentIntent | string | null }) | string | null;
-    };
+    let subscription: SubscriptionWithExpandedInvoice;
     try {
       subscription = await stripe.subscriptions.create({
         customer: params.customerId,
@@ -214,10 +237,7 @@ export class StripeProvider implements IPaymentProvider {
               payment_settings: { save_default_payment_method: 'on_subscription' as const },
               expand: ['latest_invoice.payment_intent'],
             }),
-      }) as unknown as Stripe.Subscription & {
-        current_period_end: number;
-        latest_invoice?: (Stripe.Invoice & { payment_intent?: Stripe.PaymentIntent | string | null }) | string | null;
-      };
+      }) as unknown as SubscriptionWithExpandedInvoice;
     } catch (err) {
       // Stripe validates `customer` and `items[0][price]` server-side, so a
       // malformed-but-plausible-looking env var (e.g. a Price ID copied from
@@ -270,46 +290,65 @@ export class StripeProvider implements IPaymentProvider {
     // takes over exactly as before; that residual case can't be avoided
     // server-side without violating SCA rules.
     if (!params.deferBilling) {
-      const firstInvoice = subscription.latest_invoice && typeof subscription.latest_invoice !== 'string'
-        ? subscription.latest_invoice
-        : undefined;
-      if (firstInvoice?.id && firstInvoice.status === 'open') {
-        try {
-          await stripe.invoices.pay(firstInvoice.id, undefined, { idempotencyKey: `sub-first-charge-pay-${subscription.id}` });
-        } catch (error) {
-          console.warn(`[StripeProvider] Off-session collection of first invoice ${firstInvoice.id} for subscription ${subscription.id} did not succeed:`, error instanceof Error ? error.message : error);
-        }
-        // `invoices.pay()` above updates the subscription/invoice/
-        // PaymentIntent out-of-band — the `subscription` object already in
-        // hand is now stale (still reports the pre-payment-attempt
-        // `incomplete` status regardless of what just happened), so
-        // re-fetch it to get the real, current status/renewal date the
-        // return value below (and subscriptionService's billingIsActive
-        // check) depends on.
-        subscription = await stripe.subscriptions.retrieve(subscription.id, {
-          expand: ['latest_invoice.payment_intent'],
-        }) as unknown as Stripe.Subscription & {
-          current_period_end: number;
-          latest_invoice?: (Stripe.Invoice & { payment_intent?: Stripe.PaymentIntent | string | null }) | string | null;
-        };
-      }
+      subscription = await this.payOpenInvoiceAndRefresh(subscription);
     }
 
-    const renewalDate = new Date(subscription.current_period_end * 1000);
-    const latestInvoice = subscription.latest_invoice && typeof subscription.latest_invoice !== 'string'
+    return toSubscriptionResult(subscription);
+  }
+
+  /**
+   * Off-session collection of a subscription's currently-open invoice
+   * (shared by createSubscription()'s live/non-deferred branch and
+   * retryIncompleteSubscriptionCharge() below) — calls `invoices.pay()`
+   * exactly as resumeBilling() does for the previously-live-then-paused
+   * case, then re-fetches the subscription so the returned status/renewal
+   * date reflect the real post-payment outcome rather than the stale
+   * pre-attempt state still held in `subscription`.
+   */
+  private async payOpenInvoiceAndRefresh(subscription: SubscriptionWithExpandedInvoice): Promise<SubscriptionWithExpandedInvoice> {
+    const stripe = getStripe();
+    const firstInvoice = subscription.latest_invoice && typeof subscription.latest_invoice !== 'string'
       ? subscription.latest_invoice
       : undefined;
-    const paymentIntent = latestInvoice?.payment_intent && typeof latestInvoice.payment_intent !== 'string'
-      ? latestInvoice.payment_intent
-      : undefined;
+    if (!firstInvoice?.id || firstInvoice.status !== 'open') return subscription;
 
-    return {
-      subscriptionId: subscription.id,
-      status:         subscription.status,
-      renewalDate,
-      latestInvoicePaymentIntentClientSecret: paymentIntent?.client_secret ?? undefined,
-      latestInvoicePaymentIntentStatus:       paymentIntent?.status,
-    };
+    try {
+      await stripe.invoices.pay(firstInvoice.id, undefined, { idempotencyKey: `sub-first-charge-pay-${subscription.id}` });
+    } catch (error) {
+      console.warn(`[StripeProvider] Off-session collection of invoice ${firstInvoice.id} for subscription ${subscription.id} did not succeed:`, error instanceof Error ? error.message : error);
+    }
+    return await stripe.subscriptions.retrieve(subscription.id, {
+      expand: ['latest_invoice.payment_intent'],
+    }) as unknown as SubscriptionWithExpandedInvoice;
+  }
+
+  /**
+   * Retroactive remediation for a subscription that was created BEFORE this
+   * off-session invoice-payment fix existed (see createSubscription() above)
+   * and has therefore been sitting `incomplete` with an unpaid, un-attempted
+   * first invoice ever since — `default_incomplete` auto-finalizes that
+   * invoice but never tries to collect it, and Stripe never retries an
+   * `incomplete` subscription's invoice on its own. Safe to call repeatedly:
+   * a subscription that's already past `incomplete` (paid, or genuinely
+   * failed into `incomplete_expired`/canceled) is simply re-reported as-is
+   * with no further Stripe calls. Called by
+   * subscriptionService.activateSubscriptionIfEligible's self-heal so
+   * accounts stuck this way before the fix shipped get actually billed the
+   * next time their eligibility is (re-)checked, instead of only having
+   * `users.subscription_status` optimistically flipped to 'active' with the
+   * underlying charge still never attempted.
+   */
+  async retryIncompleteSubscriptionCharge(subscriptionId: string): Promise<SubscriptionResult> {
+    const stripe = getStripe();
+    let subscription = await stripe.subscriptions.retrieve(subscriptionId, {
+      expand: ['latest_invoice.payment_intent'],
+    }) as unknown as SubscriptionWithExpandedInvoice;
+
+    if (subscription.status === 'incomplete') {
+      subscription = await this.payOpenInvoiceAndRefresh(subscription);
+    }
+
+    return toSubscriptionResult(subscription);
   }
 
   async cancelSubscription(params: { subscriptionId: string }): Promise<{ cancelled: boolean }> {
