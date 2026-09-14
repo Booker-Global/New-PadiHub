@@ -20,10 +20,12 @@ function getStripe(): Stripe {
  * is set at creation — see createSubscription()'s deferBilling branch. Long
  * enough that no member realistically stays outside an active 3+ member
  * group this long (resumeBilling() ends the trial the moment they join
- * one), short enough to stay well clear of any Stripe account-level
- * "maximum trial period" Dashboard setting.
+ * one), but Stripe hard-rejects any `trial_end` more than 5 years out
+ * ("Invalid timestamp: can be no more than five years in the future", 400
+ * invalid_request_error) — 10 tripped that limit, so this stays comfortably
+ * under it.
  */
-const DEFERRED_BILLING_TRIAL_YEARS = 10;
+const DEFERRED_BILLING_TRIAL_YEARS = 4;
 function deferredBillingTrialEnd(): number {
   const end = new Date();
   end.setUTCFullYear(end.getUTCFullYear() + DEFERRED_BILLING_TRIAL_YEARS);
