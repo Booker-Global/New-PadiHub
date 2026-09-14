@@ -182,21 +182,54 @@ export class StripeProvider implements IPaymentProvider {
     // and without the expand the caller only gets back an invoice ID, not
     // the PaymentIntent client secret it may need to confirm/attach payment
     // off-session without a second round-trip to Stripe.
-    const subscription = await stripe.subscriptions.create({
-      customer: params.customerId,
-      items:    [{ price: priceId }],
-      metadata: { padihub_user_id: params.userId },
-      ...(params.deferBilling
-        ? { pause_collection: { behavior: 'void' as const } }
-        : {
-            payment_behavior: 'default_incomplete' as const,
-            payment_settings: { save_default_payment_method: 'on_subscription' as const },
-            expand: ['latest_invoice.payment_intent'],
-          }),
-    }) as unknown as Stripe.Subscription & {
+    let subscription: Stripe.Subscription & {
       current_period_end: number;
       latest_invoice?: (Stripe.Invoice & { payment_intent?: Stripe.PaymentIntent | string | null }) | string | null;
     };
+    try {
+      subscription = await stripe.subscriptions.create({
+        customer: params.customerId,
+        items:    [{ price: priceId }],
+        metadata: { padihub_user_id: params.userId },
+        ...(params.deferBilling
+          ? { pause_collection: { behavior: 'void' as const } }
+          : {
+              payment_behavior: 'default_incomplete' as const,
+              payment_settings: { save_default_payment_method: 'on_subscription' as const },
+              expand: ['latest_invoice.payment_intent'],
+            }),
+      }) as unknown as Stripe.Subscription & {
+        current_period_end: number;
+        latest_invoice?: (Stripe.Invoice & { payment_intent?: Stripe.PaymentIntent | string | null }) | string | null;
+      };
+    } catch (err) {
+      // Stripe validates `customer` and `items[0][price]` server-side, so a
+      // malformed-but-plausible-looking env var (e.g. a Price ID copied from
+      // a different Stripe account/mode than STRIPE_SECRET_KEY points to, or
+      // a customer created against a different account than the one
+      // currently configured) reaches the API and comes back as a
+      // `resource_missing` invalid_request_error — a 400 that would
+      // otherwise repeat forever in the Stripe dashboard's logs while
+      // subscriptionService misclassifies it as a genuine card failure (see
+      // its catch block) and wrongly tells the member "payment could not be
+      // completed". Re-throw these as PaymentProviderConfigError instead, so
+      // the team gets alerted with a precise, actionable cause rather than
+      // the member being blamed for a setup problem that was never their
+      // card's fault.
+      if (err instanceof Stripe.errors.StripeInvalidRequestError && err.code === 'resource_missing') {
+        if (err.param?.includes('price')) {
+          throw new PaymentProviderConfigError(
+            `Stripe rejected price ID "${priceId}" (${params.tier === 'premium' ? 'STRIPE_PRICE_ID_PREMIUM_MONTHLY' : 'STRIPE_PRICE_ID_BASIC_MONTHLY'}) as "No such price" — it does not exist in the Stripe account/mode STRIPE_SECRET_KEY currently points to. Create/copy the matching Price ID from that account's Product catalog.`,
+          );
+        }
+        if (err.param === 'customer') {
+          throw new PaymentProviderConfigError(
+            `Stripe rejected customer ID "${params.customerId}" as "No such customer" — it does not exist in the Stripe account/mode STRIPE_SECRET_KEY currently points to (likely created under a different account/mode). The stored stripe_customer_id for this user must be cleared/recreated against the current account.`,
+          );
+        }
+      }
+      throw err;
+    }
 
     const renewalDate = new Date(subscription.current_period_end * 1000);
     const latestInvoice = subscription.latest_invoice && typeof subscription.latest_invoice !== 'string'
