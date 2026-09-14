@@ -618,6 +618,48 @@ export class StripeProvider implements IPaymentProvider {
   }
 
   /**
+   * SANDBOX/TEST-MODE-ONLY TEST UTILITY. Submits Stripe's special test-mode
+   * file token (`file_identity_document_success`) as the connected account's
+   * identity-document upload, satisfying the `individual.verification
+   * .document` requirement (the Dashboard's "Provide an identity document"
+   * warning) without any real document — see
+   * https://docs.stripe.com/connect/testing#test-file-tokens. In production,
+   * this requirement must always be satisfied by the account holder
+   * themselves via Stripe's hosted onboarding flow
+   * (createOnboardingLink() above) — never by this method.
+   *
+   * Hard-refuses to run unless BOTH `NODE_ENV !== 'production'` AND
+   * `STRIPE_SECRET_KEY` is itself a test-mode key (starts with `sk_test_`).
+   * Stripe would in any case reject `file_identity_document_success` as an
+   * invalid file ID against a live-mode key, but this does not rely on that
+   * alone — the check happens before any request reaches Stripe at all, so
+   * a misconfigured environment (e.g. NODE_ENV left unset in a prod-like
+   * deploy) can never silently attempt this against a real account.
+   *
+   * Deliberately NOT part of `IPaymentProvider`/never called from any
+   * controller or user-reachable route — it exists solely for the one-off
+   * sandbox scripts under src/server/scripts/ (e.g.
+   * submitSandboxIdentityTestDocuments.ts) to unblock test Connect accounts
+   * during manual QA.
+   */
+  async submitSandboxIdentityTestDocument(accountId: string): Promise<void> {
+    const key = process.env.STRIPE_SECRET_KEY ?? '';
+    if (process.env.NODE_ENV === 'production' || !key.startsWith('sk_test_')) {
+      throw new Error(
+        'submitSandboxIdentityTestDocument refused: this is a sandbox/test-mode-only utility and must never run in production or against a live Stripe key.',
+      );
+    }
+    const stripe = getStripe();
+    await stripe.accounts.update(accountId, {
+      individual: {
+        verification: {
+          document: { front: 'file_identity_document_success' },
+        },
+      },
+    });
+  }
+
+  /**
    * Actively verify that STRIPE_PRICE_ID_BASIC_MONTHLY and
    * STRIPE_PRICE_ID_PREMIUM_MONTHLY resolve to real, active Price objects in
    * whichever Stripe account/mode STRIPE_SECRET_KEY currently points to.
