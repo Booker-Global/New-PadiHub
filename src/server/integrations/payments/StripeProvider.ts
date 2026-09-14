@@ -15,6 +15,21 @@ function getStripe(): Stripe {
   return new Stripe(key, { apiVersion: '2026-06-24.dahlia' });
 }
 
+/**
+ * How far in the future a deferred (Section D.2) subscription's `trial_end`
+ * is set at creation — see createSubscription()'s deferBilling branch. Long
+ * enough that no member realistically stays outside an active 3+ member
+ * group this long (resumeBilling() ends the trial the moment they join
+ * one), short enough to stay well clear of any Stripe account-level
+ * "maximum trial period" Dashboard setting.
+ */
+const DEFERRED_BILLING_TRIAL_YEARS = 10;
+function deferredBillingTrialEnd(): number {
+  const end = new Date();
+  end.setUTCFullYear(end.getUTCFullYear() + DEFERRED_BILLING_TRIAL_YEARS);
+  return Math.floor(end.getTime() / 1000);
+}
+
 export class StripeProvider implements IPaymentProvider {
   async createCustomer(params: {
     userId: string; email: string; name: string; currency: string;
@@ -154,34 +169,33 @@ export class StripeProvider implements IPaymentProvider {
     }
 
     // Section D.2 — billing must stay inert until the member is verified in
-    // an active (3+ member) group. pause_collection: 'void' tells Stripe to
-    // never generate/attempt an invoice for this subscription while set, so
-    // the card is genuinely never charged at signup — this is the real
-    // provider-level defer, not just a DB flag subscriptionService also
-    // keeps in sync (see resumeBilling/pauseBilling below).
+    // an active (3+ member) group. Stripe REJECTS `pause_collection` as an
+    // "unknown parameter" on subscriptions.create (400 invalid_request_error,
+    // code parameter_unknown) — it is only a valid parameter on
+    // subscriptions.update (see resumeBilling/pauseBilling below, which both
+    // call update() and are unaffected by this). So a deferred subscription
+    // is instead created with a far-future `trial_end`: Stripe genuinely
+    // never generates or attempts to collect any invoice for a 'trialing'
+    // subscription, so the card is never charged at signup — this is the
+    // real provider-level defer, not just a DB flag subscriptionService also
+    // keeps in sync. Unlike `payment_behavior: 'default_incomplete'` (which
+    // DOES generate an invoice immediately and leaves the subscription
+    // 'incomplete' — Stripe auto-cancels 'incomplete' subscriptions ~23
+    // hours later if that invoice is never paid, which is wrong here since
+    // deferral can legitimately last far longer than 23 hours), a
+    // 'trialing' subscription has no such expiry risk. resumeBilling()
+    // below ends this trial the moment the member becomes eligible for real
+    // billing.
     //
-    // payment_behavior: 'default_incomplete' must NEVER be combined with
-    // pause_collection at creation time: Stripe still generates (and
-    // immediately voids, because of pause_collection) the first invoice,
-    // but default_incomplete forces the subscription's status to stay
-    // 'incomplete' until an invoice is actually paid — which, once voided,
-    // can never happen. That previously left every deferred-billing member
-    // (i.e. everyone who hasn't yet joined a 3+ member active group)
-    // permanently stuck "awaiting payment confirmation" even after
-    // completing every onboarding step, and fired the payment-failed
-    // notification/email for a charge that was never even attempted. There
-    // is nothing to confirm when billing is deferred (no invoice is ever
-    // due), so only request default_incomplete confirmation when billing is
-    // genuinely live.
-    //
-    // payment_settings.save_default_payment_method + expanding
-    // latest_invoice.payment_intent are both required alongside
-    // default_incomplete: without save_default_payment_method the card used
-    // to confirm the first invoice is never persisted as the customer's
-    // default payment method (breaking future off-session renewal charges),
-    // and without the expand the caller only gets back an invoice ID, not
-    // the PaymentIntent client secret it may need to confirm/attach payment
-    // off-session without a second round-trip to Stripe.
+    // payment_behavior: 'default_incomplete' is only used for genuinely
+    // live (non-deferred) billing, together with
+    // payment_settings.save_default_payment_method (without it, the card
+    // used to confirm the first invoice is never persisted as the
+    // customer's default payment method, breaking future off-session
+    // renewal charges) and expanding latest_invoice.payment_intent (without
+    // it, the caller only gets back an invoice ID, not the PaymentIntent
+    // client secret it may need to confirm/attach payment off-session
+    // without a second round-trip to Stripe).
     let subscription: Stripe.Subscription & {
       current_period_end: number;
       latest_invoice?: (Stripe.Invoice & { payment_intent?: Stripe.PaymentIntent | string | null }) | string | null;
@@ -192,7 +206,7 @@ export class StripeProvider implements IPaymentProvider {
         items:    [{ price: priceId }],
         metadata: { padihub_user_id: params.userId },
         ...(params.deferBilling
-          ? { pause_collection: { behavior: 'void' as const } }
+          ? { trial_end: deferredBillingTrialEnd() }
           : {
               payment_behavior: 'default_incomplete' as const,
               payment_settings: { save_default_payment_method: 'on_subscription' as const },
@@ -264,22 +278,51 @@ export class StripeProvider implements IPaymentProvider {
    * Section D.2/1/5 — resume real Stripe collection once the member is
    * verified in an active (3+ member) group, AND immediately charge the
    * card now rather than waiting for whatever date the subscription's
-   * original (deferred, paused-at-creation) billing cycle anchor happens
-   * to land on. Clearing pause_collection alone only resumes Stripe's
-   * normal automatic billing at its existing cycle date — it does NOT
-   * trigger a charge today, which previously left billing_status stuck
-   * unset/paused indefinitely for anyone who joined an active group
-   * between billing cycle anchors. Creating + paying an out-of-cycle
-   * invoice for the current subscription forces that immediate charge.
-   * The actual success/failure is reported via Stripe's usual
+   * original billing cycle anchor happens to land on.
+   *
+   * Two distinct prior states reach this method, requiring different
+   * handling:
+   *
+   * 1. Created via createSubscription()'s deferBilling branch — the
+   *    subscription is still 'trialing' (a far-future `trial_end`, since
+   *    Stripe rejects `pause_collection` on create — see there). Ending the
+   *    trial via `trial_end: 'now'` makes Stripe itself generate AND
+   *    attempt to collect the first invoice — asynchronously, reported via
+   *    the usual invoice.payment_succeeded/failed webhook, exactly like any
+   *    other charge (see webhookStripeController.ts's `wasFirstChargeOnJoin`
+   *    branch, keyed off billing_status==='paused', which doesn't care how
+   *    the invoice was generated). Manually creating a second invoice below
+   *    for this case would double-charge the member for the same period, so
+   *    this branch returns immediately after ending the trial.
+   *
+   * 2. Previously genuinely live (billing_status 'active'), then paused via
+   *    pauseBilling() after the member dropped below an active group and
+   *    later rejoined one — clearing pause_collection alone only resumes
+   *    Stripe's normal automatic billing at its EXISTING cycle date, it
+   *    does NOT trigger a charge today, which previously left billing_status
+   *    stuck unset/paused indefinitely for anyone who rejoined an active
+   *    group between billing cycle anchors. Creating + paying an
+   *    out-of-cycle invoice for the current subscription forces that
+   *    immediate charge.
+   *
+   * Either way, the actual success/failure is reported via Stripe's usual
    * invoice.payment_succeeded/invoice.payment_failed webhooks (handled in
-   * webhookStripeController.ts) exactly like any other renewal charge, so
-   * this method deliberately does not update any local billing_status
-   * itself — callers must treat this as "charge attempted", not "charge
-   * confirmed".
+   * webhookStripeController.ts), so this method deliberately does not
+   * update any local billing_status itself — callers must treat this as
+   * "charge attempted", not "charge confirmed".
    */
   async resumeBilling(subscriptionId: string): Promise<void> {
     const stripe = getStripe();
+    const current = await stripe.subscriptions.retrieve(subscriptionId);
+    if (current.status === 'trialing') {
+      // Stripe errors ("You cannot end a trial for a subscription that
+      // does not have a trial.") if trial_end: 'now' is sent to a
+      // subscription that was never given a trial_end — only take this
+      // branch for subscriptions genuinely still in trial.
+      await stripe.subscriptions.update(subscriptionId, { trial_end: 'now', proration_behavior: 'none' });
+      return;
+    }
+
     await stripe.subscriptions.update(subscriptionId, { pause_collection: null });
 
     const subscription = await stripe.subscriptions.retrieve(subscriptionId);
