@@ -448,7 +448,9 @@ export const subscriptionService = {
     try {
       result = await getStripeProvider().retryIncompleteSubscriptionCharge(providerSubscriptionId);
     } catch (err) {
-      console.error(`[SubscriptionService] Retry of existing incomplete Stripe subscription ${providerSubscriptionId} failed for user ${userId}:`, err instanceof Error ? err.message : err);
+      console.error('[SubscriptionService] Retry of existing incomplete Stripe subscription failed:', {
+        providerSubscriptionId, userId, error: err instanceof Error ? err.message : err,
+      });
       return false;
     }
 
