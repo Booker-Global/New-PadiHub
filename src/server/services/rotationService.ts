@@ -84,13 +84,48 @@ async function transferCyclePotToRecipient(
         return { success: false };
       }
 
-      const result = await getStripeProvider().createTransfer({
+      const stripeProvider = getStripeProvider();
+      const result = await stripeProvider.createTransfer({
         recipientAccountId: recipient.stripe_connected_account_id,
         amount:              potMinorUnits,
         currency:            group.currency,
         rotationId:          rotation.id,
         description:         `PadiHub payout — ${group.name} cycle ${rotation.cycle_number}`,
       });
+
+      // Step 2 of the transfer-to-payout loop — the pot just landed in the
+      // recipient's CONNECTED ACCOUNT balance above, it hasn't reached their
+      // bank yet. Trigger an immediate payout, executed in that connected
+      // account's own context, to push it out to their linked external bank
+      // account now rather than waiting on Stripe's own payout schedule.
+      // Best-effort: the platform-to-connect transfer above is the part that
+      // actually moves PadiHub's liability to the recipient, so a failure
+      // here (e.g. their bank details are still being verified) must NOT
+      // undo/fail the already-successful transfer — it's logged for the team
+      // to follow up on, and Stripe's own automatic payout schedule will
+      // still eventually deliver the connected account's balance regardless.
+      if (stripeProvider.createPayout) {
+        try {
+          await stripeProvider.createPayout({
+            connectedAccountId: recipient.stripe_connected_account_id,
+            amount:              potMinorUnits,
+            currency:            group.currency,
+            rotationId:          rotation.id,
+            description:         `PadiHub payout — ${group.name} cycle ${rotation.cycle_number}`,
+          });
+        } catch (payoutErr) {
+          const payoutMessage = payoutErr instanceof Error ? payoutErr.message : String(payoutErr);
+          await monitoringService.logError({
+            type: 'payment_error', endpoint: 'rotationService.advance',
+            message: `Connect payout trigger failed for group ${group.id} cycle ${rotation.cycle_number} (transfer ${result.providerTransferReference} already completed): ${payoutMessage}`,
+          });
+          await createAuditLog({
+            action: 'STRIPE_CONNECT_PAYOUT_TRIGGER_FAILED', entity: 'rotations', entityId: rotation.id,
+            metadata: { groupId: group.id, cycleNumber: rotation.cycle_number, transferReference: result.providerTransferReference, message: payoutMessage },
+          });
+        }
+      }
+
       return { success: true, reference: result.providerTransferReference };
     }
 

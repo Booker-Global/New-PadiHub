@@ -6,13 +6,28 @@ import Stripe from 'stripe';
 import {
   PaymentProviderConfigError,
   type IPaymentProvider, type CreateCustomerResult, type SavePaymentMethodResult,
-  type ChargeResult, type TransferResult, type SubscriptionResult, type WebhookResult,
+  type ChargeResult, type TransferResult, type PayoutResult, type SubscriptionResult, type WebhookResult,
 } from './PaymentProviderInterface.js';
 
 function getStripe(): Stripe {
   const key = process.env.STRIPE_SECRET_KEY;
   if (!key) throw new PaymentProviderConfigError('STRIPE_SECRET_KEY environment variable is not set.');
   return new Stripe(key, { apiVersion: '2026-06-24.dahlia' });
+}
+
+/**
+ * How far in the future a deferred (Section D.2) subscription's `trial_end`
+ * is set at creation — see createSubscription()'s deferBilling branch. Long
+ * enough that no member realistically stays outside an active 3+ member
+ * group this long (resumeBilling() ends the trial the moment they join
+ * one), short enough to stay well clear of any Stripe account-level
+ * "maximum trial period" Dashboard setting.
+ */
+const DEFERRED_BILLING_TRIAL_YEARS = 10;
+function deferredBillingTrialEnd(): number {
+  const end = new Date();
+  end.setUTCFullYear(end.getUTCFullYear() + DEFERRED_BILLING_TRIAL_YEARS);
+  return Math.floor(end.getTime() / 1000);
 }
 
 export class StripeProvider implements IPaymentProvider {
@@ -98,6 +113,36 @@ export class StripeProvider implements IPaymentProvider {
     return { providerTransferReference: transfer.id, status: 'completed' };
   }
 
+  /**
+   * Step 2 of the contribution-to-payout loop — instantly push the funds
+   * createTransfer() just moved into the recipient's connected account
+   * balance out to their linked external bank account. Must run "as" the
+   * connected account (the `stripeAccount` request option below), NOT the
+   * platform account, or Stripe rejects the call/pays out the platform's own
+   * balance instead of the recipient's.
+   */
+  async createPayout(params: {
+    connectedAccountId: string; amount: number; currency: string;
+    rotationId: string; description: string;
+  }): Promise<PayoutResult> {
+    const stripe = getStripe();
+    const payout = await stripe.payouts.create(
+      {
+        amount:      params.amount,
+        currency:    params.currency.toLowerCase(),
+        description: params.description,
+        metadata:    { rotation_id: params.rotationId },
+      },
+      {
+        idempotencyKey: `payout-${params.rotationId}`,
+        stripeAccount:  params.connectedAccountId,
+      },
+    );
+    const status = payout.status === 'canceled' || payout.status === 'failed' ? 'failed'
+      : payout.status === 'paid' ? 'completed' : 'pending';
+    return { providerPayoutReference: payout.id, status };
+  }
+
   async createSubscription(params: {
     customerId: string; userId: string; email: string; currency: string; tier?: 'basic' | 'premium';
     deferBilling?: boolean;
@@ -112,41 +157,108 @@ export class StripeProvider implements IPaymentProvider {
     if (!priceId) {
       throw new PaymentProviderConfigError(`${params.tier === 'premium' ? 'STRIPE_PRICE_ID_PREMIUM_MONTHLY' : 'STRIPE_PRICE_ID_BASIC_MONTHLY'} environment variable is not set.`);
     }
+    // A Product ID (prod_...), a live-mode Price used against a test/sandbox
+    // secret key, or any other non-Price value here makes Stripe reject the
+    // whole POST /v1/subscriptions call with a 400 invalid_request_error
+    // ("No such price") — fail fast with a clear, actionable config error
+    // instead of a confusing opaque 400 in the Stripe dashboard logs.
+    if (!priceId.startsWith('price_')) {
+      throw new PaymentProviderConfigError(
+        `${params.tier === 'premium' ? 'STRIPE_PRICE_ID_PREMIUM_MONTHLY' : 'STRIPE_PRICE_ID_BASIC_MONTHLY'} ("${priceId}") is not a valid Stripe Price ID (expected it to start with "price_") — check it matches a Price in your current Stripe Sandbox/Test catalog.`,
+      );
+    }
 
     // Section D.2 — billing must stay inert until the member is verified in
-    // an active (3+ member) group. pause_collection: 'void' tells Stripe to
-    // never generate/attempt an invoice for this subscription while set, so
-    // the card is genuinely never charged at signup — this is the real
-    // provider-level defer, not just a DB flag subscriptionService also
-    // keeps in sync (see resumeBilling/pauseBilling below).
+    // an active (3+ member) group. Stripe REJECTS `pause_collection` as an
+    // "unknown parameter" on subscriptions.create (400 invalid_request_error,
+    // code parameter_unknown) — it is only a valid parameter on
+    // subscriptions.update (see resumeBilling/pauseBilling below, which both
+    // call update() and are unaffected by this). So a deferred subscription
+    // is instead created with a far-future `trial_end`: Stripe genuinely
+    // never generates or attempts to collect any invoice for a 'trialing'
+    // subscription, so the card is never charged at signup — this is the
+    // real provider-level defer, not just a DB flag subscriptionService also
+    // keeps in sync. Unlike `payment_behavior: 'default_incomplete'` (which
+    // DOES generate an invoice immediately and leaves the subscription
+    // 'incomplete' — Stripe auto-cancels 'incomplete' subscriptions ~23
+    // hours later if that invoice is never paid, which is wrong here since
+    // deferral can legitimately last far longer than 23 hours), a
+    // 'trialing' subscription has no such expiry risk. resumeBilling()
+    // below ends this trial the moment the member becomes eligible for real
+    // billing.
     //
-    // payment_behavior: 'default_incomplete' must NEVER be combined with
-    // pause_collection at creation time: Stripe still generates (and
-    // immediately voids, because of pause_collection) the first invoice,
-    // but default_incomplete forces the subscription's status to stay
-    // 'incomplete' until an invoice is actually paid — which, once voided,
-    // can never happen. That previously left every deferred-billing member
-    // (i.e. everyone who hasn't yet joined a 3+ member active group)
-    // permanently stuck "awaiting payment confirmation" even after
-    // completing every onboarding step, and fired the payment-failed
-    // notification/email for a charge that was never even attempted. There
-    // is nothing to confirm when billing is deferred (no invoice is ever
-    // due), so only request default_incomplete confirmation when billing is
-    // genuinely live.
-    const subscription = await stripe.subscriptions.create({
-      customer: params.customerId,
-      items:    [{ price: priceId }],
-      metadata: { padihub_user_id: params.userId },
-      ...(params.deferBilling
-        ? { pause_collection: { behavior: 'void' as const } }
-        : { payment_behavior: 'default_incomplete' as const }),
-    }) as unknown as Stripe.Subscription & { current_period_end: number };
+    // payment_behavior: 'default_incomplete' is only used for genuinely
+    // live (non-deferred) billing, together with
+    // payment_settings.save_default_payment_method (without it, the card
+    // used to confirm the first invoice is never persisted as the
+    // customer's default payment method, breaking future off-session
+    // renewal charges) and expanding latest_invoice.payment_intent (without
+    // it, the caller only gets back an invoice ID, not the PaymentIntent
+    // client secret it may need to confirm/attach payment off-session
+    // without a second round-trip to Stripe).
+    let subscription: Stripe.Subscription & {
+      current_period_end: number;
+      latest_invoice?: (Stripe.Invoice & { payment_intent?: Stripe.PaymentIntent | string | null }) | string | null;
+    };
+    try {
+      subscription = await stripe.subscriptions.create({
+        customer: params.customerId,
+        items:    [{ price: priceId }],
+        metadata: { padihub_user_id: params.userId },
+        ...(params.deferBilling
+          ? { trial_end: deferredBillingTrialEnd() }
+          : {
+              payment_behavior: 'default_incomplete' as const,
+              payment_settings: { save_default_payment_method: 'on_subscription' as const },
+              expand: ['latest_invoice.payment_intent'],
+            }),
+      }) as unknown as Stripe.Subscription & {
+        current_period_end: number;
+        latest_invoice?: (Stripe.Invoice & { payment_intent?: Stripe.PaymentIntent | string | null }) | string | null;
+      };
+    } catch (err) {
+      // Stripe validates `customer` and `items[0][price]` server-side, so a
+      // malformed-but-plausible-looking env var (e.g. a Price ID copied from
+      // a different Stripe account/mode than STRIPE_SECRET_KEY points to, or
+      // a customer created against a different account than the one
+      // currently configured) reaches the API and comes back as a
+      // `resource_missing` invalid_request_error — a 400 that would
+      // otherwise repeat forever in the Stripe dashboard's logs while
+      // subscriptionService misclassifies it as a genuine card failure (see
+      // its catch block) and wrongly tells the member "payment could not be
+      // completed". Re-throw these as PaymentProviderConfigError instead, so
+      // the team gets alerted with a precise, actionable cause rather than
+      // the member being blamed for a setup problem that was never their
+      // card's fault.
+      if (err instanceof Stripe.errors.StripeInvalidRequestError && err.code === 'resource_missing') {
+        if (err.param?.includes('price')) {
+          throw new PaymentProviderConfigError(
+            `Stripe rejected price ID "${priceId}" (${params.tier === 'premium' ? 'STRIPE_PRICE_ID_PREMIUM_MONTHLY' : 'STRIPE_PRICE_ID_BASIC_MONTHLY'}) as "No such price" — it does not exist in the Stripe account/mode STRIPE_SECRET_KEY currently points to. Create/copy the matching Price ID from that account's Product catalog.`,
+          );
+        }
+        if (err.param === 'customer') {
+          throw new PaymentProviderConfigError(
+            `Stripe rejected customer ID "${params.customerId}" as "No such customer" — it does not exist in the Stripe account/mode STRIPE_SECRET_KEY currently points to (likely created under a different account/mode). The stored stripe_customer_id for this user must be cleared/recreated against the current account.`,
+          );
+        }
+      }
+      throw err;
+    }
 
     const renewalDate = new Date(subscription.current_period_end * 1000);
+    const latestInvoice = subscription.latest_invoice && typeof subscription.latest_invoice !== 'string'
+      ? subscription.latest_invoice
+      : undefined;
+    const paymentIntent = latestInvoice?.payment_intent && typeof latestInvoice.payment_intent !== 'string'
+      ? latestInvoice.payment_intent
+      : undefined;
+
     return {
       subscriptionId: subscription.id,
       status:         subscription.status,
       renewalDate,
+      latestInvoicePaymentIntentClientSecret: paymentIntent?.client_secret ?? undefined,
+      latestInvoicePaymentIntentStatus:       paymentIntent?.status,
     };
   }
 
@@ -166,22 +278,51 @@ export class StripeProvider implements IPaymentProvider {
    * Section D.2/1/5 — resume real Stripe collection once the member is
    * verified in an active (3+ member) group, AND immediately charge the
    * card now rather than waiting for whatever date the subscription's
-   * original (deferred, paused-at-creation) billing cycle anchor happens
-   * to land on. Clearing pause_collection alone only resumes Stripe's
-   * normal automatic billing at its existing cycle date — it does NOT
-   * trigger a charge today, which previously left billing_status stuck
-   * unset/paused indefinitely for anyone who joined an active group
-   * between billing cycle anchors. Creating + paying an out-of-cycle
-   * invoice for the current subscription forces that immediate charge.
-   * The actual success/failure is reported via Stripe's usual
+   * original billing cycle anchor happens to land on.
+   *
+   * Two distinct prior states reach this method, requiring different
+   * handling:
+   *
+   * 1. Created via createSubscription()'s deferBilling branch — the
+   *    subscription is still 'trialing' (a far-future `trial_end`, since
+   *    Stripe rejects `pause_collection` on create — see there). Ending the
+   *    trial via `trial_end: 'now'` makes Stripe itself generate AND
+   *    attempt to collect the first invoice — asynchronously, reported via
+   *    the usual invoice.payment_succeeded/failed webhook, exactly like any
+   *    other charge (see webhookStripeController.ts's `wasFirstChargeOnJoin`
+   *    branch, keyed off billing_status==='paused', which doesn't care how
+   *    the invoice was generated). Manually creating a second invoice below
+   *    for this case would double-charge the member for the same period, so
+   *    this branch returns immediately after ending the trial.
+   *
+   * 2. Previously genuinely live (billing_status 'active'), then paused via
+   *    pauseBilling() after the member dropped below an active group and
+   *    later rejoined one — clearing pause_collection alone only resumes
+   *    Stripe's normal automatic billing at its EXISTING cycle date, it
+   *    does NOT trigger a charge today, which previously left billing_status
+   *    stuck unset/paused indefinitely for anyone who rejoined an active
+   *    group between billing cycle anchors. Creating + paying an
+   *    out-of-cycle invoice for the current subscription forces that
+   *    immediate charge.
+   *
+   * Either way, the actual success/failure is reported via Stripe's usual
    * invoice.payment_succeeded/invoice.payment_failed webhooks (handled in
-   * webhookStripeController.ts) exactly like any other renewal charge, so
-   * this method deliberately does not update any local billing_status
-   * itself — callers must treat this as "charge attempted", not "charge
-   * confirmed".
+   * webhookStripeController.ts), so this method deliberately does not
+   * update any local billing_status itself — callers must treat this as
+   * "charge attempted", not "charge confirmed".
    */
   async resumeBilling(subscriptionId: string): Promise<void> {
     const stripe = getStripe();
+    const current = await stripe.subscriptions.retrieve(subscriptionId);
+    if (current.status === 'trialing') {
+      // Stripe errors ("You cannot end a trial for a subscription that
+      // does not have a trial.") if trial_end: 'now' is sent to a
+      // subscription that was never given a trial_end — only take this
+      // branch for subscriptions genuinely still in trial.
+      await stripe.subscriptions.update(subscriptionId, { trial_end: 'now', proration_behavior: 'none' });
+      return;
+    }
+
     await stripe.subscriptions.update(subscriptionId, { pause_collection: null });
 
     const subscription = await stripe.subscriptions.retrieve(subscriptionId);
@@ -424,5 +565,52 @@ export class StripeProvider implements IPaymentProvider {
       ...(account.requirements?.currently_due ?? []),
       ...(account.requirements?.past_due ?? []),
     ];
+  }
+
+  /**
+   * Actively verify that STRIPE_PRICE_ID_BASIC_MONTHLY and
+   * STRIPE_PRICE_ID_PREMIUM_MONTHLY resolve to real, active Price objects in
+   * whichever Stripe account/mode STRIPE_SECRET_KEY currently points to.
+   *
+   * createSubscription()'s resource_missing catch above only surfaces a
+   * misconfigured Price ID the first time a real member's onboarding
+   * happens to trigger it — which is exactly what previously showed up as a
+   * silent, unexplained string of `POST /v1/subscriptions 400 ERR` entries
+   * in the Stripe dashboard logs (e.g. after a Price ID was copied from a
+   * different Stripe account/mode during a key rotation) with no clear
+   * signal anywhere in PadiHub itself. Called at boot (see entry.ts) and
+   * from monitoringService.getHealthStatus() so this class of
+   * misconfiguration is caught immediately and loudly instead.
+   */
+  async verifyPriceConfig(): Promise<{
+    basic: { configured: boolean; valid: boolean; error?: string };
+    premium: { configured: boolean; valid: boolean; error?: string };
+  }> {
+    const stripe = getStripe();
+    const check = async (envVar: string): Promise<{ configured: boolean; valid: boolean; error?: string }> => {
+      const priceId = process.env[envVar];
+      if (!priceId) return { configured: false, valid: false, error: `${envVar} is not set.` };
+      try {
+        const price = await stripe.prices.retrieve(priceId);
+        if (!price.active) {
+          return {
+            configured: true, valid: false,
+            error: `${envVar} ("${priceId}") exists but is archived (active: false) in the current Stripe account/mode — reactivate it or point ${envVar} at an active Price.`,
+          };
+        }
+        return { configured: true, valid: true };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          configured: true, valid: false,
+          error: `${envVar} ("${priceId}") could not be retrieved from the current Stripe account/mode: ${message}`,
+        };
+      }
+    };
+    const [basic, premium] = await Promise.all([
+      check('STRIPE_PRICE_ID_BASIC_MONTHLY'),
+      check('STRIPE_PRICE_ID_PREMIUM_MONTHLY'),
+    ]);
+    return { basic, premium };
   }
 }

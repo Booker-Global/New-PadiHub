@@ -43,10 +43,21 @@ export interface TransferResult {
   status: 'completed' | 'pending' | 'failed';
 }
 
+export interface PayoutResult {
+  providerPayoutReference: string;
+  status: 'completed' | 'pending' | 'failed';
+}
+
 export interface SubscriptionResult {
   subscriptionId: string;
   status: string;
   renewalDate?: Date;
+  // Stripe only — populated from `expand: ['latest_invoice.payment_intent']`
+  // when billing is live (not deferred), so callers can drive an off-session
+  // payment-method attachment/confirmation flow without a second round-trip
+  // to fetch the invoice/payment intent separately.
+  latestInvoicePaymentIntentClientSecret?: string;
+  latestInvoicePaymentIntentStatus?: string;
 }
 
 export interface WebhookResult {
@@ -91,6 +102,25 @@ export interface IPaymentProvider {
     recipientAccountNumber?: string; // Flutterwave only
     recipientName?: string;       // Flutterwave only
   }): Promise<TransferResult>;
+
+  /**
+   * Step 2 of the contribution-to-payout loop (Stripe/Connect only): once
+   * createTransfer() above has moved the pot from the platform balance into
+   * the recipient's connected account balance, trigger an immediate payout
+   * FROM that connected account OUT to their linked external bank account,
+   * executed in the connected account's own context (Stripe: the
+   * `stripeAccount` request option). Optional because providers that don't
+   * have this platform/connected-account split (Flutterwave: createTransfer
+   * already sends funds straight to the recipient's bank account) don't
+   * implement it.
+   */
+  createPayout?(params: {
+    connectedAccountId: string;
+    amount: number;
+    currency: string;
+    rotationId: string;
+    description: string;
+  }): Promise<PayoutResult>;
 
   /**
    * Create a recurring platform subscription. When `deferBilling` is true,
