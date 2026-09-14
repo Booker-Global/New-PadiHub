@@ -247,6 +247,54 @@ export class StripeProvider implements IPaymentProvider {
       throw err;
     }
 
+    // `default_incomplete` DOES auto-finalize the first invoice (it comes
+    // back already `open`, with a PaymentIntent attached using the
+    // customer's `invoice_settings.default_payment_method`) — but, contrary
+    // to what its name suggests, Stripe deliberately leaves that
+    // PaymentIntent in `requires_confirmation` rather than attempting to
+    // collect it, precisely so a *client* can drive SCA/3DS via
+    // stripe.confirmCardPayment(). PadiHub never does that (there is no
+    // client-side confirmation step anywhere in this codebase), so every
+    // such subscription was previously left permanently stuck `incomplete`
+    // with an unpaid, un-attempted invoice — even though the member's card
+    // was already verified and saved off-session earlier in onboarding
+    // (confirmSetupIntent → setCustomerDefaultPaymentMethod). Explicitly pay
+    // that invoice here, exactly the way resumeBilling() already does for
+    // the previously-live-then-paused case above — `invoices.pay()` is the
+    // correct server-initiated, off-session collection call (unlike
+    // `paymentIntents.confirm`, it needs no explicit `off_session` flag) and
+    // requires no client involvement at all. If the card genuinely still
+    // needs interactive SCA or was declined, this throws/leaves the invoice
+    // unpaid — in which case subscriptionService's existing
+    // pending/payment-failed handling below (keyed off `result.status`)
+    // takes over exactly as before; that residual case can't be avoided
+    // server-side without violating SCA rules.
+    if (!params.deferBilling) {
+      const firstInvoice = subscription.latest_invoice && typeof subscription.latest_invoice !== 'string'
+        ? subscription.latest_invoice
+        : undefined;
+      if (firstInvoice?.id && firstInvoice.status === 'open') {
+        try {
+          await stripe.invoices.pay(firstInvoice.id, undefined, { idempotencyKey: `sub-first-charge-pay-${subscription.id}` });
+        } catch (error) {
+          console.warn(`[StripeProvider] Off-session collection of first invoice ${firstInvoice.id} for subscription ${subscription.id} did not succeed:`, error instanceof Error ? error.message : error);
+        }
+        // `invoices.pay()` above updates the subscription/invoice/
+        // PaymentIntent out-of-band — the `subscription` object already in
+        // hand is now stale (still reports the pre-payment-attempt
+        // `incomplete` status regardless of what just happened), so
+        // re-fetch it to get the real, current status/renewal date the
+        // return value below (and subscriptionService's billingIsActive
+        // check) depends on.
+        subscription = await stripe.subscriptions.retrieve(subscription.id, {
+          expand: ['latest_invoice.payment_intent'],
+        }) as unknown as Stripe.Subscription & {
+          current_period_end: number;
+          latest_invoice?: (Stripe.Invoice & { payment_intent?: Stripe.PaymentIntent | string | null }) | string | null;
+        };
+      }
+    }
+
     const renewalDate = new Date(subscription.current_period_end * 1000);
     const latestInvoice = subscription.latest_invoice && typeof subscription.latest_invoice !== 'string'
       ? subscription.latest_invoice
