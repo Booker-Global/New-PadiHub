@@ -323,16 +323,30 @@ export const subscriptionService = {
 
     try {
       const activeGroupCount = existingSub ? 0 : await groupService.countActiveGroupMembershipsForUser(userId);
-      if (!existingSub && activeGroupCount > 0) {
-        // A member who somehow reached an already-active group with NO local
-        // subscription row yet (for example via an earlier self-heal that set
-        // users.subscription_status='active' without ever materialising the
-        // `subscriptions` row) must NOT go straight through createSubscription
-        // "live" on Flutterwave: that code path only creates the bookkeeping
-        // row and would mark billing active without ever charging the card.
-        // Seed the missing row in deferred/paused form first, then hand off to
-        // the normal active-group billing reconciliation below, which already
-        // performs the real immediate first charge for BOTH providers.
+      // Flutterwave (NG) ONLY: a member who somehow reached an already-active
+      // group with NO local subscription row yet (for example via an earlier
+      // self-heal that set users.subscription_status='active' without ever
+      // materialising the `subscriptions` row) must NOT go straight through
+      // createSubscription "live" on Flutterwave — FlutterwaveProvider.
+      // createSubscription() is a pure bookkeeping stub that NEVER actually
+      // charges the card (Flutterwave has no recurring-billing engine; see
+      // its comment), so a "live" row there would mark billing active
+      // without ever charging the card. Seed the missing row in
+      // deferred/paused form first, then hand off to the normal active-group
+      // billing reconciliation below, which performs the real explicit
+      // chargeContribution() first charge for NG.
+      //
+      // Stripe (GB) must NOT take this detour: the member is already
+      // verified AND already in an active (3+ member) group, so there is no
+      // reason to defer at all — falling through to activateSubscription()
+      // below calls createSubscription() with deferBilling computed from
+      // activeGroupCount (> 0 here), which goes straight to a real
+      // `payment_behavior: 'default_incomplete'` charge attempt in a single
+      // step. Routing Stripe through the seed-as-trialing-then-immediately-
+      // end-the-trial dance instead only adds an extra round-trip (and an
+      // extra way to fail) for no benefit — the member should simply be
+      // charged immediately.
+      if (!existingSub && activeGroupCount > 0 && user.country === 'NG') {
         await this.createSubscription(userId, user.country, user.subscription_tier, {
           deferBilling: true,
           suppressCreatedEmail: true,
