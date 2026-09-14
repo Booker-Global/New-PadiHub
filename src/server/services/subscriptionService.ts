@@ -240,6 +240,32 @@ export const subscriptionService = {
       return existing[0];
     }
 
+    // A Stripe subscription already exists here but is stuck 'past_due' —
+    // its real, still-open first invoice was created but never actually
+    // collected (see createSubscription's `payment_behavior:
+    // 'default_incomplete'` and retryStripeIncompleteSubscriptionCharge
+    // above). Falling through to createSubscription() below in this case
+    // previously created a SECOND, duplicate Stripe subscription every time
+    // this ran — e.g. identityVerificationService calls activateSubscription()
+    // directly once verification completes, bypassing
+    // activateSubscriptionIfEligible's own retry-first logic entirely — while
+    // the first subscription's now-abandoned invoice was left dangling.
+    // Retroactively diagnosed from Stripe showing a customer with BOTH an
+    // "Incomplete" and a later "Succeeded" subscription-creation charge, and
+    // PadiHub's own notifications/emails still reporting failure even
+    // though a (different, duplicate) subscription had genuinely gone
+    // active. Re-attempt collecting THAT existing invoice instead — never
+    // create a second one for the same member. Flutterwave (NG) has no
+    // equivalent unpaid invoice to retry (see retryStripeIncompleteSubscriptionCharge),
+    // so this only applies to Stripe.
+    if (existing.length && existing[0].billing_status === 'past_due'
+      && existing[0].provider === 'stripe' && existing[0].provider_subscription_id) {
+      await this.retryStripeIncompleteSubscriptionCharge(userId, existing[0].provider_subscription_id);
+      const refreshed = await db.select().from(schema.subscriptions)
+        .where(eq(schema.subscriptions.user_id, userId)).limit(1);
+      return refreshed[0] ?? existing[0];
+    }
+
     return this.createSubscription(userId, user.country, user.subscription_tier);
   },
 
