@@ -652,6 +652,30 @@ if (import.meta.env.PROD) {
 				console.log('[PadiHub] ✓ Database connection verified.');
 				await ensureSchemaSync();
 				await normalizeLegacyTrustScores();
+				// Verify STRIPE_PRICE_ID_BASIC_MONTHLY/PREMIUM_MONTHLY actually
+				// resolve to real, active Prices in the Stripe account/mode
+				// STRIPE_SECRET_KEY currently points to. A wrong Price ID (e.g.
+				// copied from a different Stripe account/mode after a key
+				// rotation) otherwise fails completely silently from PadiHub's
+				// side — every real subscription attempt 400s with no signal
+				// anywhere except Stripe's own dashboard logs. Non-fatal: log
+				// loudly and keep booting, since Flutterwave/GB-only members may
+				// not need Stripe at all in some environments.
+				if (process.env.STRIPE_SECRET_KEY) {
+					try {
+						const { getStripeProvider } = await import('./integrations/payments/PaymentProviderFactory.js');
+						const priceConfig = await getStripeProvider().verifyPriceConfig();
+						if (priceConfig.basic.valid && priceConfig.premium.valid) {
+							console.log('[PadiHub] ✓ Stripe Price ID configuration verified (Basic + Premium).');
+						} else {
+							console.error('[PadiHub] ✗ Stripe Price ID configuration problem detected:', {
+								basic: priceConfig.basic, premium: priceConfig.premium,
+							});
+						}
+					} catch (stripeConfigErr) {
+						console.error('[PadiHub] ✗ Could not verify Stripe Price ID configuration:', stripeConfigErr instanceof Error ? stripeConfigErr.message : stripeConfigErr);
+					}
+				}
 				const { authService } = await import('./services/authService.js');
 				await authService.ensureDefaultAdminAccount();
 				const { subscriptionService } = await import('./services/subscriptionService.js');

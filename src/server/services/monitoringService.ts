@@ -6,6 +6,49 @@ import { v4 as uuidv4 } from 'uuid';
 import { eq, and, gte, desc } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
+import { getStripeProvider } from '../integrations/payments/PaymentProviderFactory.js';
+
+/**
+ * /api/system/health is unauthenticated and may be polled frequently by
+ * uptime monitors — verifyPriceConfig() below makes a live call to Stripe,
+ * so cache its result briefly rather than hitting Stripe's API on every
+ * single health check request.
+ */
+const STRIPE_PRICE_CONFIG_CACHE_MS = 5 * 60 * 1000;
+let cachedStripePriceConfig: { basic: boolean; premium: boolean; issues: string[] } | null = null;
+let cachedStripePriceConfigAt = 0;
+
+async function getStripePriceConfigStatus(): Promise<{ basic: boolean; premium: boolean; issues: string[] }> {
+  if (cachedStripePriceConfig && Date.now() - cachedStripePriceConfigAt < STRIPE_PRICE_CONFIG_CACHE_MS) {
+    return cachedStripePriceConfig;
+  }
+  try {
+    const { basic, premium } = await getStripeProvider().verifyPriceConfig();
+    const issues = [basic.error, premium.error].filter((msg): msg is string => Boolean(msg));
+    cachedStripePriceConfig = { basic: basic.valid, premium: premium.valid, issues };
+  } catch (err) {
+    // e.g. STRIPE_SECRET_KEY itself isn't set — verifyPriceConfig() couldn't
+    // even attempt the live check.
+    const message = err instanceof Error ? err.message : String(err);
+    cachedStripePriceConfig = { basic: false, premium: false, issues: [message] };
+  }
+  cachedStripePriceConfigAt = Date.now();
+  // /api/system/health is intentionally unauthenticated (for uptime
+  // monitors), so the specific Price ID/error text must NEVER be returned
+  // in that public response — log it instead to systemErrors, visible only
+  // via the admin-gated /api/system/errors endpoint, at most once per cache
+  // window so a persistently-broken Price ID doesn't spam the error log on
+  // every poll.
+  if (cachedStripePriceConfig.issues.length) {
+    for (const issue of cachedStripePriceConfig.issues) {
+      await monitoringService.logError({
+        type: 'payment_error', endpoint: '/api/system/health',
+        message: `Stripe Price ID configuration problem: ${issue}`,
+      });
+    }
+  }
+  return cachedStripePriceConfig;
+}
 
 export type ErrorType =
   | 'api_error'
@@ -76,8 +119,15 @@ export const monitoringService = {
     // Email check — just verify key is present
     emailOk = !!process.env.RESEND_API_KEY;
 
-    // Stripe check — verify key is present
-    stripeOk = !!process.env.STRIPE_SECRET_KEY;
+    // Stripe check — the secret key must be present AND the configured
+    // Basic/Premium Price IDs must actually resolve to real, active Prices
+    // in that same Stripe account/mode. A present-but-wrong Price ID (e.g.
+    // copied from a different Stripe account/mode) previously reported as
+    // healthy here while every real subscription attempt silently 400'd —
+    // see StripeProvider.verifyPriceConfig().
+    const stripeKeyOk = !!process.env.STRIPE_SECRET_KEY;
+    const priceConfig = stripeKeyOk ? await getStripePriceConfigStatus() : null;
+    stripeOk = stripeKeyOk && Boolean(priceConfig?.basic) && Boolean(priceConfig?.premium);
 
     // Flutterwave check — verify key is present
     flutterwaveOk = !!process.env.FLUTTERWAVE_SECRET_KEY;

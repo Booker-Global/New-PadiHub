@@ -523,4 +523,51 @@ export class StripeProvider implements IPaymentProvider {
       ...(account.requirements?.past_due ?? []),
     ];
   }
+
+  /**
+   * Actively verify that STRIPE_PRICE_ID_BASIC_MONTHLY and
+   * STRIPE_PRICE_ID_PREMIUM_MONTHLY resolve to real, active Price objects in
+   * whichever Stripe account/mode STRIPE_SECRET_KEY currently points to.
+   *
+   * createSubscription()'s resource_missing catch above only surfaces a
+   * misconfigured Price ID the first time a real member's onboarding
+   * happens to trigger it — which is exactly what previously showed up as a
+   * silent, unexplained string of `POST /v1/subscriptions 400 ERR` entries
+   * in the Stripe dashboard logs (e.g. after a Price ID was copied from a
+   * different Stripe account/mode during a key rotation) with no clear
+   * signal anywhere in PadiHub itself. Called at boot (see entry.ts) and
+   * from monitoringService.getHealthStatus() so this class of
+   * misconfiguration is caught immediately and loudly instead.
+   */
+  async verifyPriceConfig(): Promise<{
+    basic: { configured: boolean; valid: boolean; error?: string };
+    premium: { configured: boolean; valid: boolean; error?: string };
+  }> {
+    const stripe = getStripe();
+    const check = async (envVar: string): Promise<{ configured: boolean; valid: boolean; error?: string }> => {
+      const priceId = process.env[envVar];
+      if (!priceId) return { configured: false, valid: false, error: `${envVar} is not set.` };
+      try {
+        const price = await stripe.prices.retrieve(priceId);
+        if (!price.active) {
+          return {
+            configured: true, valid: false,
+            error: `${envVar} ("${priceId}") exists but is archived (active: false) in the current Stripe account/mode — reactivate it or point ${envVar} at an active Price.`,
+          };
+        }
+        return { configured: true, valid: true };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          configured: true, valid: false,
+          error: `${envVar} ("${priceId}") could not be retrieved from the current Stripe account/mode: ${message}`,
+        };
+      }
+    };
+    const [basic, premium] = await Promise.all([
+      check('STRIPE_PRICE_ID_BASIC_MONTHLY'),
+      check('STRIPE_PRICE_ID_PREMIUM_MONTHLY'),
+    ]);
+    return { basic, premium };
+  }
 }
