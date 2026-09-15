@@ -827,21 +827,35 @@ export async function weeklyExpiredInvitationCleanup(): Promise<void> {
 /**
  * Check subscription health — notify users with past_due subscriptions.
  *
- * Before nagging, give Stripe (GB) subscriptions one more automatic chance
- * to self-heal via subscriptionService.retryStripeIncompleteSubscriptionCharge
- * — which now also re-checks Stripe for a different, genuinely
- * active/trialing subscription object for the same customer (see
- * reconcileStaleStripeSubscriptionReference), covering members whose local
- * `provider_subscription_id` was left pointing at an abandoned duplicate
- * subscription by the past_due duplicate-subscription bug (PR #49/50).
- * Without this, such an account would otherwise keep being told its
- * payment is "overdue" every week forever, even once Stripe's own
- * dashboard already shows the real subscription as active/succeeded — the
- * only way to unstick it would have been to manually run the one-off
- * reconcileStaleStripeSubscriptionReferences.ts script. Flutterwave (NG)
- * has no equivalent reconciliation (no multi-subscription-object concept),
- * so this only applies to Stripe.
+ * Before nagging, this job can give Stripe (GB) subscriptions one more
+ * automatic chance to self-heal via
+ * subscriptionService.retryStripeIncompleteSubscriptionCharge — which also
+ * re-checks Stripe for a different, genuinely active/trialing subscription
+ * object for the same customer (see reconcileStaleStripeSubscriptionReference),
+ * covering members whose local `provider_subscription_id` was left pointing
+ * at an abandoned duplicate subscription by the past_due
+ * duplicate-subscription bug (PR #49/50). Without this, such an account
+ * would otherwise keep being told its payment is "overdue" every week
+ * forever, even once Stripe's own dashboard already shows the real
+ * subscription as active/succeeded — the only way to unstick it would have
+ * been to manually run the one-off reconcileStaleStripeSubscriptionReferences.ts
+ * script. Flutterwave (NG) has no equivalent reconciliation (no
+ * multi-subscription-object concept), so this only ever applied to Stripe.
+ *
+ * CURRENTLY DISABLED via WEEKLY_SUBSCRIPTION_SELF_HEAL_ENABLED below: this
+ * self-heal step is temporarily switched off (the job still runs and still
+ * sends the "past due" notification/renewal-reminder emails below — only
+ * the retry call itself is skipped) while the actual duplicate-subscription
+ * root cause is fixed and verified — see StripeProvider.createSubscription,
+ * which now lists a customer's existing Stripe subscriptions and reuses any
+ * active/trialing one instead of ever creating a second, plus a
+ * user-ID-derived Stripe idempotency key on the create call itself as a
+ * hard backstop. Until that fix is confirmed working in production, no
+ * subscription-related self-heal/retry should run unsupervised — re-enable
+ * this flag once confirmed, then delete it and the `if` below.
  */
+const WEEKLY_SUBSCRIPTION_SELF_HEAL_ENABLED = false;
+
 export async function weeklySubscriptionHealthCheck(): Promise<void> {
   await runJob('weekly_subscription_health_check', async () => {
     const pastDue = await db.select({
@@ -854,7 +868,7 @@ export async function weeklySubscriptionHealthCheck(): Promise<void> {
       .where(eq(schema.subscriptions.billing_status, 'past_due'));
 
     for (const sub of pastDue) {
-      if (sub.provider === 'stripe' && sub.provider_subscription_id) {
+      if (WEEKLY_SUBSCRIPTION_SELF_HEAL_ENABLED && sub.provider === 'stripe' && sub.provider_subscription_id) {
         try {
           const healed = await subscriptionService.retryStripeIncompleteSubscriptionCharge(sub.user_id, sub.provider_subscription_id);
           if (healed) continue;

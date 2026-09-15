@@ -43,6 +43,19 @@ type EligibilityUser = {
 const SUBSCRIPTION_RETRY_COOLDOWN_MS = 5 * 60 * 1000;
 
 /**
+ * TEMPORARY KILL-SWITCH — companion to WEEKLY_SUBSCRIPTION_SELF_HEAL_ENABLED
+ * in scheduledJobs.ts (see that flag's comment for the full duplicate-Stripe-
+ * subscription root cause/fix). Disabled so this eligibility-retry
+ * auto-trigger can't call subscriptionService.activateSubscriptionIfEligible
+ * — and, transitively, retryStripeIncompleteSubscriptionCharge — on every
+ * dashboard/eligibility check while the create-path fix (StripeProvider.
+ * createSubscription's list-and-reuse + idempotency-key guard) is being
+ * verified in production. Flip back to `true` once confirmed no more
+ * duplicates are being created, then delete this flag and the `if` below.
+ */
+const ELIGIBILITY_RETRY_AUTO_TRIGGER_ENABLED = false;
+
+/**
  * Self-heal for `users.subscription_status`: a subscription can genuinely
  * already be confirmed with the provider — billing_status 'active' (real
  * billing live) or 'paused' (Section D.2 deferred billing: equally
@@ -77,6 +90,18 @@ const SUBSCRIPTION_RETRY_COOLDOWN_MS = 5 * 60 * 1000;
  * instead of attempting yet another live provider charge that has already
  * proven it won't succeed — this is what stops the recurring "subscription
  * payment failed" emails for a member who has done everything they can do.
+ *
+ * CURRENTLY DISABLED (see ELIGIBILITY_RETRY_AUTO_TRIGGER_ENABLED above): the
+ * live provider-retry branch below (the `activateSubscriptionIfEligible`
+ * call, and transitively `retryStripeIncompleteSubscriptionCharge`) is
+ * short-circuited to always return false, so a member whose subscription
+ * isn't yet confirmed with the provider is simply reported not-yet-active
+ * on every dashboard/eligibility check instead of being auto-retried — this
+ * does NOT affect the local-only `subscription_status` sync above (that
+ * branch never contacts the provider, so it stays enabled). Onboarding
+ * completion (selectPlan/payment-method-save/payout-save/identity
+ * verification) still activates via its own direct
+ * `activateSubscriptionIfEligible` call, unaffected by this flag.
  */
 async function refreshSubscriptionActivationStatus(userId: string, eligibleForActivation: boolean, fullyVerifiedSetup: boolean): Promise<boolean> {
   const subRows = await db.select({
@@ -92,6 +117,7 @@ async function refreshSubscriptionActivationStatus(userId: string, eligibleForAc
     return true;
   }
 
+  if (!ELIGIBILITY_RETRY_AUTO_TRIGGER_ENABLED) return false;
   if (!eligibleForActivation) return false;
   // Deliberately keyed off subscriptions.last_activation_attempt_at, NOT
   // updated_at — updated_at is also bumped by writes that have nothing to
