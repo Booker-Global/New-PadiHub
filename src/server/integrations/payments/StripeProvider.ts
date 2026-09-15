@@ -395,9 +395,12 @@ export class StripeProvider implements IPaymentProvider {
    * duplicate-subscription comments and activateSubscription()'s `past_due`
    * branch above — before that fix shipped, a member could end up with more
    * than one Stripe subscription object, only one of which ever actually
-   * went active). Never mutates anything.
+   * went active). Never mutates anything. `created` (Stripe's own creation
+   * timestamp, seconds since epoch) is included alongside the fields
+   * already relied on by createSubscription/reconcileStaleStripeSubscriptionReference
+   * purely for reporting purposes — see reportDuplicateActiveStripeSubscriptions.ts.
    */
-  async listSubscriptionsForCustomer(customerId: string): Promise<{ id: string; status: Stripe.Subscription.Status; currentPeriodEnd: number }[]> {
+  async listSubscriptionsForCustomer(customerId: string): Promise<{ id: string; status: Stripe.Subscription.Status; currentPeriodEnd: number; created: number }[]> {
     const stripe = getStripe();
     const subscriptions = await stripe.subscriptions.list({ customer: customerId, limit: 100 });
     return subscriptions.data
@@ -405,6 +408,7 @@ export class StripeProvider implements IPaymentProvider {
         id:              sub.id,
         status:          sub.status,
         currentPeriodEnd: (sub as unknown as { current_period_end: number }).current_period_end,
+        created:          sub.created,
       }))
       .sort((a, b) => b.currentPeriodEnd - a.currentPeriodEnd);
   }
