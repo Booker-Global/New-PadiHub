@@ -1025,6 +1025,61 @@ export const subscriptionService = {
   },
 
   /**
+   * ONE-OFF RETROACTIVE BACKFILL support — see
+   * src/server/scripts/backfillMissingSubscriptionConfirmations.ts. Covers
+   * accounts whose local `subscriptions` row is already billing_status=
+   * 'active' (so the data itself is correct) but which never got a
+   * billing-history-visible confirmation for it — the exact gap just fixed
+   * in webhookStripeController.ts's invoice.payment_succeeded handler for
+   * subscriptions confirmed asynchronously via webhook rather than
+   * synchronously inside createSubscription(). Idempotent: a user who
+   * already has a SUBSCRIPTION_CREATED or STRIPE_SUBSCRIPTION_FIRST_CHARGE
+   * billing-history entry is left untouched, so re-running this is always
+   * safe. Returns true only if it actually sent a backfilled confirmation.
+   */
+  async backfillMissingActivationConfirmation(userId: string): Promise<boolean> {
+    const subRows = await db.select().from(schema.subscriptions).where(eq(schema.subscriptions.user_id, userId)).limit(1);
+    if (!subRows.length) return false;
+    const sub = subRows[0];
+    if (sub.provider !== 'stripe' || sub.billing_status !== 'active') return false;
+
+    const alreadyConfirmed = await db.select({ id: schema.auditLogs.id }).from(schema.auditLogs)
+      .where(and(
+        eq(schema.auditLogs.user_id, userId),
+        inArray(schema.auditLogs.action, ['SUBSCRIPTION_CREATED', 'STRIPE_SUBSCRIPTION_FIRST_CHARGE']),
+      )).limit(1);
+    if (alreadyConfirmed.length) return false;
+
+    const userRows = await db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1);
+    if (!userRows.length) return false;
+    const user = userRows[0];
+    if (!isSubscriptionTierKey(user.subscription_tier)) return false;
+
+    await createAuditLog({
+      userId, action: 'STRIPE_SUBSCRIPTION_FIRST_CHARGE', entity: 'subscriptions', entityId: sub.id,
+      metadata: {
+        subscriptionId: sub.provider_subscription_id,
+        tier: user.subscription_tier,
+        amount_display: formatTierPrice(user.subscription_tier, user.country),
+        backfilled: true,
+      },
+    });
+    await sendSubscriptionCreatedEmail(
+      user.email,
+      SUBSCRIPTION_TIERS[user.subscription_tier].name,
+      formatTierPrice(user.subscription_tier, user.country),
+      sub.renewal_date ? new Date(sub.renewal_date).toLocaleDateString('en-GB') : 'your next billing date',
+    );
+    await notificationService.create({
+      userId, type: 'subscription_payment_succeeded',
+      title: 'Payment successful — your subscription is active',
+      message: 'Your card was charged successfully and your PadiHub subscription is now active.',
+    });
+
+    return true;
+  },
+
+  /**
    * Section 7 — the one-and-only 72-hour retry for a failed Flutterwave
    * "first charge on joining an active group" (see
    * reconcileBillingForActiveGroupMembership's NG branch above). Called by
