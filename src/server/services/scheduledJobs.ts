@@ -931,6 +931,18 @@ export async function monthlySubscriptionRenewalCharge(): Promise<void> {
     for (const sub of due) {
       if (sub.provider !== 'flutterwave') continue;
 
+      // A renewal charge that came back 'pending' last time (extra
+      // authentication in progress — see the `pending` branch below) is
+      // deliberately left `billing_status: 'active'` with its `renewal_date`
+      // unchanged, so it stays in this `due` query until confirmed — either
+      // by webhookFlutterwaveController's charge.completed event (the
+      // normal path) or, failing that, by this job re-attempting it.
+      // Skip re-charging (and risking a duplicate charge) within a day of
+      // the last attempt to give the webhook time to arrive first.
+      if (sub.last_activation_attempt_at && Date.now() - sub.last_activation_attempt_at.getTime() < 20 * 60 * 60 * 1000) {
+        continue;
+      }
+
       const userRows = await db.select().from(schema.users).where(eq(schema.users.id, sub.user_id)).limit(1);
       if (!userRows.length) continue;
       let user = userRows[0];
@@ -969,6 +981,8 @@ export async function monthlySubscriptionRenewalCharge(): Promise<void> {
       const amountInSmallestUnit = Math.round(getFlutterwaveSubscriptionAmount(user.subscription_tier) * 100);
       const renewalRef = `sub-renewal-${sub.id}-${sub.renewal_date?.getTime() ?? Date.now()}`;
 
+      await db.update(schema.subscriptions).set({ last_activation_attempt_at: new Date() }).where(eq(schema.subscriptions.id, sub.id));
+
       try {
         const result = await getFlutterwaveProvider().chargeContribution({
           customerId:      user.email,
@@ -1002,6 +1016,19 @@ export async function monthlySubscriptionRenewalCharge(): Promise<void> {
           } catch (emailError) {
             console.error(`[ScheduledJobs] Failed to send subscription renewal email to ${user.email} for subscription ${sub.id}:`, emailError);
           }
+        } else if (result.status === 'pending') {
+          // Flutterwave is still confirming this charge asynchronously —
+          // unlike a genuine failure, this must NOT demote the subscription
+          // to past_due/expired or tell the member the payment failed, since
+          // it may still succeed via the charge.completed webhook (see
+          // subscriptionService.confirmFlutterwaveSubscriptionCharge).
+          // billing_status/renewal_date are deliberately left untouched so
+          // this same renewal is retried (see the cooldown guard above) if
+          // the webhook confirmation never arrives.
+          await notificationService.create({
+            userId: user.id, type: 'subscription_payment_processing', title: 'Payment is being processed',
+            message: 'Your subscription renewal payment is still being confirmed. We\'ll email you as soon as it goes through.',
+          });
         } else {
           await db.update(schema.subscriptions).set({ billing_status: 'past_due' }).where(eq(schema.subscriptions.id, sub.id));
           await db.update(schema.users).set({ subscription_status: 'expired' }).where(eq(schema.users.id, user.id));

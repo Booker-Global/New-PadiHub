@@ -510,8 +510,9 @@ export const membershipService = {
   /**
    * Group leader kicks off unanimous member-admission governance voting
    * (Section 4) for an existing pending join request, instead of deciding
-   * unilaterally. Every existing active member (including the leader, who
-   * is auto-approved as the proposer) must accept within 48 hours via
+   * unilaterally. Every existing active member — including the leader, who
+   * is only recorded as the proposer here and must still cast their own
+   * explicit vote like everyone else — must accept within 48 hours via
    * emailed accept/decline links; a single decline or a timeout invalidates
    * the invite (voteService handles closing/expiry and calls back into
    * _activatePendingMembership / _invalidatePendingMembership above).

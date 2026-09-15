@@ -145,14 +145,17 @@ export const userService = {
       }
     }
 
-    // Group-membership usage against the member's tier limit (counts both
-    // active memberships and outstanding pending join requests, matching
-    // groupService.countGroupsJoined() — the same figure enforced server-side
-    // when creating/joining a group) so the dashboard can show "2 of 3 groups
-    // joined" without drifting from what the backend actually allows.
-    const pendingMemberships = memberships.filter(m => m.status === 'pending');
-    const groupsJoinedCount = activeMemberships.length + pendingMemberships.length;
-    const groupsLedCount = activeMemberships.filter(m => m.role === 'leader').length;
+    // Group-membership usage against the member's tier limit. Delegates to
+    // groupService's counters (rather than re-deriving from `memberships`
+    // locally) because those already exclude memberships in groups that
+    // have since been closed/force-closed — closing a group only flips
+    // savingsGroups.status, it never removes the membership row, so a
+    // purely-local count here would keep counting a closed group against
+    // the member's plan limit forever. This keeps the dashboard's "2 of 3
+    // groups joined" figure from drifting from what the backend actually
+    // allows when creating/joining a group.
+    const groupsJoinedCount = await groupService.countGroupsJoined(userId);
+    const groupsLedCount = await groupService.countGroupsLed(userId);
     const tierLimits = isSubscriptionTierKey(user.subscription_tier)
       ? SUBSCRIPTION_TIERS[user.subscription_tier]
       : null;
