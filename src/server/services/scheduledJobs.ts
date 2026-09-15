@@ -842,6 +842,15 @@ export async function weeklyExpiredInvitationCleanup(): Promise<void> {
  * has no equivalent reconciliation (no multi-subscription-object concept),
  * so this only applies to Stripe.
  */
+// TEMPORARY KILL-SWITCH — see the duplicate-Stripe-subscription fix
+// (StripeProvider.createSubscription's list-and-reuse + idempotency-key
+// guard, plus subscriptionService's single guarded creation entry point).
+// Disabled so the weekly job can't create/retry anything subscription-
+// related while that fix is being verified in production — flip back to
+// `true` once confirmed no more duplicates are being created, then delete
+// this flag and the `if` below.
+const WEEKLY_SUBSCRIPTION_SELF_HEAL_ENABLED = false;
+
 export async function weeklySubscriptionHealthCheck(): Promise<void> {
   await runJob('weekly_subscription_health_check', async () => {
     const pastDue = await db.select({
@@ -854,7 +863,7 @@ export async function weeklySubscriptionHealthCheck(): Promise<void> {
       .where(eq(schema.subscriptions.billing_status, 'past_due'));
 
     for (const sub of pastDue) {
-      if (sub.provider === 'stripe' && sub.provider_subscription_id) {
+      if (WEEKLY_SUBSCRIPTION_SELF_HEAL_ENABLED && sub.provider === 'stripe' && sub.provider_subscription_id) {
         try {
           const healed = await subscriptionService.retryStripeIncompleteSubscriptionCharge(sub.user_id, sub.provider_subscription_id);
           if (healed) continue;

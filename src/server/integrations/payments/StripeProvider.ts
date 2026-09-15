@@ -196,6 +196,40 @@ export class StripeProvider implements IPaymentProvider {
       );
     }
 
+    // ── Duplicate-subscription hard-backstop ──────────────────────────────
+    // This is the ONLY place in the codebase that ever calls
+    // stripe.subscriptions.create — subscriptionService.createSubscription()
+    // (the shared entry point behind every trigger: dashboard load, boot
+    // sweep, weekly health check, onboarding completion) and switchPlan()'s
+    // upgrade path both funnel through here. Multiple independent triggers
+    // racing to activate the same member (e.g. a boot-time sweep and a
+    // dashboard load landing at the same moment, before either has written
+    // its own local `subscriptions` row yet) previously each passed their own
+    // "does a row already exist locally?" check and went straight to create,
+    // sometimes leaving one customer with several separate active/trialing
+    // Stripe subscription objects (confirmed: up to 5 for one account in
+    // sandbox). Guard unconditionally, for every caller, in two layers:
+    //   1. Always list this customer's existing Stripe subscriptions first
+    //      (live, authoritative — not our local copy) and reuse one that's
+    //      already active/trialing instead of creating a second.
+    //   2. As a hard backstop against a genuine race (two callers both
+    //      passing step 1 in the same instant), the create call below
+    //      carries a Stripe idempotency key derived from the user ID (plus
+    //      the price, so a real tier switch — which cancels the old
+    //      subscription and creates a new one for a different price — isn't
+    //      rejected by Stripe's "same key, different params" idempotency
+    //      error): Stripe guarantees at most one subscription object is ever
+    //      created for a given key.
+    const existingForCustomer = await this.listSubscriptionsForCustomer(params.customerId);
+    const reusableSubscription = existingForCustomer.find(s => s.status === 'active' || s.status === 'trialing');
+    if (reusableSubscription) {
+      const refreshed = await stripe.subscriptions.retrieve(reusableSubscription.id, {
+        expand: ['latest_invoice.payment_intent'],
+      }) as unknown as SubscriptionWithExpandedInvoice;
+      return toSubscriptionResult(refreshed);
+    }
+    const createIdempotencyKey = `subscription-create-${params.userId}-${priceId}`;
+
     // Section D.2 — billing must stay inert until the member is verified in
     // an active (3+ member) group. Stripe REJECTS `pause_collection` as an
     // "unknown parameter" on subscriptions.create (400 invalid_request_error,
@@ -237,7 +271,7 @@ export class StripeProvider implements IPaymentProvider {
               payment_settings: { save_default_payment_method: 'on_subscription' as const },
               expand: ['latest_invoice.payment_intent'],
             }),
-      }) as unknown as SubscriptionWithExpandedInvoice;
+      }, { idempotencyKey: createIdempotencyKey }) as unknown as SubscriptionWithExpandedInvoice;
     } catch (err) {
       // Stripe validates `customer` and `items[0][price]` server-side, so a
       // malformed-but-plausible-looking env var (e.g. a Price ID copied from
