@@ -3,7 +3,8 @@
  *
  * Schedules (UTC, every Monday):
  *   07:00  expired invitation cleanup
- *   07:15  subscription health check + renewal reminders
+ *   07:15  subscription renewal reminders (past_due self-heal + notification
+ *          moved to daily — see dailyJobs.ts's daily-subscription-past-due-recovery)
  *   07:30  database maintenance
  */
 import { schedules } from '@trigger.dev/sdk/v3';

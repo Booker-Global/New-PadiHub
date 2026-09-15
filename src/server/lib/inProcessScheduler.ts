@@ -57,6 +57,9 @@ const SCHEDULE: ScheduleEntry[] = [
   { jobName: 'daily_trust_score_updates', hourUtc: 7, minuteUtc: 0, cadence: 'daily', run: jobs.dailyTrustScoreUpdates },
   { jobName: 'daily_auto_charge_due_contributions', hourUtc: 7, minuteUtc: 5, cadence: 'daily', run: jobs.dailyAutoChargeDueContributions },
   { jobName: 'daily_failed_payment_check', hourUtc: 7, minuteUtc: 10, cadence: 'daily', run: jobs.dailyFailedPaymentCheck },
+  // Was weekly-only (Mondays) — a subscription stuck past_due/"Pending
+  // Charge" could otherwise wait up to 6 days for its next automatic retry.
+  { jobName: 'daily_subscription_past_due_recovery', hourUtc: 7, minuteUtc: 12, cadence: 'daily', run: jobs.dailySubscriptionPastDueRecovery },
   { jobName: 'daily_contribution_default_retry', hourUtc: 7, minuteUtc: 15, cadence: 'daily', run: jobs.dailyContributionDefaultRetry },
   { jobName: 'daily_group_lifecycle_expiry', hourUtc: 7, minuteUtc: 20, cadence: 'daily', run: jobs.dailyGroupLifecycleExpiry },
   { jobName: 'daily_billing_active_group_reconciliation', hourUtc: 7, minuteUtc: 25, cadence: 'daily', run: jobs.dailyBillingActiveGroupReconciliation },

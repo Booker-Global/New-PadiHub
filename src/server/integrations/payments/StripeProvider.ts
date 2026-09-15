@@ -325,7 +325,7 @@ export class StripeProvider implements IPaymentProvider {
    * a subscription that's already past `incomplete` (paid, or genuinely
    * failed into `incomplete_expired`/canceled) is simply re-reported as-is
    * with no further Stripe calls. Called by
-   * scheduledJobs.weeklySubscriptionHealthCheck's self-heal so accounts
+   * scheduledJobs.dailySubscriptionPastDueRecovery's self-heal so accounts
    * stuck this way get actually billed the next time they're found still
    * `past_due`, instead of being nagged with a "payment overdue"
    * notification forever.

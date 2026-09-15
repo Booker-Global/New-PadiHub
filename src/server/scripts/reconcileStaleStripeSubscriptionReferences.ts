@@ -39,7 +39,7 @@
  * subscriptionService.reconcileStaleStripeSubscriptionReference() — this
  * script is a thin, explicitly-scoped wrapper around it — because
  * retryStripeIncompleteSubscriptionCharge() (called automatically from
- * scheduledJobs.weeklySubscriptionHealthCheck) now runs the very same check
+ * scheduledJobs.dailySubscriptionPastDueRecovery) now runs the very same check
  * for every past_due account, not just the ones hardcoded below. This
  * script remains useful to force an immediate, explicit reconciliation for
  * specific accounts without waiting for that job to next run.

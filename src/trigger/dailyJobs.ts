@@ -17,6 +17,10 @@
  *   07:00  PRIMARY charge trigger: trust-score status flip (scheduled → due)
  *   07:05  PRIMARY charge trigger: auto-charge newly-due contributions
  *   07:10  failed-payment notifications
+ *   07:12  past_due subscription self-heal + "overdue" notification (moved from
+ *          weekly to daily — see weeklyJobs.ts's note on
+ *          weeklySubscriptionHealthCheck; a subscription stuck past_due should
+ *          not have to wait up to 6 days for its next automatic retry)
  *   07:15  72-hour contribution-default retry (Section 6)
  *   07:20  stuck (draft/suspended) group lifecycle expiry (Section 1)
  *   07:22  apply pending payout day/frequency changes whose effective_date has
@@ -63,6 +67,7 @@ import {
   dailyAutoChargeDueContributions,
   dailyChargeCatchUp,
   dailyFailedPaymentCheck,
+  dailySubscriptionPastDueRecovery,
   dailyNotificationCleanup,
   dailyContributionDefaultRetry,
   dailyGroupLifecycleExpiry,
@@ -153,6 +158,15 @@ export const dailyFailedPaymentCheckTask = schedules.task({
   run: async () => {
     await dailyFailedPaymentCheck();
     return { ok: true, task: 'daily-failed-payment-check' };
+  },
+});
+
+export const dailySubscriptionPastDueRecoveryTask = schedules.task({
+  id: 'daily-subscription-past-due-recovery',
+  cron: '12 7 * * *',
+  run: async () => {
+    await dailySubscriptionPastDueRecovery();
+    return { ok: true, task: 'daily-subscription-past-due-recovery' };
   },
 });
 

@@ -17,6 +17,7 @@ import { PaymentProviderConfigError } from '../integrations/payments/PaymentProv
 import { groupService } from './groupService.js';
 import { membershipService } from './membershipService.js';
 import { notificationService } from './notificationService.js';
+import { monitoringService } from './monitoringService.js';
 import {
   SUBSCRIPTION_TIERS,
   isSubscriptionTierKey,
@@ -251,7 +252,7 @@ async function chargeFirstFlutterwaveSubscription(
     // confirmFlutterwaveSubscriptionCharge below to finalize
     // billing_status/emails/audit-log once Flutterwave reports the
     // definitive outcome). billing_status stays 'past_due' (as already
-    // inserted above) so weeklySubscriptionHealthCheck still nags the
+    // inserted above) so dailySubscriptionPastDueRecovery still nags the
     // member if the webhook confirmation never arrives.
     await notificationService.create({
       userId, type: 'subscription_payment_processing', title: 'Payment is being processed',
@@ -561,7 +562,7 @@ export const subscriptionService = {
   },
 
   /**
-   * Retroactive remediation, called from weeklySubscriptionHealthCheck's
+   * Retroactive remediation, called from dailySubscriptionPastDueRecovery's
    * self-heal (scheduledJobs.ts): re-attempts off-session collection of an
    * EXISTING Stripe subscription's still-open, never-actually-attempted
    * first invoice (see StripeProvider.retryIncompleteSubscriptionCharge/
@@ -600,14 +601,37 @@ export const subscriptionService = {
     try {
       result = await getStripeProvider().retryIncompleteSubscriptionCharge(providerSubscriptionId);
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       console.error('[SubscriptionService] Retry of existing incomplete Stripe subscription failed:', {
-        providerSubscriptionId, userId, error: err instanceof Error ? err.message : err,
+        providerSubscriptionId, userId, error: message,
+      });
+      // The team must be able to see WHY a subscription is still stuck
+      // without digging through raw server logs — previously this was
+      // console.error-only and invisible to anyone but a developer with
+      // direct server access. Visible via the admin-gated
+      // /api/system/errors endpoint (monitoringService.getRecentErrors).
+      await monitoringService.logError({
+        type: 'payment_error',
+        endpoint: 'subscriptionService.retryStripeIncompleteSubscriptionCharge',
+        message: `Retry of incomplete Stripe subscription ${providerSubscriptionId} for user ${userId} (${user.email}) failed: ${message}`,
       });
       return false;
     }
 
     const billingIsActive = result.status === 'active' || result.status === 'trialing';
-    if (!billingIsActive) return false;
+    if (!billingIsActive) {
+      // Stripe was reached successfully, but the invoice still didn't clear
+      // (e.g. genuinely declined, or still needs interactive 3D-Secure) —
+      // same visibility requirement as the catch block above: record the
+      // actual provider status so the team knows this isn't a silent gap,
+      // it's a real, still-unresolved payment outcome.
+      await monitoringService.logError({
+        type: 'payment_error',
+        endpoint: 'subscriptionService.retryStripeIncompleteSubscriptionCharge',
+        message: `Retry of incomplete Stripe subscription ${providerSubscriptionId} for user ${userId} (${user.email}) did not activate — provider status: "${result.status}".`,
+      });
+      return false;
+    }
 
     await db.update(schema.subscriptions)
       .set({ billing_status: 'active', renewal_date: result.renewalDate })
@@ -788,6 +812,18 @@ export const subscriptionService = {
         type: 'subscription_payment_failed',
         title: 'Payment could not be completed',
         message: 'We could not confirm payment for your subscription. Please check your card details or complete any additional verification your bank requires.',
+      });
+      // Previously this outcome was only ever visible in raw server
+      // console output — nobody without direct server access (including the
+      // team) could see why a specific member's subscription got stuck.
+      // Recorded here, visible via the admin-gated /api/system/errors
+      // endpoint, every time (not cooldown-gated like the member-facing
+      // email below — this is the team's diagnostic trail, not a
+      // customer notification).
+      await monitoringService.logError({
+        type: 'payment_error',
+        endpoint: 'subscriptionService.createSubscription',
+        message: `Subscription charge for user ${userId} (${user.email}, ${country}) did not activate — provider "${country === 'NG' ? 'flutterwave' : 'stripe'}" status: "${result.status}".`,
       });
       // This branch is reached again on every retry of a persistently
       // declined/unconfirmed card, so only actually email once per hour.
@@ -1170,12 +1206,19 @@ export const subscriptionService = {
         }
         return;
       }
-      // Any other provider/network error here is already turned into a
-      // "payment could not be completed" notification+email by
-      // createSubscription() itself before it throws — just log for
-      // visibility, never let it bubble up and fail the group-launch/join
-      // request that triggered this reconciliation.
-      console.error('[SubscriptionService] Could not create Stripe subscription on group launch:', err instanceof Error ? err.message : err);
+      // A genuine provider/network error reaching Stripe itself (as opposed
+      // to Stripe being reached but declining the charge, which
+      // createSubscription() already handles and notifies the member about
+      // without throwing) — previously only visible in raw server console
+      // output. Recorded here too so the team doesn't have to guess why a
+      // specific member's "Pending Charge" never resolved.
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('[SubscriptionService] Could not create Stripe subscription on group launch:', message);
+      await monitoringService.logError({
+        type: 'payment_error',
+        endpoint: 'subscriptionService.reconcileBillingForActiveGroupMembership',
+        message: `Could not create/charge Stripe subscription for user ${userId} (${user.email}) on group launch: ${message}`,
+      });
     }
   },
 
