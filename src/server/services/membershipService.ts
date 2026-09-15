@@ -270,7 +270,7 @@ export const membershipService = {
         const { contributionService } = await import('./contributionService.js');
         await contributionService.enrollMemberInCurrentCycleIfMissing(groupId, userId);
       } catch (error) {
-        console.error(`[MembershipService] Failed to enroll member ${userId} in current cycle for group ${groupId}:`, error);
+        console.error('[MembershipService] Failed to enroll member in current cycle:', { userId, groupId, error });
       }
 
       return { success: true, status: 'active' as const, message: 'You have joined the group.' };
@@ -461,7 +461,7 @@ export const membershipService = {
       const { contributionService } = await import('./contributionService.js');
       await contributionService.enrollMemberInCurrentCycleIfMissing(group.id, membership.user_id);
     } catch (error) {
-      console.error(`[MembershipService] Failed to enroll member ${membership.user_id} in current cycle for group ${group.id}:`, error);
+      console.error('[MembershipService] Failed to enroll member in current cycle:', { userId: membership.user_id, groupId: group.id, error });
     }
 
     return { success: true, rotation_order: nextRotationOrder };
