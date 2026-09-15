@@ -10,6 +10,7 @@ import { getPaymentProvider } from '../integrations/payments/PaymentProviderFact
 import { hashEmail } from '../lib/emailBlocklist.js';
 import { sendAccountDeletedEmail, type AccountDeletionReason } from '../integrations/email/emailService.js';
 import { membershipService } from './membershipService.js';
+import { groupService } from './groupService.js';
 
 function getDeletedEmail(userId: string): string {
   return `deleted-${userId}@padihub.invalid`;
@@ -449,6 +450,102 @@ export const userService = {
     await sendAccountDeletedEmail(user.email, accountHolderName, reason);
 
     return { hardDeleted };
+  },
+
+  /**
+   * Admin "force delete" — a genuine HARD delete of the user row itself
+   * (unlike deleteAccount()/systemDeleteAccount() above, which anonymize in
+   * place and only additionally hard-delete the row when it turns out to
+   * have zero retained dependencies, which is rare in practice). Every row
+   * anywhere in the platform that references this user is removed first, in
+   * FK-safe order, and any group the user LEADS is force-deleted too (see
+   * groupService.forceDeleteGroup) since leader_id has no cascade and can't
+   * be left dangling. The email is deliberately NEVER added to
+   * emailBlocklist — the admin has removed the account, not judged the
+   * person, so the address is immediately free for a fresh sign-up.
+   */
+  async forceDeleteUser(userId: string, adminUserId: string, ipAddress?: string) {
+    const userRows = await db.select({
+      id:           schema.users.id,
+      first_name:   schema.users.first_name,
+      last_name:    schema.users.last_name,
+      display_name: schema.users.display_name,
+      email:        schema.users.email,
+      country:      schema.users.country,
+      provider_subscription_id: schema.subscriptions.provider_subscription_id,
+      billing_status:           schema.subscriptions.billing_status,
+      provider:                 schema.subscriptions.provider,
+    }).from(schema.users)
+      .leftJoin(schema.subscriptions, eq(schema.subscriptions.user_id, schema.users.id))
+      .where(eq(schema.users.id, userId)).limit(1);
+    if (!userRows.length) throw new AppError('User not found.', 404);
+    const user = userRows[0];
+    const accountHolderName = getDeletedDisplayName(user);
+
+    if (user.provider_subscription_id && user.billing_status !== 'cancelled') {
+      try {
+        const provider = getPaymentProvider(user.provider === 'flutterwave' ? 'NG' : 'GB');
+        await provider.cancelSubscription({ subscriptionId: user.provider_subscription_id });
+      } catch (error) {
+        console.error('[UserService] Failed to cancel provider subscription during force delete:', error);
+      }
+    }
+
+    // Groups this user leads can't be left with a dangling leader_id —
+    // force-delete them too, wiping every member's data for that group
+    // (must run BEFORE the transaction below, as its own separate
+    // transaction — a group this user leads may have other members whose
+    // rows aren't otherwise touched here).
+    const ledGroups = await db.select({ id: schema.savingsGroups.id })
+      .from(schema.savingsGroups).where(eq(schema.savingsGroups.leader_id, userId));
+    for (const g of ledGroups) {
+      await groupService.forceDeleteGroup(g.id, adminUserId, ipAddress);
+    }
+
+    await db.transaction(async (tx) => {
+      const ownVoteRows = await tx.select({ id: schema.votes.id })
+        .from(schema.votes)
+        .where(eq(schema.votes.proposer_id, userId));
+      const targetedVoteRows = await tx.select({ id: schema.votes.id })
+        .from(schema.votes)
+        .where(eq(schema.votes.target_member_id, userId));
+      const ownVoteIds = [...new Set([...ownVoteRows, ...targetedVoteRows].map((v) => v.id))];
+      if (ownVoteIds.length) {
+        await tx.delete(schema.voteResponses).where(inArray(schema.voteResponses.vote_id, ownVoteIds));
+        await tx.delete(schema.voteEmailTokens).where(inArray(schema.voteEmailTokens.vote_id, ownVoteIds));
+        await tx.delete(schema.votes).where(inArray(schema.votes.id, ownVoteIds));
+      }
+      // Responses/tokens this user issued on OTHER members' votes (which
+      // remain, since only this user's own proposed/targeted votes above
+      // were removed).
+      await tx.delete(schema.voteResponses).where(eq(schema.voteResponses.member_id, userId));
+      await tx.delete(schema.voteEmailTokens).where(eq(schema.voteEmailTokens.member_id, userId));
+
+      await tx.delete(schema.contributions).where(eq(schema.contributions.member_id, userId));
+      await tx.delete(schema.rotations).where(eq(schema.rotations.recipient_id, userId));
+      await tx.delete(schema.groupInvitations).where(eq(schema.groupInvitations.invited_by, userId));
+      await tx.delete(schema.memberships).where(eq(schema.memberships.user_id, userId));
+      await tx.delete(schema.notifications).where(eq(schema.notifications.user_id, userId));
+      await tx.delete(schema.subscriptions).where(eq(schema.subscriptions.user_id, userId));
+      await tx.delete(schema.emailVerificationTokens).where(eq(schema.emailVerificationTokens.user_id, userId));
+      await tx.delete(schema.passwordResetTokens).where(eq(schema.passwordResetTokens.user_id, userId));
+      await tx.delete(schema.supportTickets).where(eq(schema.supportTickets.user_id, userId));
+      await tx.update(schema.supportTickets).set({ assigned_admin: null }).where(eq(schema.supportTickets.assigned_admin, userId));
+      // Audit history is preserved, not deleted — user_id is nullable
+      // precisely so a deleted actor's past actions remain visible.
+      await tx.update(schema.auditLogs).set({ user_id: null }).where(eq(schema.auditLogs.user_id, userId));
+
+      await tx.delete(schema.users).where(eq(schema.users.id, userId));
+    });
+
+    await createAuditLog({
+      userId: adminUserId, action: 'ACCOUNT_FORCE_DELETED', entity: 'users', entityId: userId,
+      ipAddress, metadata: { deletedUserEmail: user.email, groupsLedDeleted: ledGroups.map((g) => g.id) },
+    });
+
+    await sendAccountDeletedEmail(user.email, accountHolderName, 'admin_force_deleted');
+
+    return { hardDeleted: true };
   },
 
   async deactivate(userId: string, ipAddress?: string) {

@@ -325,11 +325,10 @@ export class StripeProvider implements IPaymentProvider {
    * a subscription that's already past `incomplete` (paid, or genuinely
    * failed into `incomplete_expired`/canceled) is simply re-reported as-is
    * with no further Stripe calls. Called by
-   * subscriptionService.activateSubscriptionIfEligible's self-heal so
-   * accounts stuck this way before the fix shipped get actually billed the
-   * next time their eligibility is (re-)checked, instead of only having
-   * `users.subscription_status` optimistically flipped to 'active' with the
-   * underlying charge still never attempted.
+   * scheduledJobs.weeklySubscriptionHealthCheck's self-heal so accounts
+   * stuck this way get actually billed the next time they're found still
+   * `past_due`, instead of being nagged with a "payment overdue"
+   * notification forever.
    */
   async retryIncompleteSubscriptionCharge(subscriptionId: string): Promise<SubscriptionResult> {
     const stripe = getStripe();
@@ -351,8 +350,8 @@ export class StripeProvider implements IPaymentProvider {
    * genuinely active/trialing subscription when the locally-stored
    * `subscriptions.provider_subscription_id` points at a DIFFERENT, now-
    * abandoned subscription object (see createSubscription()'s
-   * duplicate-subscription comments and activateSubscription()'s `past_due`
-   * branch above — before that fix shipped, a member could end up with more
+   * duplicate-subscription comments above — before that fix shipped, a
+   * member could end up with more
    * than one Stripe subscription object, only one of which ever actually
    * went active). Never mutates anything. `created` (Stripe's own creation
    * timestamp, seconds since epoch) is included alongside the fields

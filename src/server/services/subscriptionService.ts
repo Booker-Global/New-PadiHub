@@ -57,8 +57,8 @@ function isStripeSubscriptionAwaitingConfirmation(country: string, providerStatu
 }
 
 /** Never re-send the "subscription payment could not be completed" email
- * more than once per hour for the same member — see
- * activateSubscriptionIfEligible's catch block below. */
+ * more than once per hour for the same member — see createSubscription's
+ * catch block below. */
 const ACTIVATION_FAILURE_EMAIL_COOLDOWN_MS = 60 * 60 * 1000;
 
 /**
@@ -406,10 +406,10 @@ export const subscriptionService = {
   },
 
   /**
-   * Retroactive remediation, called from activateSubscriptionIfEligible's
-   * self-heal above: re-attempts off-session collection of an EXISTING
-   * Stripe subscription's still-open, never-actually-attempted first
-   * invoice (see StripeProvider.retryIncompleteSubscriptionCharge/
+   * Retroactive remediation, called from weeklySubscriptionHealthCheck's
+   * self-heal (scheduledJobs.ts): re-attempts off-session collection of an
+   * EXISTING Stripe subscription's still-open, never-actually-attempted
+   * first invoice (see StripeProvider.retryIncompleteSubscriptionCharge/
    * createSubscription's invoices.pay() fix) instead of creating a second
    * provider subscription. Returns true only once the subscription is
    * genuinely active/trialing with the provider — callers must fall back

@@ -96,20 +96,18 @@ export const users = mysqlTable('users', {
   // see paymentEligibilityService.notifyOnboardingComplete().
   onboarding_completed_email_sent_at: timestamp('onboarding_completed_email_sent_at'),
   // Last time a "your subscription payment could not be completed" email
-  // was sent for a still-failing activation attempt — every onboarding
-  // action that can trigger a retry (re-selecting a plan, saving a card,
-  // saving a payout destination, verifying identity, and the passive
-  // dashboard/join-page self-heal) calls activateSubscriptionIfEligible
-  // with no cooldown of its own, so without this a persistently-failing
-  // account was re-emailed on every single one of those actions. See
-  // subscriptionService.activateSubscriptionIfEligible.
+  // was sent for a still-failing activation attempt — every group-launch
+  // event that could trigger the first charge (see
+  // subscriptionService.reconcileBillingForActiveGroupMembership) has no
+  // cooldown of its own, so without this a persistently-failing account
+  // could be re-emailed on every single retry/sweep pass. See
+  // shouldNotifyActivationFailureByEmail in subscriptionService.ts.
   subscription_activation_failure_notified_at: timestamp('subscription_activation_failure_notified_at'),
-  // Section 1/1a — a fully-onboarded (steps a-e complete) member whose
-  // subscription is 'Pending Charge' (billing paused, see subscriptions.
-  // billing_status) because they haven't yet joined an active (3+ member)
-  // group gets a reminder every 7 days; this throttles it. Cleared whenever
-  // onboarding_completed_email_sent_at is cleared (see
-  // scheduledJobs.weeklyPendingChargeGroupJoinFollowUp).
+  // Legacy — no longer written to (the "Pending Charge, no group joined"
+  // reminder/expiry job it throttled was removed when subscription billing
+  // was rebuilt to only ever trigger on group launch — see Part C of the
+  // onboarding spec). Left in place rather than dropped, to avoid an
+  // unnecessary destructive migration for a harmless, always-null column.
   group_join_reminder_last_sent_at: timestamp('group_join_reminder_last_sent_at'),
   // Section 2 — an account that hasn't yet finished every onboarding step
   // (a-e) gets a reminder every 7 days detailing what's missing, and the

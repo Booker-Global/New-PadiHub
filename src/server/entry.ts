@@ -303,9 +303,11 @@ app.get(   '/api/admin/users/:id',                authenticate, requireRole('adm
 app.put(   '/api/admin/users/:id/suspend',        authenticate, requireRole('admin'), adminController.suspendUser);
 app.put(   '/api/admin/users/:id/reactivate',     authenticate, requireRole('admin'), adminController.reactivateUser);
 app.delete('/api/admin/users/:id',                authenticate, requireRole('admin'), adminController.deleteUser);
+app.delete('/api/admin/users/:id/force',          authenticate, requireRole('admin'), adminController.forceDeleteUser);
 app.get(   '/api/admin/groups',                   authenticate, requireRole('admin'), adminController.listGroups);
 app.get(   '/api/admin/groups/:id',               authenticate, requireRole('admin'), adminController.getGroupDetail);
 app.put(   '/api/admin/groups/:id/close',         authenticate, requireRole('admin'), adminController.forceCloseGroup);
+app.delete('/api/admin/groups/:id/force',         authenticate, requireRole('admin'), adminController.forceDeleteGroup);
 app.get(   '/api/admin/subscriptions',            authenticate, requireRole('admin'), adminController.listSubscriptions);
 app.put(   '/api/admin/subscriptions/:id/cancel', authenticate, requireRole('admin'), adminController.cancelSubscription);
 app.get(   '/api/admin/support',                  authenticate, requireRole('admin'), adminController.listTickets);

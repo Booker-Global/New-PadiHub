@@ -240,16 +240,20 @@ export async function sendPayoutDestinationUpdatedEmail(to: string, name: string
  * deletion) and `voted_out_three_times` (kicked out of a group by member
  * vote for the 3rd time — a trust/behavioural judgement, not a passive
  * lapse) both permanently block that email address from ever signing up
- * again (see emailBlocklist.ts). The other two reasons are SYSTEM-initiated
- * deletions for passive inactivity — the email address is freed up and may
- * be used to sign up again (see userService.systemDeleteAccount), so the
- * copy must say so explicitly.
+ * again (see emailBlocklist.ts). The other three reasons are all
+ * non-punitive and free the email up for a fresh sign-up: the two SYSTEM-
+ * initiated ones are passive-inactivity deletions (see
+ * userService.systemDeleteAccount), and `admin_force_deleted` is an
+ * administrator removing the account from the admin dashboard (see
+ * userService.forceDeleteUser) — none of these judge the person, so the
+ * copy must say the address can be used again.
  */
 export type AccountDeletionReason =
   | 'user_requested'
   | 'incomplete_profile_60_days'
   | 'inactive_after_cancellation_60_days'
-  | 'voted_out_three_times';
+  | 'voted_out_three_times'
+  | 'admin_force_deleted';
 
 export async function sendAccountDeletedEmail(
   to: string, name: string, reason: AccountDeletionReason = 'user_requested',
@@ -262,6 +266,7 @@ export async function sendAccountDeletedEmail(
     incomplete_profile_60_days: `Hi ${safeName}, your PadiHub profile has been deleted because your onboarding (email, identity verification, subscription plan, payment card and payout details) was not completed within 60 days.`,
     inactive_after_cancellation_60_days: `Hi ${safeName}, your PadiHub profile has been deleted because your subscription remained cancelled/inactive for 60 days without re-subscribing.`,
     voted_out_three_times: `Hi ${safeName}, your PadiHub profile has been permanently deleted because you were removed from a savings group by a member vote for the third time. This email address can no longer be used to sign up to PadiHub.`,
+    admin_force_deleted: `Hi ${safeName}, your PadiHub account has been removed by a PadiHub administrator.`,
   };
 
   await send(to, 'Your PadiHub account has been deleted', wrap(`

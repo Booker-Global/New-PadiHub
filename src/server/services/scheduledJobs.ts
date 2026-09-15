@@ -543,22 +543,20 @@ export async function dailyApplyPendingPayoutFrequencyChanges(): Promise<void> {
 }
 
 /**
- * Section D.2 — subscription billing only stays "live" while a user's
- * active-group-membership count is above zero; pause it the moment that
- * count hits exactly zero, and resume it automatically once they're a
- * verified member of an active group again. Every membership/group-status
- * change that could affect this now reconciles billing immediately at the
- * call site (groupService.activateGroup/reevaluateAfterMembershipChange,
- * membershipService.join/_activatePendingMembership/departMember) — this
- * daily sweep is just the safety net in case any of those individual call
- * sites is ever missed. See subscriptionService.reconcileBillingForActiveGroupMembership
- * for the real provider-level pause_collection/resume mechanics.
+ * Section C — a member's platform subscription is only ever created/charged
+ * once: the first time they become a verified member of a group that has
+ * actually launched (see subscriptionService.reconcileBillingForActiveGroupMembership,
+ * the sole trigger point). Every event that could make that true now
+ * reconciles billing immediately at the call site
+ * (groupService.activateGroup/reevaluateAfterMembershipChange,
+ * membershipService.join/_activatePendingMembership) — this daily sweep is
+ * just the safety net in case any of those individual call sites is ever
+ * missed. reconcileBillingForActiveGroupMembership is itself a no-op for
+ * anyone who already has a `subscriptions` row, so this only ever needs to
+ * find active-group members who don't have one yet.
  */
 export async function dailyBillingActiveGroupReconciliation(): Promise<void> {
   await runJob('daily_billing_active_group_reconciliation', async () => {
-    const subs = await db.select({ user_id: schema.subscriptions.user_id })
-      .from(schema.subscriptions)
-      .where(inArray(schema.subscriptions.billing_status, ['active', 'paused']));
     const activeGroupMembersMissingSubscription = await db.select({ user_id: schema.memberships.user_id })
       .from(schema.memberships)
       .innerJoin(schema.savingsGroups, eq(schema.memberships.group_id, schema.savingsGroups.id))
@@ -569,10 +567,7 @@ export async function dailyBillingActiveGroupReconciliation(): Promise<void> {
         isNull(schema.subscriptions.id),
       ));
 
-    const userIds = new Set([
-      ...subs.map(sub => sub.user_id),
-      ...activeGroupMembersMissingSubscription.map(member => member.user_id),
-    ]);
+    const userIds = new Set(activeGroupMembersMissingSubscription.map(member => member.user_id));
 
     for (const userId of userIds) {
       try {
@@ -763,7 +758,7 @@ export async function weeklyExpiredInvitationCleanup(): Promise<void> {
 /**
  * Check subscription health — notify users with past_due subscriptions.
  *
- * Before nagging, this job can give Stripe (GB) subscriptions one more
+ * Before nagging, this job gives Stripe (GB) subscriptions one more
  * automatic chance to self-heal via
  * subscriptionService.retryStripeIncompleteSubscriptionCharge — which also
  * re-checks Stripe for a different, genuinely active/trialing subscription
@@ -777,21 +772,7 @@ export async function weeklyExpiredInvitationCleanup(): Promise<void> {
  * been to manually run the one-off reconcileStaleStripeSubscriptionReferences.ts
  * script. Flutterwave (NG) has no equivalent reconciliation (no
  * multi-subscription-object concept), so this only ever applied to Stripe.
- *
- * CURRENTLY DISABLED via WEEKLY_SUBSCRIPTION_SELF_HEAL_ENABLED below: this
- * self-heal step is temporarily switched off (the job still runs and still
- * sends the "past due" notification/renewal-reminder emails below — only
- * the retry call itself is skipped) while the actual duplicate-subscription
- * root cause is fixed and verified — see StripeProvider.createSubscription,
- * which now lists a customer's existing Stripe subscriptions and reuses any
- * active/trialing one instead of ever creating a second, plus a
- * user-ID-derived Stripe idempotency key on the create call itself as a
- * hard backstop. Until that fix is confirmed working in production, no
- * subscription-related self-heal/retry should run unsupervised — re-enable
- * this flag once confirmed, then delete it and the `if` below.
  */
-const WEEKLY_SUBSCRIPTION_SELF_HEAL_ENABLED = false;
-
 export async function weeklySubscriptionHealthCheck(): Promise<void> {
   await runJob('weekly_subscription_health_check', async () => {
     const pastDue = await db.select({
@@ -804,7 +785,7 @@ export async function weeklySubscriptionHealthCheck(): Promise<void> {
       .where(eq(schema.subscriptions.billing_status, 'past_due'));
 
     for (const sub of pastDue) {
-      if (WEEKLY_SUBSCRIPTION_SELF_HEAL_ENABLED && sub.provider === 'stripe' && sub.provider_subscription_id) {
+      if (sub.provider === 'stripe' && sub.provider_subscription_id) {
         try {
           const healed = await subscriptionService.retryStripeIncompleteSubscriptionCharge(sub.user_id, sub.provider_subscription_id);
           if (healed) continue;

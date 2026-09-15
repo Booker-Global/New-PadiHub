@@ -102,7 +102,7 @@ async function reportAccount(email: string): Promise<void> {
     }
   }
 
-  // Reproduce the exact eligibility gate activateSubscriptionIfEligible()
+  // Reproduce the exact eligibility gate getPaymentEligibility()
   // checks, so it's explicit which prerequisite (if any) is currently false.
   const eligibilityGate = {
     has_subscription_tier: user.subscription_tier === 'basic' || user.subscription_tier === 'premium',
@@ -110,12 +110,12 @@ async function reportAccount(email: string): Promise<void> {
     payment_method_verified_at_set: Boolean(user.payment_method_verified_at),
     payout_verified_at_set: Boolean(user.payout_verified_at),
   };
-  console.log('  --- activateSubscriptionIfEligible() prerequisite gate ---');
+  console.log('  --- getPaymentEligibility() prerequisite gate ---');
   for (const [key, value] of Object.entries(eligibilityGate)) {
     line(key, value);
   }
   const allPrerequisitesMet = Object.values(eligibilityGate).every(Boolean);
-  line('ALL PREREQUISITES MET (would attempt createSubscription)', allPrerequisitesMet);
+  line('ALL PREREQUISITES MET (onboarding would finalize)', allPrerequisitesMet);
 }
 
 async function main(): Promise<void> {

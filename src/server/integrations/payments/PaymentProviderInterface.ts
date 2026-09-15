@@ -12,9 +12,9 @@
  * from a genuine provider-level outcome (a declined card, a 3DS challenge,
  * a network/API error) — no charge was ever attempted, so it must never be
  * surfaced to the member as "your payment failed" (see subscriptionService
- * .activateSubscriptionIfEligible's catch block, which checks
- * `instanceof PaymentProviderConfigError` to alert the team instead of
- * emailing the member).
+ * .reconcileBillingForActiveGroupMembership's catch block, which checks
+ * `instanceof AppError` with code SUBSCRIPTION_PROVIDER_CONFIG_ERROR to
+ * alert the team instead of emailing the member).
  */
 export class PaymentProviderConfigError extends Error {
   constructor(message: string) {

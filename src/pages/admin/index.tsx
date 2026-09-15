@@ -569,6 +569,28 @@ export default function AdminPortal() {
     }
   };
 
+  const forceDeleteUser = async (user: AdminUserRow) => {
+    if (!session) return;
+    if (!window.confirm(`PERMANENTLY delete ${user.email}? This immediately erases their profile from the platform (not a soft delete) and cannot be undone. The email address will be free to sign up again.`)) return;
+    try {
+      await apiFetch(`/api/admin/users/${user.id}/force`, session, { method: 'DELETE' });
+      loadUsers();
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Unable to permanently delete this user right now.');
+    }
+  };
+
+  const forceDeleteGroup = async (group: AdminGroupRow) => {
+    if (!session) return;
+    if (!window.confirm(`PERMANENTLY delete "${group.name}"? This immediately erases the group and all its members/contributions/rotations/votes from the platform (not a soft close) and cannot be undone.`)) return;
+    try {
+      await apiFetch(`/api/admin/groups/${group.id}/force`, session, { method: 'DELETE' });
+      loadGroups();
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Unable to permanently delete this group right now.');
+    }
+  };
+
   const cancelSubscription = async (subscription: AdminSubscriptionRow) => {
     if (!session) return;
     if (!window.confirm(`Cancel the subscription for ${subscription.user_display_name}?`)) return;
@@ -913,7 +935,7 @@ export default function AdminPortal() {
                   </MotionDiv>
                 )}
                 <MotionDiv variants={fadeUp} className="rounded-3xl bg-white overflow-hidden overflow-x-auto" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
-                  <table className="w-full min-w-[880px]">
+                  <table className="w-full min-w-[960px]">
                     <thead>
                       <tr className="border-b border-gray-50">
                         {['Name', 'Country', 'Trust Score', 'Status', 'Verified', 'Joined', 'Actions'].map(h => (
@@ -945,11 +967,14 @@ export default function AdminPortal() {
                             <td className="px-5 py-3">{u.identity_verified ? <CheckCircle size={14} style={{ color: '#2EAF6F' }} /> : <XCircle size={14} className="text-gray-300" />}</td>
                             <td className="px-5 py-3"><span className="text-xs text-gray-400 whitespace-nowrap">{formatTimestamp(u.created_at)}</span></td>
                             <td className="px-5 py-3">
-                              {u.account_status === 'suspended' ? (
-                                <button onClick={() => reactivateUser(u)} type="button" className="text-xs font-bold px-3 py-1.5 rounded-lg whitespace-nowrap" style={{ color: '#2EAF6F', background: 'rgba(46,175,111,0.1)' }}>Reactivate</button>
-                              ) : (
-                                <button onClick={() => suspendUser(u)} type="button" className="text-xs font-bold px-3 py-1.5 rounded-lg whitespace-nowrap" style={{ color: '#EF4444', background: 'rgba(239,68,68,0.1)' }}>Suspend</button>
-                              )}
+                              <div className="flex items-center gap-2">
+                                {u.account_status === 'suspended' ? (
+                                  <button onClick={() => reactivateUser(u)} type="button" className="text-xs font-bold px-3 py-1.5 rounded-lg whitespace-nowrap" style={{ color: '#2EAF6F', background: 'rgba(46,175,111,0.1)' }}>Reactivate</button>
+                                ) : (
+                                  <button onClick={() => suspendUser(u)} type="button" className="text-xs font-bold px-3 py-1.5 rounded-lg whitespace-nowrap" style={{ color: '#EF4444', background: 'rgba(239,68,68,0.1)' }}>Suspend</button>
+                                )}
+                                <button onClick={() => forceDeleteUser(u)} type="button" className="text-xs font-bold px-3 py-1.5 rounded-lg whitespace-nowrap" style={{ color: '#ffffff', background: '#EF4444' }}>Force Delete</button>
+                              </div>
                             </td>
                           </tr>
                         );
@@ -977,7 +1002,7 @@ export default function AdminPortal() {
                   </MotionDiv>
                 )}
                 <MotionDiv variants={fadeUp} className="rounded-3xl bg-white overflow-hidden overflow-x-auto" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
-                  <table className="w-full min-w-[880px]">
+                  <table className="w-full min-w-[960px]">
                     <thead>
                       <tr className="border-b border-gray-50">
                         {['Group Name', 'Country', 'Members', 'Contribution', 'Status', 'Created', 'Actions'].map(h => (
@@ -998,9 +1023,12 @@ export default function AdminPortal() {
                           <td className="px-5 py-3"><StatusBadge status={g.status} /></td>
                           <td className="px-5 py-3"><span className="text-xs text-gray-400 whitespace-nowrap">{formatTimestamp(g.created_at)}</span></td>
                           <td className="px-5 py-3">
-                            {g.status !== 'closed' && (
-                              <button onClick={() => forceCloseGroup(g)} type="button" className="text-xs font-bold px-3 py-1.5 rounded-lg whitespace-nowrap" style={{ color: '#EF4444', background: 'rgba(239,68,68,0.1)' }}>Force Close</button>
-                            )}
+                            <div className="flex items-center gap-2">
+                              {g.status !== 'closed' && (
+                                <button onClick={() => forceCloseGroup(g)} type="button" className="text-xs font-bold px-3 py-1.5 rounded-lg whitespace-nowrap" style={{ color: '#EF4444', background: 'rgba(239,68,68,0.1)' }}>Force Close</button>
+                              )}
+                              <button onClick={() => forceDeleteGroup(g)} type="button" className="text-xs font-bold px-3 py-1.5 rounded-lg whitespace-nowrap" style={{ color: '#ffffff', background: '#EF4444' }}>Force Delete</button>
+                            </div>
                           </td>
                         </tr>
                       ))}
