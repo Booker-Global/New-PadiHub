@@ -100,6 +100,24 @@ function shouldSendConfigErrorAlertEmail(): boolean {
   return true;
 }
 
+/**
+ * TEMPORARY KILL-SWITCH — companion to WEEKLY_SUBSCRIPTION_SELF_HEAL_ENABLED
+ * (scheduledJobs.ts) and ELIGIBILITY_RETRY_AUTO_TRIGGER_ENABLED
+ * (paymentEligibilityService.ts) — see WEEKLY_SUBSCRIPTION_SELF_HEAL_ENABLED's
+ * comment for the full duplicate-Stripe-subscription root cause/fix this
+ * pauses. This boot-time sweep (activateRetroactiveEligibleSubscriptions
+ * below) was NOT included when those other two triggers were paused, on the
+ * assumption that it only ever reaches accounts that have never once
+ * activated. That assumption does not hold: it calls exactly the same
+ * activateSubscriptionIfEligible -> activateSubscription -> createSubscription
+ * -> StripeProvider.createSubscription chain those two triggers do, and on
+ * 15/09 it created a second Stripe subscription for four accounts that each
+ * already had exactly one clean active subscription (see incident writeup).
+ * Disabled until the create-path fix is confirmed to actually hold in
+ * production; re-enable then delete this flag and the `if` below.
+ */
+const BOOT_TIME_SUBSCRIPTION_ACTIVATION_SWEEP_ENABLED = false;
+
 type PlanSelectionResult = { tier: SubscriptionTierKey; plan: string; monthly_amount: number };
 type PlanSwitchResult = {
   tier: SubscriptionTierKey;
@@ -1399,10 +1417,17 @@ export const subscriptionService = {
    * leaving `users.subscription_status` stuck at a non-active value even
    * though the member is, in every real sense, already fully subscribed.
    * Left in that state, paymentEligibilityService blocks them from ever
-   * joining or creating a group again. Idempotent and safe to re-run on
-   * every boot: activateSubscriptionIfEligible is itself a no-op for anyone
-   * already active, and never re-creates a provider subscription that
-   * already exists (see activateSubscription's early-return branch).
+   * joining or creating a group again.
+   *
+   * CURRENTLY DISABLED (see BOOT_TIME_SUBSCRIPTION_ACTIVATION_SWEEP_ENABLED
+   * above): this was previously believed idempotent/safe to re-run on every
+   * boot on the assumption that activateSubscriptionIfEligible is a no-op
+   * for anyone already active and never re-creates a provider subscription
+   * that already exists — that assumption did not hold on 15/09, when this
+   * exact sweep created a second Stripe subscription for four accounts that
+   * each already had exactly one clean active subscription. The candidate
+   * query below still runs and is logged for visibility; only the actual
+   * per-candidate activation attempt is skipped while this is paused.
    */
   async activateRetroactiveEligibleSubscriptions(): Promise<void> {
     try {
@@ -1417,6 +1442,11 @@ export const subscriptionService = {
         ));
 
       if (!candidates.length) return;
+
+      if (!BOOT_TIME_SUBSCRIPTION_ACTIVATION_SWEEP_ENABLED) {
+        console.warn(`[PadiHub] Retroactive deferred-billing migration: found ${candidates.length} fully-verified account(s) not yet eligible, but BOOT_TIME_SUBSCRIPTION_ACTIVATION_SWEEP_ENABLED is false — skipping activation attempts for user(s): ${candidates.map(c => c.id).join(', ')}`);
+        return;
+      }
 
       console.log(`[PadiHub] Retroactive deferred-billing migration: found ${candidates.length} fully-verified account(s) not yet eligible — attempting activation now.`);
       for (const candidate of candidates) {
