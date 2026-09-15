@@ -5,8 +5,16 @@
  * a payout, so both a verified payment method (to contribute) and a verified
  * payout destination (to receive their turn) are required BEFORE joining or
  * creating a group — not deferred until the member's payout is due.
+ *
+ * Group access is gated purely on PROFILE completion (email, plan chosen,
+ * verified card, verified payout, identity) — never on whether a platform
+ * subscription has actually been billed yet. The subscription itself is only
+ * created and charged once a group the member is in actually launches (see
+ * subscriptionService.reconcileBillingForActiveGroupMembership, invoked from
+ * groupService.activateGroup) — `users.subscription_status` stays 'pending'
+ * up until that moment and is never part of this gate.
  */
-import { and, eq, isNull } from 'drizzle-orm';
+import { eq, and, isNull } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -15,7 +23,6 @@ import { notificationService } from './notificationService.js';
 import { sendProfileSetupCompleteEmail } from '../integrations/email/emailService.js';
 import { SUBSCRIPTION_TIERS, isSubscriptionTierKey, formatTierPrice, type SubscriptionTierKey } from '../lib/constants.js';
 import { buildOnboardingSteps, lowerFirst } from '../lib/onboardingSteps.js';
-import { hasFullyVerifiedSubscriptionSetup } from '../lib/subscriptionEligibility.js';
 
 export type { OnboardingStep } from '../lib/onboardingSteps.js';
 
@@ -25,7 +32,7 @@ type EligibilityUser = {
   account_status: 'pending_verification' | 'active' | 'suspended' | 'deactivated';
   email_verified: boolean;
   identity_verified: boolean;
-  subscription_status: 'free' | 'trial' | 'active' | 'expired' | 'cancelled';
+  subscription_status: 'free' | 'trial' | 'pending' | 'active' | 'expired' | 'cancelled';
   subscription_tier: 'basic' | 'premium' | null;
   stripe_customer_id: string | null;
   stripe_payment_method_id: string | null;
@@ -37,113 +44,6 @@ type EligibilityUser = {
   payout_verified_at: Date | null;
   created_at: Date;
 };
-
-/** Never retry a stuck subscription activation more than once every 5
- * minutes per member — see refreshSubscriptionActivationStatus below. */
-const SUBSCRIPTION_RETRY_COOLDOWN_MS = 5 * 60 * 1000;
-
-/**
- * TEMPORARY KILL-SWITCH — companion to WEEKLY_SUBSCRIPTION_SELF_HEAL_ENABLED
- * in scheduledJobs.ts (see that flag's comment for the full duplicate-Stripe-
- * subscription root cause/fix). Disabled so this eligibility-retry
- * auto-trigger can't call subscriptionService.activateSubscriptionIfEligible
- * — and, transitively, retryStripeIncompleteSubscriptionCharge — on every
- * dashboard/eligibility check while the create-path fix (StripeProvider.
- * createSubscription's list-and-reuse + idempotency-key guard) is being
- * verified in production. Flip back to `true` once confirmed no more
- * duplicates are being created, then delete this flag and the `if` below.
- */
-const ELIGIBILITY_RETRY_AUTO_TRIGGER_ENABLED = false;
-
-/**
- * Self-heal for `users.subscription_status`: a subscription can genuinely
- * already be confirmed with the provider — billing_status 'active' (real
- * billing live) or 'paused' (Section D.2 deferred billing: equally
- * confirmed, simply not yet charging until the member joins an active 3+
- * member group) — while `users.subscription_status` is still stuck at a
- * stale non-active value (e.g. a transient failure partway through an
- * earlier activation attempt, or a race between two onboarding-completion
- * paths that both call activateSubscriptionIfEligible). Left unhealed, this
- * is exactly what leaves an otherwise fully-onboarded member (payment
- * method, payout and identity all verified) stuck seeing "Complete your
- * subscription payment" forever and blocked from joining/creating a group
- * they've already paid for.
- *
- * If billing_status isn't 'active'/'paused' yet, this is NOT necessarily a
- * genuine, still-unresolved failure — it can just as easily be a member
- * whose earlier activation attempt hit a now-fixed bug (e.g. the
- * default_incomplete + pause_collection combination that used to leave
- * every deferred-billing subscription permanently stuck 'incomplete') and
- * would succeed if simply retried. So when every OTHER onboarding
- * prerequisite (`eligibleForActivation`) is already met, actively retry
- * activation here too — instead of leaving the member stuck until the next
- * server boot (activateRetroactiveEligibleSubscriptions) or the next
- * provider webhook delivery — throttled to at most once every 5 minutes per
- * member (via subscriptions.updated_at) so a member whose activation
- * genuinely, repeatedly fails (e.g. a real provider outage) isn't
- * retried — and re-notified/re-emailed — on every single dashboard or
- * group-join page load.
- *
- * `fullyVerifiedSetup` (see hasFullyVerifiedSubscriptionSetup above) short-
- * circuits this entirely: if every member-controlled onboarding input is
- * already on file and verified, self-heal `subscription_status` directly
- * instead of attempting yet another live provider charge that has already
- * proven it won't succeed — this is what stops the recurring "subscription
- * payment failed" emails for a member who has done everything they can do.
- *
- * CURRENTLY DISABLED (see ELIGIBILITY_RETRY_AUTO_TRIGGER_ENABLED above): the
- * live provider-retry branch below (the `activateSubscriptionIfEligible`
- * call, and transitively `retryStripeIncompleteSubscriptionCharge`) is
- * short-circuited to always return false, so a member whose subscription
- * isn't yet confirmed with the provider is simply reported not-yet-active
- * on every dashboard/eligibility check instead of being auto-retried — this
- * does NOT affect the local-only `subscription_status` sync above (that
- * branch never contacts the provider, so it stays enabled). Onboarding
- * completion (selectPlan/payment-method-save/payout-save/identity
- * verification) still activates via its own direct
- * `activateSubscriptionIfEligible` call, unaffected by this flag.
- */
-async function refreshSubscriptionActivationStatus(userId: string, eligibleForActivation: boolean, fullyVerifiedSetup: boolean): Promise<boolean> {
-  const subRows = await db.select({
-    billing_status:             schema.subscriptions.billing_status,
-    last_activation_attempt_at: schema.subscriptions.last_activation_attempt_at,
-  }).from(schema.subscriptions).where(eq(schema.subscriptions.user_id, userId)).limit(1);
-  const sub = subRows[0];
-
-  const hasExistingNonCancelledSubscription = Boolean(sub && sub.billing_status !== 'cancelled');
-  const isConfirmedWithProvider = sub && (sub.billing_status === 'active' || sub.billing_status === 'paused');
-  if (isConfirmedWithProvider || (hasExistingNonCancelledSubscription && fullyVerifiedSetup)) {
-    await db.update(schema.users).set({ subscription_status: 'active' as const }).where(eq(schema.users.id, userId));
-    return true;
-  }
-
-  if (!ELIGIBILITY_RETRY_AUTO_TRIGGER_ENABLED) return false;
-  if (!eligibleForActivation) return false;
-  // Deliberately keyed off subscriptions.last_activation_attempt_at, NOT
-  // updated_at — updated_at is also bumped by writes that have nothing to
-  // do with an activation retry (billing pause/resume reconciliation,
-  // Stripe invoice webhooks), which would otherwise perpetually reset this
-  // cooldown and starve a genuinely stuck subscription of ever being
-  // retried at all.
-  const lastAttemptAt = sub?.last_activation_attempt_at ? new Date(sub.last_activation_attempt_at).getTime() : 0;
-  if (Date.now() - lastAttemptAt < SUBSCRIPTION_RETRY_COOLDOWN_MS) return false;
-
-  try {
-    // Dynamically imported to avoid a static circular dependency
-    // (subscriptionService imports membershipService, which imports this
-    // module) — same pattern used by refreshStripePayoutVerification below.
-    const { subscriptionService } = await import('./subscriptionService.js');
-    await subscriptionService.activateSubscriptionIfEligible(userId);
-  } catch (err) {
-    console.error('[paymentEligibilityService] Could not retry stuck subscription activation:', err);
-    return false;
-  }
-
-  const refreshedUserRows = await db.select({ subscription_status: schema.users.subscription_status })
-    .from(schema.users).where(eq(schema.users.id, userId)).limit(1);
-  const refreshedStatus = refreshedUserRows[0]?.subscription_status;
-  return refreshedStatus === 'active' || refreshedStatus === 'trial';
-}
 
 /**
  * Self-healing live check for Stripe Connect accounts: if the account was
@@ -162,27 +62,34 @@ async function refreshStripePayoutVerification(user: EligibilityUser): Promise<b
       await db.update(schema.users)
         .set({ payout_verified_at: new Date() })
         .where(eq(schema.users.id, user.id));
-
-      // This self-heal can be the moment a payout destination becomes
-      // verified for the first time (if the account.updated webhook hasn't
-      // fired yet) — attempt subscription activation immediately in case
-      // it's now the last remaining onboarding prerequisite. Dynamically
-      // imported to avoid a static circular dependency (subscriptionService
-      // imports membershipService, which imports this module) — same
-      // pattern used by groupService.reconcileMemberBilling.
-      try {
-        const { subscriptionService } = await import('./subscriptionService.js');
-        await subscriptionService.activateSubscriptionIfEligible(user.id);
-      } catch (activationErr) {
-        console.error('[paymentEligibilityService] Could not activate subscription after payout self-heal:', activationErr);
-      }
-
       return true;
     }
   } catch (err) {
     console.warn('[paymentEligibilityService] Could not verify Stripe account status:', err instanceof Error ? err.message : err);
   }
   return false;
+}
+
+/**
+ * Once every onboarding prerequisite is met for the first time, flips
+ * `account_status` to 'active' (Part A) and, if the member has never had a
+ * subscription attempt at all, seeds `subscription_status` to 'pending' —
+ * the account is fully onboarded but not yet billed; billing only starts
+ * once a group they're in actually launches. Idempotent: only ever moves
+ * account_status away from 'pending_verification', and only ever moves
+ * subscription_status away from its default 'free'.
+ */
+async function finalizeOnboardingIfNeeded(user: EligibilityUser): Promise<void> {
+  const updates: Partial<typeof schema.users.$inferInsert> = {};
+  if (user.account_status === 'pending_verification') {
+    updates.account_status = 'active';
+  }
+  if (user.subscription_status === 'free') {
+    updates.subscription_status = 'pending';
+  }
+  if (Object.keys(updates).length) {
+    await db.update(schema.users).set(updates).where(eq(schema.users.id, user.id));
+  }
 }
 
 export async function getPaymentEligibility(userId: string) {
@@ -222,21 +129,17 @@ export async function getPaymentEligibility(userId: string) {
   const emailVerified = Boolean(user.email_verified);
   const identityVerified = Boolean(user.identity_verified);
   const subscriptionTierSelected = user.subscription_tier === 'basic' || user.subscription_tier === 'premium';
-  const subRows = await db.select({ billing_status: schema.subscriptions.billing_status })
-    .from(schema.subscriptions).where(eq(schema.subscriptions.user_id, userId)).limit(1);
-  const sub = subRows[0];
-  const hasExistingNonCancelledSubscription = Boolean(sub && sub.billing_status !== 'cancelled');
-  // Every OTHER onboarding prerequisite is met — if the subscription still
-  // isn't marked active, it's worth actively retrying activation (see
-  // refreshSubscriptionActivationStatus) rather than only passively reading
-  // back a billing_status that a still-broken/never-retried activation
-  // attempt would leave stuck forever.
-  const eligibleForSubscriptionActivation = subscriptionTierSelected && paymentMethodVerified && payoutVerified && identityVerified;
-  const fullyVerifiedSubscriptionSetup = hasFullyVerifiedSubscriptionSetup(user);
-  const subscriptionActive = user.subscription_status !== 'cancelled' && (
-    ((user.subscription_status === 'active' || user.subscription_status === 'trial') && hasExistingNonCancelledSubscription)
-    || await refreshSubscriptionActivationStatus(user.id, eligibleForSubscriptionActivation, fullyVerifiedSubscriptionSetup)
-  );
+  // Purely informational — whether the platform subscription has actually
+  // been billed. Never part of `ready` (see module doc comment above).
+  const subscriptionActive = user.subscription_status === 'active' || user.subscription_status === 'trial';
+
+  const ready = emailVerified && identityVerified && subscriptionTierSelected && paymentMethodVerified && payoutVerified;
+  if (ready) {
+    // Fire-and-forget: never block/fail this read on a follow-up write.
+    void finalizeOnboardingIfNeeded(user).catch(err => {
+      console.error('[paymentEligibilityService] Could not finalize onboarding status:', err);
+    });
+  }
 
   return {
     emailVerified,
@@ -248,7 +151,7 @@ export async function getPaymentEligibility(userId: string) {
     paymentMethodVerified,
     hasPayout,
     payoutVerified,
-    ready: emailVerified && identityVerified && subscriptionTierSelected && subscriptionActive && paymentMethodVerified && payoutVerified,
+    ready,
   };
 }
 
@@ -313,23 +216,17 @@ async function notifyOnboardingComplete(userId: string, tier: SubscriptionTierKe
   }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
   if (!rows.length) return;
 
-  // Section 1 — profile completion (steps a-e) is distinct from step f
-  // (joining an active group); a member can be 100% complete with
-  // subscription status 'Pending Charge' (billing_status 'paused' — card
-  // validated, not yet charged). The email must say so explicitly instead
-  // of implying they're already being billed.
-  const subRows = await db.select({ billing_status: schema.subscriptions.billing_status })
-    .from(schema.subscriptions).where(eq(schema.subscriptions.user_id, userId)).limit(1);
-  const billingDeferred = subRows[0]?.billing_status === 'paused';
-
+  // Profile completion (steps a-d) is distinct from actually joining/
+  // launching a group — a member can be 100% complete with subscription
+  // status 'Pending Charge' (no card charge attempted until they join an
+  // active group). The email must say so explicitly instead of implying
+  // they're already being billed.
   const plan = SUBSCRIPTION_TIERS[tier];
   await notificationService.create({
     userId,
     type: 'profile_setup_complete',
     title: 'Profile Setup Complete',
-    message: (billingDeferred
-      ? `Your profile is 100% complete on the ${plan.name} plan — subscription status: Pending Charge (validated, not yet charged until you join an active group). `
-      : `Your profile is complete on the ${plan.name} plan — `)
+    message: `Your profile is 100% complete on the ${plan.name} plan — subscription status: Pending Charge (you will only be charged once you join or create a group that launches with 3 or more members). `
       + (plan.maxGroupsCreate > 0
         ? `you can now create up to ${plan.maxGroupsCreate} groups and join up to ${plan.maxGroupsJoin}.`
         : `you can now join up to ${plan.maxGroupsJoin} groups. Upgrade to Premium if you'd like to create your own group.`),
@@ -339,15 +236,16 @@ async function notifyOnboardingComplete(userId: string, tier: SubscriptionTierKe
     monthlyPrice:    formatTierPrice(tier, rows[0].country),
     maxGroupsCreate: plan.maxGroupsCreate,
     maxGroupsJoin:   plan.maxGroupsJoin,
-  }, billingDeferred);
+  }, true);
 }
 
 /**
  * Throws a 403 error unless the user has completed EVERY onboarding step
  * required before creating or joining a savings group: verified email,
- * verified identity, a chosen and ACTIVE subscription, a verified payment
- * method, and a verified payout destination. Call before allowing a user to
- * create or join a savings group.
+ * verified identity, a chosen subscription plan, a verified payment method,
+ * and a verified payout destination. Call before allowing a user to create
+ * or join a savings group. Deliberately does NOT require the subscription to
+ * be billed/active yet — that only happens once a group launches.
  *
  * The message names the *next* missing step and links to the dashboard page
  * that completes it (never an API route), so a blocked member always knows

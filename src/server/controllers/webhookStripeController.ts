@@ -13,8 +13,9 @@ import { contributionService } from '../services/contributionService.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { notificationService } from '../services/notificationService.js';
 import { isSubscriptionTierKey, SUBSCRIPTION_TIERS, formatTierPrice, type SubscriptionTierKey } from '../lib/constants.js';
-import { planCode, subscriptionService } from '../services/subscriptionService.js';
-import { sendSubscriptionPaymentFailedEmail, sendSubscriptionBillingResumedEmail, sendSubscriptionRenewalChargedEmail } from '../integrations/email/emailService.js';
+import { planCode } from '../services/subscriptionService.js';
+import { getPaymentEligibility } from '../services/paymentEligibilityService.js';
+import { sendSubscriptionPaymentFailedEmail, sendSubscriptionRenewalChargedEmail } from '../integrations/email/emailService.js';
 
 /** Recover the tier key ('basic'/'premium') from a stored plan code like 'gb_premium'. */
 function tierFromPlanCode(plan?: string | null): SubscriptionTierKey | null {
@@ -117,24 +118,32 @@ async function handleStripeEvent(event: Stripe.Event) {
         break;
       }
 
-      // Section D.2/1/5 — if billing_status was 'paused' immediately before
-      // this event, this invoice IS the immediate first charge triggered by
-      // StripeProvider.resumeBilling() the moment the member joined an
-      // active (3+ member) group — as opposed to an ordinary monthly
-      // renewal invoice. Capture that BEFORE overwriting billing_status
-      // below, so the right confirmation email/renewal_date can be sent.
-      const wasFirstChargeOnJoin = sub.billing_status === 'paused';
-      const nextRenewalDate = wasFirstChargeOnJoin ? (() => {
-        const d = new Date();
-        d.setMonth(d.getMonth() + 1);
-        return d;
-      })() : null;
+      // Stripe's `billing_reason` distinguishes a brand-new subscription's
+      // very first invoice ('subscription_create') from an ordinary
+      // recurring renewal ('subscription_cycle') — mirrors the same check
+      // already used in the invoice.payment_failed case below. The initial
+      // invoice for every subscription created by this codebase (group
+      // launch first charge, or switchPlan's upgrade recreate-subscription)
+      // is already paid off-session SYNCHRONOUSLY by
+      // StripeProvider.createSubscription() before it ever returns (see
+      // there) — subscriptionService.createSubscription()/switchPlan()
+      // already updated billing_status/subscription_status and sent the
+      // member their "subscription created"/"plan changed" email/audit-log
+      // entry the moment that synchronous call resolved. This webhook event
+      // for that same invoice therefore arrives strictly AFTER the outcome
+      // is already known and communicated — re-sending a second
+      // confirmation email, or logging a second BILLING_HISTORY_ACTIONS
+      // entry (double-counting the same charge in admin revenue/Billing
+      // History), must be avoided. Only a genuine 'subscription_cycle'
+      // renewal (Stripe's own automatic recurring billing, never triggered
+      // by our code directly) needs this handler's own audit log/email.
+      const isInitialInvoiceCharge = invoice.billing_reason === 'subscription_create';
 
       await db.update(schema.users)
         .set({ subscription_status: 'active' })
         .where(eq(schema.users.id, sub.user_id));
       await db.update(schema.subscriptions)
-        .set({ billing_status: 'active', ...(nextRenewalDate ? { renewal_date: nextRenewalDate } : {}) })
+        .set({ billing_status: 'active' })
         .where(eq(schema.subscriptions.id, sub.id));
 
       // An upgrade's first invoice that needed 3D-Secure/extra confirmation
@@ -166,8 +175,12 @@ async function handleStripeEvent(event: Stripe.Event) {
         await createAuditLog({ userId: sub.user_id, action: 'SUBSCRIPTION_TIER_SWITCHED', entity: 'subscriptions', entityId: sub.id, metadata: { from: previousTier, to: sub.pending_tier, appliedAtRenewal: true } });
       }
 
+      if (isInitialInvoiceCharge) {
+        break;
+      }
+
       await createAuditLog({
-        userId: sub?.user_id, action: wasFirstChargeOnJoin ? 'STRIPE_SUBSCRIPTION_FIRST_CHARGE' : 'STRIPE_INVOICE_PAID', entity: 'subscriptions',
+        userId: sub?.user_id, action: 'STRIPE_INVOICE_PAID', entity: 'subscriptions',
         metadata: {
           customerId, invoiceId: invoice.id,
           tier: tierFromPlanCode(sub?.plan),
@@ -175,42 +188,32 @@ async function handleStripeEvent(event: Stripe.Event) {
         },
       });
 
-      // Item 8.d — every successful subscription charge (first charge on
-      // joining an active group, and every ordinary monthly renewal after
-      // it) must be confirmed by email so the member can see it reflected
-      // in their Billing History. See webhookFlutterwaveController.ts /
+      // Item 8.d — every ordinary monthly renewal must be confirmed by
+      // email so the member can see it reflected in their Billing History
+      // (the first charge on a brand-new subscription is confirmed
+      // synchronously by createSubscription()/switchPlan() instead — see
+      // above). See webhookFlutterwaveController.ts /
       // scheduledJobs.ts's monthlySubscriptionRenewalCharge for the NG
       // equivalent.
       if (isSubscriptionTierKey(user.subscription_tier)) {
         const tierName = SUBSCRIPTION_TIERS[user.subscription_tier].name;
         const priceDisplay = formatInvoiceAmount(invoice.amount_paid, invoice.currency) || formatTierPrice(user.subscription_tier, user.country);
         try {
-          if (wasFirstChargeOnJoin) {
-            await sendSubscriptionBillingResumedEmail(
-              user.email,
-              tierName,
-              priceDisplay,
-              nextRenewalDate ? nextRenewalDate.toLocaleDateString('en-GB') : 'next month',
-            );
-          } else {
-            await sendSubscriptionRenewalChargedEmail(
-              user.email,
-              tierName,
-              priceDisplay,
-              sub.renewal_date ? new Date(sub.renewal_date).toLocaleDateString('en-GB') : 'next month',
-            );
-          }
+          await sendSubscriptionRenewalChargedEmail(
+            user.email,
+            tierName,
+            priceDisplay,
+            sub.renewal_date ? new Date(sub.renewal_date).toLocaleDateString('en-GB') : 'next month',
+          );
         } catch (emailError) {
           console.error(`[StripeWebhook] Failed to send subscription charge confirmation email to ${user.email} for subscription ${sub.id}:`, emailError);
         }
       }
       await notificationService.create({
         userId: sub.user_id,
-        type: wasFirstChargeOnJoin ? 'subscription_billing_resumed' : 'subscription_payment_succeeded',
-        title: wasFirstChargeOnJoin ? 'Billing has started' : 'Subscription renewed',
-        message: wasFirstChargeOnJoin
-          ? 'You\'re now an active member of a launched group — your PadiHub subscription billing has started.'
-          : 'Your PadiHub subscription was renewed successfully.',
+        type: 'subscription_payment_succeeded',
+        title: 'Subscription renewed',
+        message: 'Your PadiHub subscription was renewed successfully.',
       });
       break;
     }
@@ -324,9 +327,9 @@ async function handleStripeEvent(event: Stripe.Event) {
       // timestamp here previously erased that completed onboarding step —
       // resetting the member's profile-completion percentage, re-blocking
       // them from joining/creating a group, and (via
-      // activateSubscriptionIfEligible's eligibility gate) silently
-      // no-opping their subscription activation retries — even though
-      // nothing about their own payout setup had actually changed.
+      // getPaymentEligibility's eligibility gate) silently no-opping their
+      // onboarding-completion retries — even though nothing about their own
+      // payout setup had actually changed.
       if (verified) {
         await db.update(schema.users)
           .set({ payout_verified_at: new Date() })
@@ -342,13 +345,15 @@ async function handleStripeEvent(event: Stripe.Event) {
       // verified (Stripe Express onboarding has no synchronous confirmation
       // step), and it can easily arrive after identity verification already
       // succeeded — without this, a member whose payout confirmation lands
-      // last would be stuck ineligible forever. No-op unless every other
-      // onboarding prerequisite is already in place.
+      // last would be stuck without onboarding ever finalizing. No-op
+      // (via finalizeOnboardingIfNeeded's own guard) unless every other
+      // onboarding prerequisite is already in place; never triggers billing
+      // (see Part C of the onboarding spec).
       if (verified) {
         const accountUserRows = await db.select({ id: schema.users.id })
           .from(schema.users).where(eq(schema.users.stripe_connected_account_id, account.id)).limit(1);
         if (accountUserRows.length) {
-          await subscriptionService.activateSubscriptionIfEligible(accountUserRows[0].id);
+          await getPaymentEligibility(accountUserRows[0].id);
         }
       }
       break;

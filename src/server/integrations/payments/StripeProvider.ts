@@ -15,23 +15,6 @@ function getStripe(): Stripe {
   return new Stripe(key, { apiVersion: '2026-06-24.dahlia' });
 }
 
-/**
- * How far in the future a deferred (Section D.2) subscription's `trial_end`
- * is set at creation — see createSubscription()'s deferBilling branch. Long
- * enough that no member realistically stays outside an active 3+ member
- * group this long (resumeBilling() ends the trial the moment they join
- * one), but Stripe hard-rejects any `trial_end` more than 5 years out
- * ("Invalid timestamp: can be no more than five years in the future", 400
- * invalid_request_error) — 10 tripped that limit, so this stays comfortably
- * under it.
- */
-const DEFERRED_BILLING_TRIAL_YEARS = 4;
-function deferredBillingTrialEnd(): number {
-  const end = new Date();
-  end.setUTCFullYear(end.getUTCFullYear() + DEFERRED_BILLING_TRIAL_YEARS);
-  return Math.floor(end.getTime() / 1000);
-}
-
 /** Shared shape returned by subscriptions.create/retrieve once expanded with
  * `latest_invoice.payment_intent` — used by both createSubscription() and
  * retryIncompleteSubscriptionCharge() below. */
@@ -173,7 +156,6 @@ export class StripeProvider implements IPaymentProvider {
 
   async createSubscription(params: {
     customerId: string; userId: string; email: string; currency: string; tier?: 'basic' | 'premium';
-    deferBilling?: boolean;
   }): Promise<SubscriptionResult> {
     const stripe = getStripe();
     // Basic (£4.99/mo) and Premium (£14.99/mo) are separate Stripe
@@ -199,16 +181,16 @@ export class StripeProvider implements IPaymentProvider {
     // ── Duplicate-subscription hard-backstop ──────────────────────────────
     // This is the ONLY place in the codebase that ever calls
     // stripe.subscriptions.create — subscriptionService.createSubscription()
-    // (the shared entry point behind every trigger: dashboard load, boot
-    // sweep, weekly health check, onboarding completion) and switchPlan()'s
-    // upgrade path both funnel through here. Multiple independent triggers
-    // racing to activate the same member (e.g. a boot-time sweep and a
-    // dashboard load landing at the same moment, before either has written
-    // its own local `subscriptions` row yet) previously each passed their own
-    // "does a row already exist locally?" check and went straight to create,
-    // sometimes leaving one customer with several separate active/trialing
-    // Stripe subscription objects (confirmed: up to 5 for one account in
-    // sandbox). Guard unconditionally, for every caller, in two layers:
+    // (the shared entry point behind every trigger: group-launch billing,
+    // upgrade, reactivation, weekly health check) is the sole caller.
+    // Multiple independent triggers racing to activate the same member
+    // (e.g. two requests landing at the same moment, before either has
+    // written its own local `subscriptions` row yet) previously each passed
+    // their own "does a row already exist locally?" check and went straight
+    // to create, sometimes leaving one customer with several separate
+    // active/trialing Stripe subscription objects (confirmed: up to 5 for
+    // one account in sandbox). Guard unconditionally, for every caller, in
+    // two layers:
     //   1. Always list this customer's existing Stripe subscriptions first
     //      (live, authoritative — not our local copy) and reuse one that's
     //      already active/trialing instead of creating a second.
@@ -230,28 +212,13 @@ export class StripeProvider implements IPaymentProvider {
     }
     const createIdempotencyKey = `subscription-create-${params.userId}-${priceId}`;
 
-    // Section D.2 — billing must stay inert until the member is verified in
-    // an active (3+ member) group. Stripe REJECTS `pause_collection` as an
-    // "unknown parameter" on subscriptions.create (400 invalid_request_error,
-    // code parameter_unknown) — it is only a valid parameter on
-    // subscriptions.update (see resumeBilling/pauseBilling below, which both
-    // call update() and are unaffected by this). So a deferred subscription
-    // is instead created with a far-future `trial_end`: Stripe genuinely
-    // never generates or attempts to collect any invoice for a 'trialing'
-    // subscription, so the card is never charged at signup — this is the
-    // real provider-level defer, not just a DB flag subscriptionService also
-    // keeps in sync. Unlike `payment_behavior: 'default_incomplete'` (which
-    // DOES generate an invoice immediately and leaves the subscription
-    // 'incomplete' — Stripe auto-cancels 'incomplete' subscriptions ~23
-    // hours later if that invoice is never paid, which is wrong here since
-    // deferral can legitimately last far longer than 23 hours), a
-    // 'trialing' subscription has no such expiry risk. resumeBilling()
-    // below ends this trial the moment the member becomes eligible for real
-    // billing.
-    //
-    // payment_behavior: 'default_incomplete' is only used for genuinely
-    // live (non-deferred) billing, together with
-    // payment_settings.save_default_payment_method (without it, the card
+    // Billing is always live/immediate here — this is only ever called
+    // once the member is a verified member of a group that has actually
+    // launched (Section C), so the first invoice must be attempted right
+    // away. `payment_behavior: 'default_incomplete'` generates the first
+    // invoice immediately without throwing on a declined/unconfirmed card
+    // (surfaced via `result.status` instead), together with
+    // `payment_settings.save_default_payment_method` (without it, the card
     // used to confirm the first invoice is never persisted as the
     // customer's default payment method, breaking future off-session
     // renewal charges) and expanding latest_invoice.payment_intent (without
@@ -264,13 +231,9 @@ export class StripeProvider implements IPaymentProvider {
         customer: params.customerId,
         items:    [{ price: priceId }],
         metadata: { padihub_user_id: params.userId },
-        ...(params.deferBilling
-          ? { trial_end: deferredBillingTrialEnd() }
-          : {
-              payment_behavior: 'default_incomplete' as const,
-              payment_settings: { save_default_payment_method: 'on_subscription' as const },
-              expand: ['latest_invoice.payment_intent'],
-            }),
+        payment_behavior: 'default_incomplete' as const,
+        payment_settings: { save_default_payment_method: 'on_subscription' as const },
+        expand: ['latest_invoice.payment_intent'],
       }, { idempotencyKey: createIdempotencyKey }) as unknown as SubscriptionWithExpandedInvoice;
     } catch (err) {
       // Stripe validates `customer` and `items[0][price]` server-side, so a
@@ -313,30 +276,26 @@ export class StripeProvider implements IPaymentProvider {
     // with an unpaid, un-attempted invoice — even though the member's card
     // was already verified and saved off-session earlier in onboarding
     // (confirmSetupIntent → setCustomerDefaultPaymentMethod). Explicitly pay
-    // that invoice here, exactly the way resumeBilling() already does for
-    // the previously-live-then-paused case above — `invoices.pay()` is the
-    // correct server-initiated, off-session collection call (unlike
-    // `paymentIntents.confirm`, it needs no explicit `off_session` flag) and
-    // requires no client involvement at all. If the card genuinely still
-    // needs interactive SCA or was declined, this throws/leaves the invoice
-    // unpaid — in which case subscriptionService's existing
-    // pending/payment-failed handling below (keyed off `result.status`)
-    // takes over exactly as before; that residual case can't be avoided
-    // server-side without violating SCA rules.
-    if (!params.deferBilling) {
-      subscription = await this.payOpenInvoiceAndRefresh(subscription);
-    }
+    // that invoice here — `invoices.pay()` is the correct server-initiated,
+    // off-session collection call (unlike `paymentIntents.confirm`, it
+    // needs no explicit `off_session` flag) and requires no client
+    // involvement at all. If the card genuinely still needs interactive SCA
+    // or was declined, this throws/leaves the invoice unpaid — in which
+    // case subscriptionService's existing pending/payment-failed handling
+    // below (keyed off `result.status`) takes over exactly as before; that
+    // residual case can't be avoided server-side without violating SCA
+    // rules.
+    subscription = await this.payOpenInvoiceAndRefresh(subscription);
 
     return toSubscriptionResult(subscription);
   }
 
   /**
    * Off-session collection of a subscription's currently-open invoice
-   * (shared by createSubscription()'s live/non-deferred branch and
-   * retryIncompleteSubscriptionCharge() below) — calls `invoices.pay()`
-   * exactly as resumeBilling() does for the previously-live-then-paused
-   * case, then re-fetches the subscription so the returned status/renewal
-   * date reflect the real post-payment outcome rather than the stale
+   * (shared by createSubscription() above and
+   * retryIncompleteSubscriptionCharge() below) — calls `invoices.pay()`,
+   * then re-fetches the subscription so the returned status/renewal date
+   * reflect the real post-payment outcome rather than the stale
    * pre-attempt state still held in `subscription`.
    */
   private async payOpenInvoiceAndRefresh(subscription: SubscriptionWithExpandedInvoice): Promise<SubscriptionWithExpandedInvoice> {
@@ -417,113 +376,6 @@ export class StripeProvider implements IPaymentProvider {
     const stripe = getStripe();
     await stripe.subscriptions.cancel(params.subscriptionId);
     return { cancelled: true };
-  }
-
-  /** Section D.2 — actually stop Stripe from attempting to collect payment. */
-  async pauseBilling(subscriptionId: string): Promise<void> {
-    const stripe = getStripe();
-    await stripe.subscriptions.update(subscriptionId, { pause_collection: { behavior: 'void' } });
-  }
-
-  /**
-   * Section D.2/1/5 — resume real Stripe collection once the member is
-   * verified in an active (3+ member) group, AND immediately charge the
-   * card now rather than waiting for whatever date the subscription's
-   * original billing cycle anchor happens to land on.
-   *
-   * Two distinct prior states reach this method, requiring different
-   * handling:
-   *
-   * 1. Created via createSubscription()'s deferBilling branch — the
-   *    subscription is still 'trialing' (a far-future `trial_end`, since
-   *    Stripe rejects `pause_collection` on create — see there). Ending the
-   *    trial via `trial_end: 'now'` makes Stripe itself generate AND
-   *    attempt to collect the first invoice — asynchronously, reported via
-   *    the usual invoice.payment_succeeded/failed webhook, exactly like any
-   *    other charge (see webhookStripeController.ts's `wasFirstChargeOnJoin`
-   *    branch, keyed off billing_status==='paused', which doesn't care how
-   *    the invoice was generated). Manually creating a second invoice below
-   *    for this case would double-charge the member for the same period, so
-   *    this branch returns immediately after ending the trial.
-   *
-   * 2. Previously genuinely live (billing_status 'active'), then paused via
-   *    pauseBilling() after the member dropped below an active group and
-   *    later rejoined one — clearing pause_collection alone only resumes
-   *    Stripe's normal automatic billing at its EXISTING cycle date, it
-   *    does NOT trigger a charge today, which previously left billing_status
-   *    stuck unset/paused indefinitely for anyone who rejoined an active
-   *    group between billing cycle anchors. Creating + paying an
-   *    out-of-cycle invoice for the current subscription forces that
-   *    immediate charge.
-   *
-   * Either way, the actual success/failure is reported via Stripe's usual
-   * invoice.payment_succeeded/invoice.payment_failed webhooks (handled in
-   * webhookStripeController.ts), so this method deliberately does not
-   * update any local billing_status itself — callers must treat this as
-   * "charge attempted", not "charge confirmed".
-   */
-  async resumeBilling(subscriptionId: string): Promise<void> {
-    const stripe = getStripe();
-    const current = await stripe.subscriptions.retrieve(subscriptionId);
-    if (current.status === 'trialing') {
-      // Stripe errors ("You cannot end a trial for a subscription that
-      // does not have a trial.") if trial_end: 'now' is sent to a
-      // subscription that was never given a trial_end — only take this
-      // branch for subscriptions genuinely still in trial.
-      await stripe.subscriptions.update(subscriptionId, { trial_end: 'now', proration_behavior: 'none' });
-      return;
-    }
-
-    await stripe.subscriptions.update(subscriptionId, { pause_collection: null });
-
-    const subscription = await stripe.subscriptions.retrieve(subscriptionId);
-    const customerId = typeof subscription.customer === 'string' ? subscription.customer : subscription.customer.id;
-
-    let invoice: Stripe.Invoice;
-    try {
-      invoice = await stripe.invoices.create({
-        customer: customerId,
-        subscription: subscriptionId,
-        collection_method: 'charge_automatically',
-        description: 'PadiHub monthly subscription — first charge on joining an active group',
-      }, { idempotencyKey: `sub-first-charge-invoice-${subscriptionId}` });
-    } catch (error) {
-      console.error(`[StripeProvider] Failed to create immediate first-charge invoice for subscription ${subscriptionId}:`, error);
-      return;
-    }
-    if (!invoice.id) return;
-
-    // `invoices.create` always returns the invoice in `draft` status — it is
-    // NOT automatically finalized (Stripe only auto-finalizes drafts on its
-    // own background schedule, up to ~1 hour later). `invoices.pay()` can
-    // only be called on a `finalized` ('open') invoice; calling it on a
-    // still-draft invoice throws immediately every time ("This invoice is
-    // not finalized..."), before Stripe ever attempts to charge the card at
-    // all. That silent, synchronous failure — not a genuine card decline —
-    // is what previously left every "first charge on joining an active
-    // group" stuck relying on Stripe's own delayed auto-finalize instead of
-    // being charged immediately as intended, while still (eventually, once
-    // Stripe's background job ran) firing genuine invoice.payment_failed
-    // webhooks for members whose card was fine all along. Finalizing here
-    // explicitly makes the immediate charge attempt actually happen.
-    try {
-      if (invoice.status === 'draft') {
-        invoice = await stripe.invoices.finalizeInvoice(invoice.id, undefined, { idempotencyKey: `sub-first-charge-finalize-${subscriptionId}` });
-      }
-    } catch (error) {
-      console.error(`[StripeProvider] Failed to finalize immediate first-charge invoice ${invoice.id} for subscription ${subscriptionId}:`, error);
-      return;
-    }
-    if (invoice.status !== 'open') return;
-
-    try {
-      await stripe.invoices.pay(invoice.id, undefined, { idempotencyKey: `sub-first-charge-pay-${subscriptionId}` });
-    } catch (error) {
-      // Card declined etc. — leave it to Stripe's invoice.payment_failed
-      // webhook (already wired to billing_status='past_due' + the
-      // payment-failed email/retry-suspension flow) to record the outcome.
-      console.error(`[StripeProvider] Immediate first-charge invoice ${invoice.id} for subscription ${subscriptionId} failed to pay:`, error);
-    }
   }
 
   async handleWebhook(params: { rawBody: Buffer; signature: string }): Promise<WebhookResult> {

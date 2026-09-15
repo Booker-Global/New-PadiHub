@@ -219,7 +219,10 @@ export function resolveSubscriptionStatusDisplay(input: {
   billing_status?: string | null;
 } | undefined | null): 'Pending Charge' | 'Active' | 'Inactive' | 'Not Set' {
   if (!input || !input.subscription_status) return 'Not Set';
-  if (input.billing_status === 'paused') return 'Pending Charge';
+  // 'pending' — onboarding is fully complete but no subscription has been
+  // created/charged yet; that only happens once the member's group
+  // actually launches (see subscriptionService.reconcileBillingForActiveGroupMembership).
+  if (input.subscription_status === 'pending') return 'Pending Charge';
   if (input.subscription_status === 'active' || input.subscription_status === 'trial') return 'Active';
   return 'Inactive';
 }

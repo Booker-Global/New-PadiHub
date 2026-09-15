@@ -1,14 +1,13 @@
 /**
  * Shared post-verification logic for both markets — UK (Stripe Identity)
- * and NG (Flutterwave Account Resolve). Both flows mirror the same
- * charge-gating pattern: a plan is selected and a card/payment method is
- * saved WITHOUT charging anything, verification is triggered, the profile
- * shows "Pending", and only once verification succeeds does the platform
- * subscription actually get created/charged. This module is the single
- * place that turns a successful or failed verification into the resulting
- * charge (or lack of one), Resend emails, trust score bump, and audit log —
- * called from identityController.ts's Stripe Identity webhook handler (UK)
- * and its Account Resolve handler (NG).
+ * and NG (Flutterwave Account Resolve). Identity verification is purely the
+ * last onboarding step (Trust Score bump, £1 first-50-free-then-surcharge
+ * fee where applicable) — it never creates or charges a platform
+ * subscription. The subscription is only ever created/charged once a group
+ * the member is in actually launches (see
+ * subscriptionService.reconcileBillingForActiveGroupMembership, invoked from
+ * groupService.activateGroup). Called from identityController.ts's Stripe
+ * Identity webhook handler (UK) and its Account Resolve handler (NG).
  */
 import { eq, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
@@ -17,14 +16,13 @@ import { AppError } from '../middleware/errorHandler.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { trustScoreService } from './trustScoreService.js';
 import { notificationService } from './notificationService.js';
-import { subscriptionService } from './subscriptionService.js';
+import { getPaymentEligibility } from './paymentEligibilityService.js';
 import { StripeIdentityProvider } from '../integrations/identity/StripeIdentityProvider.js';
 import { TRUST_SCORE_DELTA_IDENTITY_VERIFIED, isSubscriptionTierKey, formatTierPrice } from '../lib/constants.js';
 import {
   sendIdentityVerifiedEmail,
   sendVerificationFeeChargedEmail,
   sendIdentityVerificationFailedEmail,
-  sendSubscriptionPaymentFailedEmail,
 } from '../integrations/email/emailService.js';
 
 /**
@@ -139,83 +137,25 @@ export const identityVerificationService = {
       await stripeIdentity.addVerificationFeeToFirstInvoice(userId, feePence);
     }
 
-    // Now that verification succeeded, actually create/charge the platform
-    // subscription — this is the only point in either flow where the member
-    // is charged for their subscription (see subscriptionService.activateSubscription).
-    // Verification itself has already been recorded above, so a member who
-    // hasn't picked a plan or saved a card yet (they can verify first and
-    // subscribe afterwards) must not have their verification result thrown
-    // away — the remaining onboarding steps are enforced separately by
-    // paymentEligibilityService before they can create or join a group.
-    let subscriptionResult: Awaited<ReturnType<typeof subscriptionService.activateSubscription>> | null = null;
-    let subscriptionActivationFailureReason: string | null = null;
-    try {
-      subscriptionResult = await subscriptionService.activateSubscription(userId);
-    } catch (err) {
-      // 'SUBSCRIPTION_TIER_NOT_SELECTED' just means the member hasn't picked
-      // a plan/saved a card yet — expected, not an error worth surfacing.
-      // Anything else (provider/customer/charge failure) is genuine and must
-      // not be silently dropped, or the member is left thinking they need to
-      // "finish onboarding" when really their card was declined or the
-      // provider request failed.
-      const isNotReadyYet = err instanceof AppError && err.code === 'SUBSCRIPTION_TIER_NOT_SELECTED';
-      console.warn(
-        '[identityVerificationService] Identity verified but subscription could not be activated:',
-        err instanceof Error ? err.message : err,
-      );
-      if (!isNotReadyYet) {
-        subscriptionActivationFailureReason = err instanceof AppError
-          ? err.message
-          : 'Could not activate your subscription with the payment provider.';
-      }
-    }
-
-    // Only claim the subscription is now active if activateSubscription
-    // actually succeeded AND the resulting charge is genuinely confirmed —
-    // createSubscription() uses Stripe's payment_behavior:'default_incomplete',
-    // so it can resolve successfully (no thrown error) while the card was
-    // declined or needs 3D-Secure, returning a subscription/result object
-    // whose status/billing_status is not active/trialing/paused. Treating
-    // any non-thrown result as "activated" previously caused a member whose
-    // card was declined to be told "your subscription is now active" while
-    // simultaneously receiving a payment-failed email for the same charge.
-    // 'paused' (Section D.2 — deferred billing until the member is a
-    // verified member of an active 3+ member group) is a SUCCESSFUL outcome
-    // here, not a failure: the charge was deliberately never attempted, so
-    // it must count as "activated" too, or a member whose billing is
-    // correctly deferred was previously told their payment "could not be
-    // confirmed" even though nothing ever failed.
-    const resultBillingStatus = subscriptionResult
-      ? ('billing_status' in subscriptionResult ? subscriptionResult.billing_status : subscriptionResult.status)
-      : null;
-    const billingDeferred = resultBillingStatus === 'paused';
-    const subscriptionActivated = resultBillingStatus === 'active' || resultBillingStatus === 'trialing' || billingDeferred;
-    // subscriptionService.createSubscription() already notifies + emails the
-    // member directly when the charge itself isn't confirmed — only treat
-    // that case as a "failure reason" here for messaging purposes, and never
-    // send a second payment-failed email for the same declined charge.
-    const chargeNotConfirmed = Boolean(subscriptionResult) && !subscriptionActivated;
+    // Identity verification no longer creates or charges any platform
+    // subscription — the subscription is only ever created/charged once a
+    // group the member is in actually launches (see
+    // subscriptionService.reconcileBillingForActiveGroupMembership). Verify
+    // whether every OTHER onboarding prerequisite (plan, verified card,
+    // verified payout) is also already in place, purely to tailor the
+    // confirmation email/notification copy below.
+    const eligibility = await getPaymentEligibility(userId);
+    const onboardingComplete = eligibility.ready;
     await notificationService.create({
       userId, type: 'identity_verified',
       title: 'Identity Verified',
-      message: billingDeferred
-        ? 'Your identity has been verified. Your Trust Score has increased and your subscription is confirmed — billing will start once you join an active group with at least 3 members.'
-        : subscriptionActivated
-          ? 'Your identity has been verified. Your Trust Score has increased and your subscription is now active.'
-          : subscriptionActivationFailureReason
-            ? `Your identity has been verified and your Trust Score has increased, but your subscription could not be activated: ${subscriptionActivationFailureReason}`
-            : chargeNotConfirmed
-              ? 'Your identity has been verified and your Trust Score has increased, but we could not confirm payment for your subscription. Please check your card details or complete any additional verification your bank requires.'
-              : 'Your identity has been verified and your Trust Score has increased. Choose a subscription plan and add your payment card to activate your subscription.',
+      message: onboardingComplete
+        ? 'Your identity has been verified. Your Trust Score has increased and your profile is now complete — billing will start once you join or create a group that launches with 3 or more members.'
+        : 'Your identity has been verified. Your Trust Score has increased. Finish the rest of your profile setup to be able to create or join savings groups.',
     });
 
-    if (subscriptionActivationFailureReason) {
-      const failedTier = isSubscriptionTierKey(user.subscription_tier) ? user.subscription_tier : 'basic';
-      await sendSubscriptionPaymentFailedEmail(user.email, formatTierPrice(failedTier, user.country));
-    }
-
     const tier = isSubscriptionTierKey(user.subscription_tier) ? user.subscription_tier : 'basic';
-    await sendIdentityVerifiedEmail(user.email, user.first_name, subscriptionActivated, billingDeferred);
+    await sendIdentityVerifiedEmail(user.email, user.first_name, onboardingComplete, onboardingComplete);
     if (country === 'GB' && feePence > 0) {
       await sendVerificationFeeChargedEmail(
         user.email, user.first_name,
@@ -224,7 +164,7 @@ export const identityVerificationService = {
       );
     }
 
-    return { alreadyVerified: false as const, feePence, subscription: subscriptionResult };
+    return { alreadyVerified: false as const, feePence, onboardingComplete };
   },
 
   /**

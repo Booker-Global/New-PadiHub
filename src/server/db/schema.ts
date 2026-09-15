@@ -21,7 +21,11 @@ export const users = mysqlTable('users', {
   country:                     varchar('country', { length: 2 }).notNull().default('GB'),
   currency:                    varchar('currency', { length: 3 }).notNull().default('GBP'),
   trust_score:                 int('trust_score').notNull().default(0),
-  subscription_status:         mysqlEnum('subscription_status', ['free', 'trial', 'active', 'expired', 'cancelled']).notNull().default('free'),
+  // 'pending' = onboarding fully complete (email, plan, verified card,
+  // verified payout, identity) but no provider subscription has been
+  // created/charged yet — that only happens once the member's group
+  // actually launches (see subscriptionService.reconcileBillingForActiveGroupMembership).
+  subscription_status:         mysqlEnum('subscription_status', ['free', 'trial', 'pending', 'active', 'expired', 'cancelled']).notNull().default('free'),
   // The subscription tier the user chose during onboarding — 'basic' or 'premium'
   // (see SUBSCRIPTION_TIERS in src/server/lib/constants.ts). Null until the
   // user picks a plan; group creation/joining requires this to be set — see

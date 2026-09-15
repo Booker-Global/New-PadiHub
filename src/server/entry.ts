@@ -679,8 +679,6 @@ if (import.meta.env.PROD) {
 				const { authService } = await import('./services/authService.js');
 				await authService.ensureDefaultAdminAccount();
 				const { subscriptionService } = await import('./services/subscriptionService.js');
-				await subscriptionService.activateRetroactiveEligibleSubscriptions();
-				await subscriptionService.healFullyVerifiedSubscriptionStatusRetroactively();
 				await subscriptionService.backfillCancelledAtRetroactively();
 				const { membershipService } = await import('./services/membershipService.js');
 				await membershipService.reconcileVoteRemovedAccountsRetroactively();

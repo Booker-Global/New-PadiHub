@@ -6,7 +6,7 @@
  * There is no free trial and no annual billing option.
  */
 import { v4 as uuidv4 } from 'uuid';
-import { eq, and, or, gt, inArray, notInArray, isNotNull, isNull, desc } from 'drizzle-orm';
+import { eq, and, inArray, isNull, desc } from 'drizzle-orm';
 import axios from 'axios';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
@@ -24,7 +24,6 @@ import {
   formatTierPrice,
   type SubscriptionTierKey,
 } from '../lib/constants.js';
-import { hasFullyVerifiedSubscriptionSetup } from '../lib/subscriptionEligibility.js';
 import {
   sendSubscriptionCreatedEmail,
   sendSubscriptionCancelledEmail,
@@ -84,13 +83,10 @@ async function shouldNotifyActivationFailureByEmail(userId: string): Promise<boo
 
 /**
  * A missing env var (Stripe/Flutterwave secret key, Price/Plan ID) affects
- * EVERY member's activation attempt at once, not just one account — the
- * per-user DB-backed cooldown above would still send one alert per affected
- * member (e.g. all 3 in the boot-time retroactive migration) instead of one
- * alert for the whole incident. A simple in-process timestamp is enough
- * here (and deliberately resets on every deploy/restart, which is exactly
- * when a just-fixed or just-introduced env var problem should be re-alerted
- * on if it recurs).
+ * EVERY member's activation attempt at once, not just one account. A simple
+ * in-process timestamp is enough here (and deliberately resets on every
+ * deploy/restart, which is exactly when a just-fixed or just-introduced env
+ * var problem should be re-alerted on if it recurs).
  */
 const CONFIG_ERROR_ALERT_COOLDOWN_MS = 60 * 60 * 1000;
 let lastConfigErrorAlertSentAt = 0;
@@ -100,24 +96,6 @@ function shouldSendConfigErrorAlertEmail(): boolean {
   return true;
 }
 
-/**
- * TEMPORARY KILL-SWITCH — companion to WEEKLY_SUBSCRIPTION_SELF_HEAL_ENABLED
- * (scheduledJobs.ts) and ELIGIBILITY_RETRY_AUTO_TRIGGER_ENABLED
- * (paymentEligibilityService.ts) — see WEEKLY_SUBSCRIPTION_SELF_HEAL_ENABLED's
- * comment for the full duplicate-Stripe-subscription root cause/fix this
- * pauses. This boot-time sweep (activateRetroactiveEligibleSubscriptions
- * below) was NOT included when those other two triggers were paused, on the
- * assumption that it only ever reaches accounts that have never once
- * activated. That assumption does not hold: it calls exactly the same
- * activateSubscriptionIfEligible -> activateSubscription -> createSubscription
- * -> StripeProvider.createSubscription chain those two triggers do, and on
- * 15/09 it created a second Stripe subscription for four accounts that each
- * already had exactly one clean active subscription (see incident writeup).
- * Disabled until the create-path fix is confirmed to actually hold in
- * production; re-enable then delete this flag and the `if` below.
- */
-const BOOT_TIME_SUBSCRIPTION_ACTIVATION_SWEEP_ENABLED = false;
-
 type PlanSelectionResult = { tier: SubscriptionTierKey; plan: string; monthly_amount: number };
 type PlanSwitchResult = {
   tier: SubscriptionTierKey;
@@ -126,7 +104,6 @@ type PlanSwitchResult = {
   effective_date?: Date;
 };
 type CreateSubscriptionOptions = {
-  deferBilling?: boolean;
   suppressCreatedEmail?: boolean;
 };
 
@@ -154,14 +131,154 @@ export type BillingHistoryEntry = {
   amount_display: string | null;
 };
 
+/**
+ * Flutterwave (NG) has no recurring-billing engine — its
+ * FlutterwaveProvider.createSubscription() is a pure bookkeeping stub that
+ * NEVER actually charges the card (see its own doc comment) and always
+ * reports status 'active', so it must NEVER be routed through the shared
+ * createSubscription() above, which would treat that stub status as a
+ * confirmed charge and mark `users.subscription_status` active before any
+ * money has actually moved. This is the one and only path that creates a
+ * member's very first Flutterwave subscription (called from
+ * reconcileBillingForActiveGroupMembership once they're a verified member
+ * of a launched group): it creates the bookkeeping subscription row
+ * `past_due` (not yet billed), then synchronously charges the member's
+ * saved card token — only flipping to `active` once that charge genuinely
+ * succeeds. A failed charge here is picked up by
+ * retryFirstChargeOrRemoveOnFailure's 72-hour retry (scheduledJobs.
+ * dailySubscriptionFirstChargeRetry), exactly like a renewal charge that
+ * fails after the first has already succeeded.
+ */
+async function chargeFirstFlutterwaveSubscription(
+  userId: string,
+  user: typeof schema.users.$inferSelect,
+  tier: SubscriptionTierKey,
+  activeGroupCount: number,
+): Promise<void> {
+  const provider = getPaymentProvider('NG');
+
+  let customerId = user.flutterwave_customer_id;
+  if (!customerId) {
+    let customerResult;
+    try {
+      customerResult = await provider.createCustomer({
+        userId, email: user.email, name: `${user.first_name} ${user.last_name}`, currency: user.currency,
+      });
+    } catch (err) {
+      if (err instanceof PaymentProviderConfigError) {
+        console.error(`[PadiHub] CONFIGURATION ERROR — Flutterwave subscription blocked for user ${userId} (${user.email}): ${err.message}`);
+        if (shouldSendConfigErrorAlertEmail()) {
+          await sendPaymentProviderConfigErrorAlertEmail(userId, err.message);
+        }
+        return;
+      }
+      console.error('[SubscriptionService] Could not create Flutterwave customer on group launch:', err instanceof Error ? err.message : err);
+      return;
+    }
+    customerId = customerResult.customerId;
+    await db.update(schema.users).set({ flutterwave_customer_id: customerId }).where(eq(schema.users.id, userId));
+  }
+
+  let providerSub;
+  try {
+    providerSub = await provider.createSubscription({
+      customerId, userId, email: user.email, currency: user.currency, tier,
+    });
+  } catch (err) {
+    if (err instanceof PaymentProviderConfigError) {
+      console.error(`[PadiHub] CONFIGURATION ERROR — Flutterwave subscription blocked for user ${userId} (${user.email}): ${err.message}`);
+      if (shouldSendConfigErrorAlertEmail()) {
+        await sendPaymentProviderConfigErrorAlertEmail(userId, err.message);
+      }
+      return;
+    }
+    console.error('[SubscriptionService] Could not create Flutterwave subscription on group launch:', err instanceof Error ? err.message : err);
+    return;
+  }
+
+  const subId = uuidv4();
+  const plan = planCode('NG', tier);
+  await db.insert(schema.subscriptions).values({
+    id:                         subId,
+    user_id:                    userId,
+    provider:                   'flutterwave',
+    provider_subscription_id:   providerSub.subscriptionId,
+    plan,
+    billing_status:             'past_due',
+    last_activation_attempt_at: new Date(),
+  });
+
+  if (!user.flutterwave_card_token) {
+    await db.update(schema.subscriptions).set({ first_charge_failed_at: new Date() }).where(eq(schema.subscriptions.user_id, userId));
+    await createAuditLog({ userId, action: 'FLW_SUBSCRIPTION_FIRST_CHARGE_FAILED', entity: 'subscriptions', entityId: subId, metadata: { reason: 'no_card_on_file', activeGroupCount } });
+    await notificationService.create({
+      userId, type: 'subscription_payment_failed', title: 'Payment could not be completed',
+      message: 'We could not confirm payment for your subscription. Please check your card details.',
+    });
+    await sendSubscriptionPaymentFailedEmail(user.email, formatTierPrice(tier, 'NG'));
+    return;
+  }
+
+  const amountInSmallestUnit = Math.round(getTierMonthlyPrice(tier, 'NG') * 100);
+  const chargeRef = `sub-first-charge-${subId}-${Date.now()}`;
+  let chargeSucceeded = false;
+  try {
+    const result = await provider.chargeContribution({
+      customerId:      user.email,
+      paymentMethodId: user.flutterwave_card_token,
+      amount:          amountInSmallestUnit,
+      currency:        user.currency,
+      countryCode:     user.country,
+      contributionId:  chargeRef,
+      description:     'PadiHub monthly subscription — first charge on joining an active group',
+    });
+    chargeSucceeded = result.status === 'succeeded';
+    await createAuditLog({
+      userId, action: 'FLW_SUBSCRIPTION_FIRST_CHARGE', entity: 'subscriptions', entityId: subId,
+      metadata: { ...(result as unknown as Record<string, unknown>), activeGroupCount },
+    });
+  } catch (error) {
+    console.error('[SubscriptionService] Flutterwave first-charge-on-join failed:', error);
+  }
+
+  if (!chargeSucceeded) {
+    await db.update(schema.subscriptions).set({ first_charge_failed_at: new Date() }).where(eq(schema.subscriptions.user_id, userId));
+    await notificationService.create({
+      userId, type: 'subscription_payment_failed', title: 'Payment could not be completed',
+      message: 'We could not confirm payment for your subscription. Please check your card details or complete any additional verification your bank requires.',
+    });
+    await sendSubscriptionPaymentFailedEmail(user.email, formatTierPrice(tier, 'NG'));
+    return;
+  }
+
+  // Monthly from date of first charge.
+  const firstRenewalDate = new Date();
+  firstRenewalDate.setMonth(firstRenewalDate.getMonth() + 1);
+  await db.update(schema.subscriptions)
+    .set({ billing_status: 'active', renewal_date: firstRenewalDate, first_charge_failed_at: null })
+    .where(eq(schema.subscriptions.user_id, userId));
+  await db.update(schema.users).set({ subscription_status: 'active' }).where(eq(schema.users.id, userId));
+
+  await sendSubscriptionCreatedEmail(
+    user.email, SUBSCRIPTION_TIERS[tier].name, formatTierPrice(tier, 'NG'), firstRenewalDate.toLocaleDateString('en-GB'),
+  );
+  await notificationService.create({
+    userId, type: 'subscription_billing_resumed',
+    title: 'Payment successful — your subscription has begun',
+    message: 'You\'re now an active member of a launched group. Your card was charged successfully and your monthly PadiHub subscription has begun.',
+  });
+}
+
 export const subscriptionService = {
   /**
-   * Record the member's chosen tier during onboarding. This does NOT yet
-   * charge the member — the platform subscription is only created with the
-   * provider once a verified payment method exists (see
-   * paymentController.confirmSetupIntent / saveFlutterwaveToken, which call
-   * `activateSubscription` below after saving the card). Selecting/changing
-   * a plan before a provider subscription exists is free to do repeatedly.
+   * Record the member's chosen tier during onboarding. This NEVER charges
+   * the member or creates a provider subscription — the platform
+   * subscription is only ever created/charged once the member is a verified
+   * member of a group that actually launches (3+ active members, leader
+   * clicks "Start Group" — see groupService.activateGroup ->
+   * reconcileMemberBilling -> reconcileBillingForActiveGroupMembership
+   * below). Selecting/changing a plan before that point is free to do
+   * repeatedly.
    */
   async selectPlan(userId: string, tier: string): Promise<PlanSelectionResult | PlanSwitchResult> {
     if (!isSubscriptionTierKey(tier)) {
@@ -210,257 +327,7 @@ export const subscriptionService = {
       metadata: { tier, country: user.country },
     });
 
-    // If this member already completed the rest of onboarding (payment
-    // method + payout destination + identity) before ever picking a plan —
-    // e.g. they verified identity first, and this is the "select-plan"
-    // step onboardingSteps.ts sends them back to complete — activate their
-    // subscription immediately instead of leaving it stuck forever, since
-    // whichever of the four onboarding prerequisites completes LAST is
-    // responsible for triggering activation (see activateSubscriptionIfEligible).
-    await this.activateSubscriptionIfEligible(userId);
-
     return { tier, plan: planCode(user.country, tier), monthly_amount: getTierMonthlyPrice(tier, user.country) };
-  },
-
-  /**
-   * Create the real, billable platform subscription with the provider once
-   * the member has a verified payment method on file. Called right after a
-   * card is saved (Stripe SetupIntent confirmed / Flutterwave card token
-   * saved). No-op (returns the existing subscription) if one is already
-   * active for this user.
-   */
-  async activateSubscription(userId: string) {
-    const userRows = await db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1);
-    if (!userRows.length) throw new AppError('User not found.', 404);
-    const user = userRows[0];
-
-    if (!isSubscriptionTierKey(user.subscription_tier)) {
-      throw new AppError('Select a subscription plan before adding a payment method.', 400, 'SUBSCRIPTION_TIER_NOT_SELECTED');
-    }
-
-    const existing = await db.select().from(schema.subscriptions)
-      .where(eq(schema.subscriptions.user_id, userId)).limit(1);
-    // 'paused' (Section D.2 — deferred until an active 3+ member group) is
-    // just as much an already-created subscription as 'active' — re-running
-    // createSubscription here would create a duplicate provider subscription.
-    if (existing.length && (existing[0].billing_status === 'active' || existing[0].billing_status === 'paused')) {
-      // Self-heal: users.subscription_status is the functional eligibility
-      // gate (see paymentEligibilityService) and must stay in sync with a
-      // provider subscription that already exists and is billing-active or
-      // deferred/paused — both mean the charge itself was confirmed. A stale
-      // 'free'/'trial' value here (e.g. a legacy account activated before
-      // this column was consistently written, or a retroactive/self-heal
-      // call) would otherwise leave an already-subscribed member unable to
-      // join or create a group.
-      if (user.subscription_status !== 'active' && user.subscription_status !== 'trial') {
-        await db.update(schema.users).set({ subscription_status: 'active' as const }).where(eq(schema.users.id, userId));
-      }
-      return existing[0];
-    }
-
-    // A Stripe subscription already exists here but is stuck 'past_due' —
-    // its real, still-open first invoice was created but never actually
-    // collected (see createSubscription's `payment_behavior:
-    // 'default_incomplete'` and retryStripeIncompleteSubscriptionCharge
-    // above). Falling through to createSubscription() below in this case
-    // previously created a SECOND, duplicate Stripe subscription every time
-    // this ran — e.g. identityVerificationService calls activateSubscription()
-    // directly once verification completes, bypassing
-    // activateSubscriptionIfEligible's own retry-first logic entirely — while
-    // the first subscription's now-abandoned invoice was left dangling.
-    // Retroactively diagnosed from Stripe showing a customer with BOTH an
-    // "Incomplete" and a later "Succeeded" subscription-creation charge, and
-    // PadiHub's own notifications/emails still reporting failure even
-    // though a (different, duplicate) subscription had genuinely gone
-    // active. Re-attempt collecting THAT existing invoice instead — never
-    // create a second one for the same member. Flutterwave (NG) has no
-    // equivalent unpaid invoice to retry (see retryStripeIncompleteSubscriptionCharge),
-    // so this only applies to Stripe.
-    if (existing.length && existing[0].billing_status === 'past_due'
-      && existing[0].provider === 'stripe' && existing[0].provider_subscription_id) {
-      await this.retryStripeIncompleteSubscriptionCharge(userId, existing[0].provider_subscription_id);
-      const refreshed = await db.select().from(schema.subscriptions)
-        .where(eq(schema.subscriptions.user_id, userId)).limit(1);
-      return refreshed[0] ?? existing[0];
-    }
-
-    return this.createSubscription(userId, user.country, user.subscription_tier);
-  },
-
-  /**
-   * Attempts to activate the platform subscription the moment ALL FOUR
-   * remaining onboarding prerequisites — tier selected, payment method
-   * verified, payout destination verified, identity verified — are in
-   * place, regardless of which one happens to complete last. Each of the
-   * write-paths for those four steps (selectPlan, payment-method-save,
-   * payout-save/webhook, identity verification) calls this after persisting
-   * its own change, so a member is never left permanently stuck just
-   * because they didn't finish onboarding in the "expected" plan → card →
-   * payout → identity order (e.g. a Stripe Connect payout only verifies
-   * once the `account.updated` webhook arrives, which can land after
-   * identity verification already succeeded).
-   *
-   * A no-op if any prerequisite is still missing. Best-effort: notifies +
-   * emails the member on a genuine provider/charge failure, but never
-   * throws — the calling request (saving a card, confirming a payout,
-   * etc.) must still succeed even if activation itself fails.
-   *
-   * Deliberately does NOT gate on `users.subscription_status` to decide
-   * whether a subscription already exists — that column can end up
-   * 'active' with no corresponding `subscriptions` row at all if an
-   * earlier bug (or a manual data fix) ever set it without going through
-   * createSubscription's insert. Trusting it here would make this
-   * function — one of the platform's core self-heals — permanently blind
-   * to exactly the accounts it exists to repair. Instead it checks the
-   * real `subscriptions` table directly; `activateSubscription()` below
-   * performs the same real check before deciding whether to create a new
-   * one, so this can never create a duplicate.
-   */
-  async activateSubscriptionIfEligible(userId: string): Promise<void> {
-    const userRows = await db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1);
-    if (!userRows.length) return;
-    const user = userRows[0];
-
-    if (!isSubscriptionTierKey(user.subscription_tier)) return;
-    if (!user.identity_verified || !user.payment_method_verified_at || !user.payout_verified_at) return;
-
-    const existingSubRows = await db.select({
-      billing_status:            schema.subscriptions.billing_status,
-      provider:                  schema.subscriptions.provider,
-      provider_subscription_id:  schema.subscriptions.provider_subscription_id,
-    }).from(schema.subscriptions).where(eq(schema.subscriptions.user_id, userId)).limit(1);
-    const existingSub = existingSubRows[0];
-    if (user.subscription_status === 'cancelled' || existingSub?.billing_status === 'cancelled') return;
-    if (existingSub && (existingSub.billing_status === 'active' || existingSub.billing_status === 'paused')) return;
-
-    // Every member-controlled onboarding input is already on file and
-    // verified (see hasFullyVerifiedSubscriptionSetup) AND a `subscriptions`
-    // row already exists (i.e. a real provider attempt genuinely happened
-    // for this account). Historically (retroactively diagnosed for
-    // abdulwahabyakubu@yahoo.com, abdulwahabyakubu17@gmail.com and
-    // tounsitraveller@gmail.com — see PR #33-36) a live provider charge
-    // attempt had already proven it wouldn't succeed for accounts in this
-    // state, so this only self-healed `subscription_status` locally instead
-    // of re-attempting (and re-failing) a charge.
-    //
-    // That assumption no longer holds for Stripe (GB): StripeProvider.
-    // createSubscription's `payment_behavior: 'default_incomplete'` never
-    // actually attempted to collect the first invoice server-side (no
-    // client-side stripe.confirmCardPayment() exists anywhere in this
-    // codebase — see createSubscription's invoices.pay() fix), so every
-    // Stripe subscription that reached this branch was left `incomplete`
-    // with a real, still-unpaid, NEVER-ATTEMPTED invoice — not a genuine
-    // decline. Retry that actual off-session charge first; only fall back
-    // to the local-only self-heal below if the retry still doesn't result
-    // in an active/trialing subscription (e.g. a genuine decline, or the
-    // card now requires interactive 3DS). Flutterwave (NG) has no
-    // equivalent unpaid invoice to retry here — its own first-charge retry
-    // path is reconcileBillingForActiveGroupMembership/
-    // retryFirstChargeOrRemoveOnFailure — so this is skipped for NG.
-    if (existingSub?.provider === 'stripe' && existingSub.provider_subscription_id
-      && existingSub.billing_status === 'past_due') {
-      const retried = await this.retryStripeIncompleteSubscriptionCharge(userId, existingSub.provider_subscription_id);
-      if (retried) return;
-    }
-
-    // Requiring `existingSub` here (Section D.2 follow-up) matters: a member
-    // who has NEVER had a `subscriptions` row created (the common case —
-    // simply hasn't gone through activateSubscription() yet) must NOT take
-    // this shortcut, or they're marked "subscribed" forever with no
-    // `subscriptions` row at all — which means reconcileBillingForActive
-    // GroupMembership's `if (!subRows.length) return;` guard permanently
-    // no-ops for them, so they're never actually billed even after joining
-    // an active 3+ member group. That silent gap is exactly what left
-    // abdulyakubu99@gmail.com's premium subscription never charged once
-    // London Savers Club activated. Falling through to activateSubscription()
-    // below for these members is safe: createSubscription() computes
-    // deferBilling from their real active-group-membership count, so it
-    // either creates a genuinely-paused (uncharged) row or a real charge
-    // attempt — never a silent no-op — and any failure is already
-    // throttled (last_activation_attempt_at / shouldNotifyActivationFailureByEmail)
-    // so it can't recreate the PR #33-36 email-storm/stuck-at-80% bug.
-    if (existingSub && hasFullyVerifiedSubscriptionSetup(user)) {
-      if (user.subscription_status !== 'active' && user.subscription_status !== 'trial') {
-        await db.update(schema.users).set({ subscription_status: 'active' as const }).where(eq(schema.users.id, userId));
-      }
-      return;
-    }
-
-    try {
-      const activeGroupCount = existingSub ? 0 : await groupService.countActiveGroupMembershipsForUser(userId);
-      // Flutterwave (NG) ONLY: a member who somehow reached an already-active
-      // group with NO local subscription row yet (for example via an earlier
-      // self-heal that set users.subscription_status='active' without ever
-      // materialising the `subscriptions` row) must NOT go straight through
-      // createSubscription "live" on Flutterwave — FlutterwaveProvider.
-      // createSubscription() is a pure bookkeeping stub that NEVER actually
-      // charges the card (Flutterwave has no recurring-billing engine; see
-      // its comment), so a "live" row there would mark billing active
-      // without ever charging the card. Seed the missing row in
-      // deferred/paused form first, then hand off to the normal active-group
-      // billing reconciliation below, which performs the real explicit
-      // chargeContribution() first charge for NG.
-      //
-      // Stripe (GB) must NOT take this detour: the member is already
-      // verified AND already in an active (3+ member) group, so there is no
-      // reason to defer at all — falling through to activateSubscription()
-      // below calls createSubscription() with deferBilling computed from
-      // activeGroupCount (> 0 here), which goes straight to a real
-      // `payment_behavior: 'default_incomplete'` charge attempt in a single
-      // step. Routing Stripe through the seed-as-trialing-then-immediately-
-      // end-the-trial dance instead only adds an extra round-trip (and an
-      // extra way to fail) for no benefit — the member should simply be
-      // charged immediately.
-      if (!existingSub && activeGroupCount > 0 && user.country === 'NG') {
-        await this.createSubscription(userId, user.country, user.subscription_tier, {
-          deferBilling: true,
-          suppressCreatedEmail: true,
-        });
-        await this.reconcileBillingForActiveGroupMembership(userId);
-        return;
-      }
-      await this.activateSubscription(userId);
-    } catch (err) {
-      // A missing Stripe/Flutterwave secret key or Price/Plan ID env var
-      // (PaymentProviderConfigError, surfaced here as AppError code
-      // SUBSCRIPTION_PROVIDER_CONFIG_ERROR — see createSubscription() above)
-      // means no request was ever sent to the provider at all — this is a
-      // PadiHub-side setup problem, not a genuine card decline. The member's
-      // card is not at fault, so they must never be told their payment
-      // failed; only the team should be alerted, loudly, to go fix the
-      // missing configuration.
-      if (err instanceof AppError && err.code === 'SUBSCRIPTION_PROVIDER_CONFIG_ERROR') {
-        console.error(`[PadiHub] CONFIGURATION ERROR — subscription activation blocked for user ${userId} (${user.email}): ${err.message}`);
-        if (shouldSendConfigErrorAlertEmail()) {
-          await sendPaymentProviderConfigErrorAlertEmail(userId, err.message);
-        }
-        return;
-      }
-
-      // Every prerequisite is already met here, so any other failure is a
-      // genuine provider/charge problem, not "not ready yet" — surface the
-      // real reason instead of silently dropping it, so the member isn't
-      // left thinking they're subscribed when they aren't.
-      const message = err instanceof AppError ? err.message : 'Could not activate your subscription with the payment provider.';
-      console.warn('[subscriptionService] Onboarding complete but subscription could not be activated:', message);
-      await notificationService.create({
-        userId,
-        type: 'subscription_payment_failed',
-        title: 'Payment could not be completed',
-        message,
-      });
-      // Every onboarding-completing action (re-selecting a plan, saving a
-      // card, saving a payout destination, verifying identity) calls this
-      // method directly, with no cooldown of its own, and the dashboard/
-      // join-page self-heal (refreshSubscriptionActivationStatus) can also
-      // retry it every 5 minutes — so a member whose activation is
-      // genuinely still failing was previously re-emailed on every single
-      // one of those, sometimes minutes apart. Only actually send the email
-      // once per hour for the same still-failing account.
-      if (await shouldNotifyActivationFailureByEmail(userId)) {
-        await sendSubscriptionPaymentFailedEmail(user.email, formatTierPrice(user.subscription_tier, user.country));
-      }
-    }
   },
 
   /**
@@ -616,8 +483,9 @@ export const subscriptionService = {
 
   /**
    * Create a platform subscription for a user with the provider. Called by
-   * activateSubscription() once a payment method is verified, and by
-   * reactivateSubscription()/switchPlan().
+   * reconcileBillingForActiveGroupMembership below once the member is a
+   * verified member of a group that has actually launched, and by
+   * reactivateSubscription()/switchPlan()'s upgrade branch.
    */
   async createSubscription(userId: string, country: string, tier: SubscriptionTierKey, options: CreateSubscriptionOptions = {}) {
     const userRows = await db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1);
@@ -626,22 +494,9 @@ export const subscriptionService = {
 
     const provider = getPaymentProvider(country);
 
-    // Section D.2 — subscription billing must stay inert (no charge
-    // attempted) until the member is verified in an active (3+ member)
-    // group; see reconcileBillingForActiveGroupMembership below for where
-    // this flips to live billing (and back to paused) as group membership
-    // changes.
-    const activeGroupCount = await groupService.countActiveGroupMembershipsForUser(userId);
-    const deferBilling = options.deferBilling ?? activeGroupCount === 0;
-
     // Stamp the attempt on any PRE-EXISTING subscription row up front —
     // before contacting the provider at all — so a retry that ends up
-    // throwing below still updates the timestamp
-    // refreshSubscriptionActivationStatus (paymentEligibilityService) keys
-    // its retry cooldown off. Without this, a persistently-failing account
-    // (e.g. a genuine, ongoing provider outage) would be retried — and the
-    // member re-emailed — on every single dashboard/join-page load instead
-    // of being cooled down like any other outcome. A first-ever attempt (no
+    // throwing below still updates the timestamp. A first-ever attempt (no
     // row yet) has nothing to throttle against, so this is a no-op then;
     // the insert branch below sets it once the attempt actually completes.
     await db.update(schema.subscriptions)
@@ -689,13 +544,12 @@ export const subscriptionService = {
         email:    user.email,
         currency: user.currency,
         tier,
-        deferBilling,
       });
     } catch (err) {
       // Distinguish a PadiHub-side setup problem (missing Price/Plan ID —
       // no request to the provider was ever made) from a genuine
-      // provider/network error, so callers like activateSubscriptionIfEligible
-      // never mistake a config gap for the member's own card failing.
+      // provider/network error, so callers never mistake a config gap for
+      // the member's own card failing.
       if (err instanceof PaymentProviderConfigError) {
         throw new AppError(err.message, 500, 'SUBSCRIPTION_PROVIDER_CONFIG_ERROR');
       }
@@ -713,18 +567,8 @@ export const subscriptionService = {
     // never show "Active" or send the welcome email for a card that hasn't
     // actually been verified yet. invoice.payment_succeeded/failed webhooks
     // reconcile this to the real outcome once Stripe finishes processing.
-    // When deferBilling is set, no charge is EVER attempted (pause_collection
-    // is set instead of default_incomplete — see StripeProvider), so there is
-    // nothing that could have failed to confirm; treat deferBilling
-    // unconditionally as activated rather than trusting the provider's status
-    // field to happen to read 'active'/'trialing'. Getting this wrong is what
-    // previously sent members "payment could not be completed" emails (and
-    // left them stuck unable to join/create a group) for a subscription whose
-    // billing was only ever deliberately deferred, never actually declined.
-    const billingIsActive = deferBilling || result.status === 'active' || result.status === 'trialing';
-    // The subscription is only genuinely BILLING (money can actually move)
-    // if the provider confirmed it AND we didn't defer collection.
-    const billingStatus = !billingIsActive ? 'past_due' : deferBilling ? 'paused' : 'active';
+    const billingIsActive = result.status === 'active' || result.status === 'trialing';
+    const billingStatus = billingIsActive ? 'active' : 'past_due';
 
     // Upsert subscription record
     const existing = await db.select().from(schema.subscriptions)
@@ -754,19 +598,17 @@ export const subscriptionService = {
       });
     }
 
-    // subscription_status is the FUNCTIONAL eligibility gate (payment method
-    // verified + plan chosen) used by paymentEligibilityService to allow
-    // joining/creating a group — it must become 'active' as soon as the
-    // provider confirms the card, independent of billing_status/deferBilling
-    // above (otherwise a member could never join the very group that would
-    // make billing_status flip to 'active').
+    // subscription_status only becomes 'active' once the provider actually
+    // confirms the charge — never optimistically, and never merely because
+    // a plan was chosen or a card was saved (see Part C of the onboarding
+    // spec: billing only starts once the member's group launches).
     await db.update(schema.users)
       .set({ subscription_tier: tier, ...(billingIsActive ? { subscription_status: 'active' as const } : {}) })
       .where(eq(schema.users.id, userId));
 
     await createAuditLog({
-      userId, action: billingIsActive ? (deferBilling ? 'SUBSCRIPTION_CREATED_BILLING_DEFERRED' : 'SUBSCRIPTION_CREATED') : 'SUBSCRIPTION_PAYMENT_PENDING', entity: 'subscriptions',
-      metadata: { subscriptionId: result.subscriptionId, country, tier, amount_display: formatTierPrice(tier, country), providerStatus: result.status, deferBilling },
+      userId, action: billingIsActive ? 'SUBSCRIPTION_CREATED' : 'SUBSCRIPTION_PAYMENT_PENDING', entity: 'subscriptions',
+      metadata: { subscriptionId: result.subscriptionId, country, tier, amount_display: formatTierPrice(tier, country), providerStatus: result.status },
     });
 
     if (billingIsActive) {
@@ -776,7 +618,6 @@ export const subscriptionService = {
           SUBSCRIPTION_TIERS[tier].name,
           formatTierPrice(tier, country),
           result.renewalDate ? result.renewalDate.toLocaleDateString('en-GB') : 'your next billing date',
-          deferBilling,
         );
       }
     } else if (isStripeSubscriptionAwaitingConfirmation(country, result.status)) {
@@ -793,8 +634,7 @@ export const subscriptionService = {
         title: 'Payment could not be completed',
         message: 'We could not confirm payment for your subscription. Please check your card details or complete any additional verification your bank requires.',
       });
-      // Same reasoning as activateSubscriptionIfEligible's catch block —
-      // this branch is reached again on every retry of a persistently
+      // This branch is reached again on every retry of a persistently
       // declined/unconfirmed card, so only actually email once per hour.
       if (await shouldNotifyActivationFailureByEmail(userId)) {
         await sendSubscriptionPaymentFailedEmail(user.email, formatTierPrice(tier, country));
@@ -876,11 +716,6 @@ export const subscriptionService = {
         console.error('[SubscriptionService] Failed to cancel previous provider subscription during upgrade:', error);
       }
 
-      // Section D.2 — same defer-until-active-group rule as createSubscription()
-      // applies to a brand-new provider subscription created here too.
-      const activeGroupCount = await groupService.countActiveGroupMembershipsForUser(userId);
-      const deferBilling = activeGroupCount === 0;
-
       const result = await (async () => {
         try {
           return await provider.createSubscription({
@@ -889,7 +724,6 @@ export const subscriptionService = {
             email:    user.email,
             currency: user.currency,
             tier:     newTier,
-            deferBilling,
           });
         } catch (err) {
           throw new AppError(
@@ -901,11 +735,9 @@ export const subscriptionService = {
 
       // Same reasoning as createSubscription() above — Stripe's
       // default_incomplete subscription can come back non-active if the
-      // card is declined or needs 3D-Secure, without throwing. And, same as
-      // createSubscription(), a deferred upgrade never attempts a charge at
-      // all, so it must never be reported as a payment failure.
-      const upgradeBillingIsActive = deferBilling || result.status === 'active' || result.status === 'trialing';
-      const upgradeBillingStatus = !upgradeBillingIsActive ? 'past_due' : deferBilling ? 'paused' : 'active';
+      // card is declined or needs 3D-Secure, without throwing.
+      const upgradeBillingIsActive = result.status === 'active' || result.status === 'trialing';
+      const upgradeBillingStatus = upgradeBillingIsActive ? 'active' : 'past_due';
 
       await db.update(schema.subscriptions).set({
         provider_subscription_id:   result.subscriptionId,
@@ -929,8 +761,8 @@ export const subscriptionService = {
       // real billing-history event alongside SUBSCRIPTION_CREATED/renewal
       // charges, since getBillingHistory() below reads from these logs.
       await createAuditLog({
-        userId, action: upgradeBillingIsActive ? (deferBilling ? 'SUBSCRIPTION_CREATED_BILLING_DEFERRED' : 'SUBSCRIPTION_CREATED') : 'SUBSCRIPTION_PAYMENT_PENDING', entity: 'subscriptions',
-        metadata: { subscriptionId: result.subscriptionId, country: user.country, tier: newTier, amount_display: newAmount, providerStatus: result.status, deferBilling },
+        userId, action: upgradeBillingIsActive ? 'SUBSCRIPTION_CREATED' : 'SUBSCRIPTION_PAYMENT_PENDING', entity: 'subscriptions',
+        metadata: { subscriptionId: result.subscriptionId, country: user.country, tier: newTier, amount_display: newAmount, providerStatus: result.status },
       });
 
 
@@ -1116,155 +948,79 @@ export const subscriptionService = {
   },
 
   /**
-   * Section D.2 — subscription billing is only ever "live" (billing_status
-   * 'active', and genuinely being collected by the provider) while the user
-   * is a verified member of at least one 'active' (launched) group; it's
-   * inert/paused otherwise. Called immediately after any event that could
-   * change a user's active-group-membership count (group activation,
-   * reactivation, joining, leaving, removal — see call sites), and as a
-   * daily safety-net sweep by scheduledJobs.dailyBillingActiveGroupReconciliation
+   * The one and only trigger for a member's platform subscription — see
+   * onboarding Part C: no charge is ever attempted, and
+   * `users.subscription_status` never becomes 'active', until the member is
+   * a verified member of a group that has actually launched (3+ active
+   * members, leader clicks "Start Group" — see groupService.activateGroup).
+   * Called from groupService.reconcileMemberBilling (itself invoked by
+   * activateGroup and reevaluateAfterMembershipChange whenever a member's
+   * active-group-membership count could have changed), and as a daily
+   * safety-net sweep by scheduledJobs.dailyBillingActiveGroupReconciliation
    * in case any individual call site is ever missed.
    *
-   * Stripe (GB): actually calls provider.pauseBilling/resumeBilling, which
-   * sets/clears Stripe's own pause_collection, so the subscription
-   * genuinely stops/starts being charged at the provider — not just our DB
-   * flag. Flutterwave (NG) has no real recurring-billing engine to pause —
-   * pauseBilling/resumeBilling are no-ops there by design (see
-   * FlutterwaveProvider) — so enforcement is entirely via the
-   * billing_status DB flag written below, which
-   * monthlySubscriptionRenewalCharge (scheduledJobs.ts) already filters on
-   * (only ever charges rows where billing_status IN ('active','trialing')),
-   * so NG renewals are equally deferred/resumed by this same flag flip.
+   * No-op if the member has no active (launched) group membership yet
+   * (nothing to bill), or if a `subscriptions` row already exists for them
+   * — the one first-charge attempt has already been made; a genuine
+   * failure is handled by retryFirstChargeOrRemoveOnFailure (Flutterwave)
+   * or the Stripe invoice.payment_failed webhook, never by re-attempting
+   * here, which would risk creating a duplicate provider subscription.
+   *
+   * Stripe (GB): createSubscription() below performs the create-customer,
+   * create-subscription and synchronous first-invoice-pay steps in one
+   * call, and reports the confirmed provider status back.
+   *
+   * Flutterwave (NG): has no real recurring-billing engine (its
+   * createSubscription() is a pure bookkeeping stub that never charges —
+   * see FlutterwaveProvider) — the real first charge is an explicit
+   * chargeContribution() call against the member's saved card token,
+   * performed by chargeFirstFlutterwaveSubscription below.
    */
   async reconcileBillingForActiveGroupMembership(userId: string) {
     const activeGroupCount = await groupService.countActiveGroupMembershipsForUser(userId);
-    const subRows = await db.select().from(schema.subscriptions)
+    if (activeGroupCount === 0) return;
+
+    const existingSub = await db.select().from(schema.subscriptions)
       .where(eq(schema.subscriptions.user_id, userId)).limit(1);
-    if (!subRows.length) {
-      if (activeGroupCount > 0) {
-        await this.activateSubscriptionIfEligible(userId);
-      }
-      return;
-    }
-    const sub = subRows[0];
-    if (sub.billing_status === 'cancelled') return;
+    if (existingSub.length) return;
 
     const userRows = await db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1);
     if (!userRows.length) return;
     const user = userRows[0];
-    const provider = getPaymentProvider(user.country);
+    // Should not happen — joining/creating a group is gated on a plan
+    // already being chosen (see paymentEligibilityService.assertPaymentSetupComplete)
+    // — but never attempt to bill a member with no tier selected.
+    if (!isSubscriptionTierKey(user.subscription_tier)) return;
 
-    if (activeGroupCount === 0 && sub.billing_status !== 'paused') {
-      if (sub.provider_subscription_id) {
-        try {
-          await provider.pauseBilling?.(sub.provider_subscription_id);
-        } catch (error) {
-          console.error('[SubscriptionService] Failed to pause provider billing:', error);
+    if (user.country === 'NG') {
+      await chargeFirstFlutterwaveSubscription(userId, user, user.subscription_tier, activeGroupCount);
+      return;
+    }
+
+    try {
+      await this.createSubscription(userId, user.country, user.subscription_tier);
+    } catch (err) {
+      // A missing Stripe secret key or Price ID env var
+      // (PaymentProviderConfigError, surfaced here as AppError code
+      // SUBSCRIPTION_PROVIDER_CONFIG_ERROR — see createSubscription()
+      // above) means no request was ever sent to Stripe at all — this is a
+      // PadiHub-side setup problem, not a genuine card decline. The
+      // member's card is not at fault, so they must never be told their
+      // payment failed; only the team should be alerted, loudly, to go fix
+      // the missing configuration.
+      if (err instanceof AppError && err.code === 'SUBSCRIPTION_PROVIDER_CONFIG_ERROR') {
+        console.error(`[PadiHub] CONFIGURATION ERROR — subscription activation blocked for user ${userId} (${user.email}): ${err.message}`);
+        if (shouldSendConfigErrorAlertEmail()) {
+          await sendPaymentProviderConfigErrorAlertEmail(userId, err.message);
         }
-      }
-      await db.update(schema.subscriptions).set({ billing_status: 'paused' }).where(eq(schema.subscriptions.user_id, userId));
-      await createAuditLog({ userId, action: 'SUBSCRIPTION_BILLING_PAUSED', entity: 'subscriptions', metadata: { reason: 'zero_active_group_memberships' } });
-    } else if (activeGroupCount > 0 && sub.billing_status === 'paused') {
-      if (sub.provider_subscription_id) {
-        try {
-          await provider.resumeBilling?.(sub.provider_subscription_id);
-        } catch (error) {
-          console.error('[SubscriptionService] Failed to resume provider billing:', error);
-        }
-      }
-
-      // Section 1/5 — a member is billed FROM THE DAY they become an
-      // active group member (step f complete), then monthly afterwards.
-      // Flutterwave (NG) has no subscription engine to do this for us
-      // (pauseBilling/resumeBilling are no-ops there — see
-      // FlutterwaveProvider), so we must charge the saved card token here,
-      // synchronously, and only report success/failure once we actually
-      // know the real outcome.
-      if (user.country === 'NG' && sub.provider === 'flutterwave') {
-        if (!user.flutterwave_card_token) {
-          await db.update(schema.subscriptions).set({ billing_status: 'past_due', first_charge_failed_at: new Date() }).where(eq(schema.subscriptions.user_id, userId));
-          await db.update(schema.users).set({ subscription_status: 'expired' }).where(eq(schema.users.id, userId));
-          await sendSubscriptionPaymentFailedEmail(
-            user.email,
-            isSubscriptionTierKey(user.subscription_tier) ? formatTierPrice(user.subscription_tier, user.country) : '',
-          );
-          await createAuditLog({ userId, action: 'FLW_SUBSCRIPTION_FIRST_CHARGE_FAILED', entity: 'subscriptions', metadata: { reason: 'no_card_on_file', activeGroupCount } });
-          return;
-        }
-
-        const amountInSmallestUnit = Math.round(getTierMonthlyPrice(
-          isSubscriptionTierKey(user.subscription_tier) ? user.subscription_tier : 'basic', 'NG',
-        ) * 100);
-        const chargeRef = `sub-first-charge-${sub.id}-${Date.now()}`;
-        let chargeSucceeded = false;
-        try {
-          const result = await provider.chargeContribution({
-            customerId:      user.email,
-            paymentMethodId: user.flutterwave_card_token,
-            amount:          amountInSmallestUnit,
-            currency:        user.currency,
-            countryCode:     user.country,
-            contributionId:  chargeRef,
-            description:     'PadiHub monthly subscription — first charge on joining an active group',
-          });
-          chargeSucceeded = result.status === 'succeeded';
-          await createAuditLog({
-            userId, action: 'FLW_SUBSCRIPTION_FIRST_CHARGE', entity: 'subscriptions', entityId: sub.id,
-            metadata: { ...(result as unknown as Record<string, unknown>), activeGroupCount },
-          });
-        } catch (error) {
-          console.error('[SubscriptionService] Flutterwave first-charge-on-join failed:', error);
-        }
-
-        if (!chargeSucceeded) {
-          await db.update(schema.subscriptions).set({ billing_status: 'past_due', first_charge_failed_at: new Date() }).where(eq(schema.subscriptions.user_id, userId));
-          await db.update(schema.users).set({ subscription_status: 'expired' }).where(eq(schema.users.id, userId));
-          await sendSubscriptionPaymentFailedEmail(
-            user.email,
-            isSubscriptionTierKey(user.subscription_tier) ? formatTierPrice(user.subscription_tier, user.country) : '',
-          );
-          return;
-        }
-
-        await db.update(schema.subscriptions).set({ first_charge_failed_at: null }).where(eq(schema.subscriptions.user_id, userId));
-
-        // Monthly from date of first charge (Section 5).
-        const firstRenewalDate = new Date();
-        firstRenewalDate.setMonth(firstRenewalDate.getMonth() + 1);
-        await db.update(schema.subscriptions)
-          .set({ billing_status: 'active', renewal_date: firstRenewalDate })
-          .where(eq(schema.subscriptions.user_id, userId));
-        await db.update(schema.users).set({ subscription_status: 'active' }).where(eq(schema.users.id, userId));
-        await createAuditLog({ userId, action: 'SUBSCRIPTION_BILLING_RESUMED', entity: 'subscriptions', metadata: { activeGroupCount, provider: 'flutterwave' } });
-
-        if (isSubscriptionTierKey(user.subscription_tier)) {
-          await sendSubscriptionCreatedEmail(
-            user.email,
-            SUBSCRIPTION_TIERS[user.subscription_tier].name,
-            formatTierPrice(user.subscription_tier, user.country),
-            firstRenewalDate.toLocaleDateString('en-GB'),
-          );
-        }
-        await notificationService.create({
-          userId, type: 'subscription_billing_resumed',
-          title: 'Payment successful — your subscription has begun',
-          message: 'You\'re now an active member of a launched group. Your card was charged successfully and your monthly PadiHub subscription has begun.',
-        });
         return;
       }
-
-      // Stripe (GB): resumeBilling() above clears pause_collection AND
-      // immediately creates+attempts to pay an out-of-cycle invoice for the
-      // current charge — but whether that charge actually SUCCEEDED is only
-      // known asynchronously via Stripe's invoice.payment_succeeded/
-      // invoice.payment_failed webhooks (webhookStripeController.ts), which
-      // already flip billing_status to 'active'/'past_due' and send the
-      // outcome email. Do NOT optimistically mark billing_status='active'
-      // or claim success here — that previously told members/dashboards
-      // billing had started before any card was actually charged. Leave
-      // billing_status as 'paused' (unchanged) until the webhook confirms
-      // the real outcome; audit-log only that an attempt was made.
-      await createAuditLog({ userId, action: 'SUBSCRIPTION_BILLING_RESUME_ATTEMPTED', entity: 'subscriptions', metadata: { activeGroupCount, provider: sub.provider } });
+      // Any other provider/network error here is already turned into a
+      // "payment could not be completed" notification+email by
+      // createSubscription() itself before it throws — just log for
+      // visibility, never let it bubble up and fail the group-launch/join
+      // request that triggered this reconciliation.
+      console.error('[SubscriptionService] Could not create Stripe subscription on group launch:', err instanceof Error ? err.message : err);
     }
   },
 
@@ -1369,176 +1125,16 @@ export const subscriptionService = {
   },
 
   /**
-   * Section 1 — called by scheduledJobs.dailyPendingChargeGroupJoinFollowUp
-   * once a member has sat in "Pending Charge" (billing_status 'paused', no
-   * active group) for PENDING_CHARGE_GROUP_JOIN_EXPIRY_DAYS (30) without
-   * joining/launching an active group. Never charges anything — cancels
-   * the still-dormant provider subscription (if one was ever created),
-   * clears the chosen plan so the dashboard shows "subscription plan
-   * pending" again, and resets subscription_status to the inactive state,
-   * putting the member back at the "choose a plan" onboarding step. Their
-   * verified card/payout/identity are all left intact — only the plan
-   * selection needs to be redone.
-   */
-  async expirePendingChargeWithoutGroup(userId: string): Promise<void> {
-    const subRows = await db.select().from(schema.subscriptions).where(eq(schema.subscriptions.user_id, userId)).limit(1);
-    const sub = subRows[0];
-
-    if (sub?.provider_subscription_id && sub.billing_status !== 'cancelled') {
-      try {
-        const userRows = await db.select({ country: schema.users.country }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
-        const country = userRows[0]?.country ?? 'GB';
-        const provider = getPaymentProvider(country === 'NG' ? 'NG' : 'GB');
-        await provider.cancelSubscription({ subscriptionId: sub.provider_subscription_id });
-      } catch (error) {
-        console.error('[SubscriptionService] Failed to cancel dormant provider subscription during Pending Charge expiry:', error);
-      }
-    }
-
-    if (sub) {
-      await db.update(schema.subscriptions)
-        .set({ billing_status: 'cancelled', provider_subscription_id: null, renewal_date: null, cancelled_at: new Date() })
-        .where(eq(schema.subscriptions.user_id, userId));
-    }
-
-    await db.update(schema.users)
-      .set({ subscription_tier: null, subscription_status: 'expired', onboarding_completed_email_sent_at: null, group_join_reminder_last_sent_at: null })
-      .where(eq(schema.users.id, userId));
-
-    await createAuditLog({ userId, action: 'SUBSCRIPTION_PENDING_CHARGE_EXPIRED', entity: 'subscriptions', metadata: { reason: 'no_active_group_joined_within_window' } });
-  },
-
-  /**
-   * Retroactive Section D.2 self-heal, run once at boot (see entry.ts), for
-   * accounts that finished every onboarding prerequisite (plan chosen,
-   * payment method verified, payout destination verified, identity
-   * verified) under an older code path that never triggered
-   * activateSubscription for whichever step happened to complete last —
-   * leaving `users.subscription_status` stuck at a non-active value even
-   * though the member is, in every real sense, already fully subscribed.
-   * Left in that state, paymentEligibilityService blocks them from ever
-   * joining or creating a group again.
-   *
-   * CURRENTLY DISABLED (see BOOT_TIME_SUBSCRIPTION_ACTIVATION_SWEEP_ENABLED
-   * above): this was previously believed idempotent/safe to re-run on every
-   * boot on the assumption that activateSubscriptionIfEligible is a no-op
-   * for anyone already active and never re-creates a provider subscription
-   * that already exists — that assumption did not hold on 15/09, when this
-   * exact sweep created a second Stripe subscription for four accounts that
-   * each already had exactly one clean active subscription. The candidate
-   * query below still runs and is logged for visibility; only the actual
-   * per-candidate activation attempt is skipped while this is paused.
-   */
-  async activateRetroactiveEligibleSubscriptions(): Promise<void> {
-    try {
-      const candidates = await db.select({ id: schema.users.id })
-        .from(schema.users)
-        .where(and(
-          inArray(schema.users.subscription_tier, ['basic', 'premium']),
-          eq(schema.users.identity_verified, true),
-          isNotNull(schema.users.payment_method_verified_at),
-          isNotNull(schema.users.payout_verified_at),
-          notInArray(schema.users.subscription_status, ['active', 'trial', 'cancelled']),
-        ));
-
-      if (!candidates.length) return;
-
-      if (!BOOT_TIME_SUBSCRIPTION_ACTIVATION_SWEEP_ENABLED) {
-        console.warn(`[PadiHub] Retroactive deferred-billing migration: found ${candidates.length} fully-verified account(s) not yet eligible, but BOOT_TIME_SUBSCRIPTION_ACTIVATION_SWEEP_ENABLED is false — skipping activation attempts for user(s): ${candidates.map(c => c.id).join(', ')}`);
-        return;
-      }
-
-      console.log(`[PadiHub] Retroactive deferred-billing migration: found ${candidates.length} fully-verified account(s) not yet eligible — attempting activation now.`);
-      for (const candidate of candidates) {
-        try {
-          await this.activateSubscriptionIfEligible(candidate.id);
-        } catch (err) {
-          console.error(`[PadiHub] Retroactive subscription activation failed for user ${candidate.id}:`, err instanceof Error ? err.message : err);
-        }
-      }
-    } catch (err) {
-      console.error('[PadiHub] Retroactive subscription-eligibility migration failed:', err instanceof Error ? err.message : err);
-    }
-  },
-
-  /**
-   * Retroactive self-heal, run once at boot (see entry.ts), for accounts
-   * whose `users.subscription_status` never reached 'active' because a live
-   * provider billing confirmation never arrived — even though every
-   * onboarding input the MEMBER actually controls is unambiguously on file
-   * (activated + verified account, a saved AND provider-verified payment
-   * method, a saved AND provider-verified payout destination, a chosen
-   * plan). Mirrors the exact condition applied live in
-   * paymentEligibilityService's hasFullyVerifiedSubscriptionSetup/
-   * refreshSubscriptionActivationStatus, so this is a DATABASE-WIDE version
-   * of the same fix (retroactively diagnosed for
-   * abdulwahabyakubu@yahoo.com, abdulwahabyakubu17@gmail.com and
-   * tounsitraveller@gmail.com — see PR #33-36) — it applies to every
-   * currently-affected account, not only the three originally reported,
-   * and to any future account left in the same state.
-   *
-   * Unlike activateRetroactiveEligibleSubscriptions above, this deliberately
-   * does NOT attempt another live provider charge — that has already
-   * proven it won't succeed for these accounts, and repeatedly retrying it
-   * is exactly what kept sending "subscription payment failed" emails.
-   * Instead it self-heals `users.subscription_status` directly, which is
-   * both what unblocks join/create (see paymentEligibilityService.ready)
-   * and what stops the retry loop that was sending those emails, since
-   * refreshSubscriptionActivationStatus and activateSubscriptionIfEligible
-   * both treat an already-active subscription_status as fully resolved.
-   *
-   * Idempotent and safe to re-run on every boot: only rows with
-   * subscription_status NOT IN ('active', 'trial') are touched, and this
-   * never fabricates data — every condition below is read directly off
-   * already-populated columns.
-   */
-  async healFullyVerifiedSubscriptionStatusRetroactively(): Promise<void> {
-    try {
-      const candidates = await db.select({ id: schema.users.id })
-        .from(schema.users)
-        .innerJoin(schema.subscriptions, eq(schema.subscriptions.user_id, schema.users.id))
-        .where(and(
-          eq(schema.users.account_status, 'active'),
-          eq(schema.users.email_verified, true),
-          or(isNotNull(schema.users.stripe_payment_method_id), isNotNull(schema.users.flutterwave_card_token)),
-          isNotNull(schema.users.payment_method_verified_at),
-          gt(schema.users.payment_method_verified_at, schema.users.created_at),
-          isNotNull(schema.users.payout_verified_at),
-          gt(schema.users.payout_verified_at, schema.users.created_at),
-          inArray(schema.users.subscription_tier, ['basic', 'premium']),
-          or(isNotNull(schema.users.stripe_customer_id), isNotNull(schema.users.flutterwave_customer_id)),
-          or(isNotNull(schema.users.stripe_connected_account_id), isNotNull(schema.users.flutterwave_subaccount_id)),
-          notInArray(schema.subscriptions.billing_status, ['cancelled']),
-          notInArray(schema.users.subscription_status, ['active', 'trial']),
-        ));
-
-      if (!candidates.length) return;
-
-      console.log(`[PadiHub] Retroactive fully-verified-subscription migration: healing ${candidates.length} account(s) stuck on a never-confirmed billing charge.`);
-      for (const candidate of candidates) {
-        try {
-          await db.update(schema.users).set({ subscription_status: 'active' as const }).where(eq(schema.users.id, candidate.id));
-        } catch (err) {
-          console.error(`[PadiHub] Retroactive fully-verified-subscription heal failed for user ${candidate.id}:`, err instanceof Error ? err.message : err);
-        }
-      }
-    } catch (err) {
-      console.error('[PadiHub] Retroactive fully-verified-subscription migration failed:', err instanceof Error ? err.message : err);
-    }
-  },
-
-  /**
    * Section 3 retroactive self-heal, run once at boot (see entry.ts).
-   * `cancelled_at` was only added in this change to anchor the 60-day
-   * "cancelled and never rejoined" deletion window (dailyResubscribeFollowUp
-   * in scheduledJobs.ts) — rows already sitting at billing_status=
-   * 'cancelled' from before then have no value to anchor against, which
-   * would leave those existing accounts stuck forever without a deletion
-   * clock ever starting. Backfills from `updated_at` (the timestamp of the
-   * cancellation write itself, since cancelSubscription's own update is the
-   * last write that ever touches a cancelled row). Idempotent — only
-   * targets rows where `cancelled_at IS NULL`, so it's a no-op after the
-   * first successful run.
+   * `cancelled_at` anchors the 60-day "cancelled and never rejoined"
+   * deletion window (dailyResubscribeFollowUp in scheduledJobs.ts) — rows
+   * already sitting at billing_status='cancelled' from before it was added
+   * have no value to anchor against, which would leave those existing
+   * accounts stuck forever without a deletion clock ever starting.
+   * Backfills from `updated_at` (the timestamp of the cancellation write
+   * itself, since cancelSubscription's own update is the last write that
+   * ever touches a cancelled row). Idempotent — only targets rows where
+   * `cancelled_at IS NULL`, so it's a no-op after the first successful run.
    */
   async backfillCancelledAtRetroactively(): Promise<void> {
     try {
