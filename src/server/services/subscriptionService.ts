@@ -29,6 +29,7 @@ import {
   sendSubscriptionCancelledEmail,
   sendSubscriptionTierChangedEmail,
   sendSubscriptionPaymentFailedEmail,
+  sendSubscriptionRenewalChargedEmail,
   sendPaymentProviderConfigErrorAlertEmail,
 } from '../integrations/email/emailService.js';
 
@@ -221,7 +222,7 @@ async function chargeFirstFlutterwaveSubscription(
 
   const amountInSmallestUnit = Math.round(getTierMonthlyPrice(tier, 'NG') * 100);
   const chargeRef = `sub-first-charge-${subId}-${Date.now()}`;
-  let chargeSucceeded = false;
+  let chargeStatus: 'succeeded' | 'pending' | 'failed' = 'failed';
   try {
     const result = await provider.chargeContribution({
       customerId:      user.email,
@@ -232,7 +233,7 @@ async function chargeFirstFlutterwaveSubscription(
       contributionId:  chargeRef,
       description:     'PadiHub monthly subscription — first charge on joining an active group',
     });
-    chargeSucceeded = result.status === 'succeeded';
+    chargeStatus = result.status;
     await createAuditLog({
       userId, action: 'FLW_SUBSCRIPTION_FIRST_CHARGE', entity: 'subscriptions', entityId: subId,
       metadata: { ...(result as unknown as Record<string, unknown>), activeGroupCount },
@@ -241,7 +242,25 @@ async function chargeFirstFlutterwaveSubscription(
     console.error('[SubscriptionService] Flutterwave first-charge-on-join failed:', error);
   }
 
-  if (!chargeSucceeded) {
+  if (chargeStatus === 'pending') {
+    // Flutterwave is still confirming this charge asynchronously (e.g. extra
+    // authentication in progress) — unlike a genuine failure, this must NOT
+    // stamp first_charge_failed_at or tell the member payment failed, since
+    // it may still succeed moments later via the charge.completed webhook
+    // (see webhookFlutterwaveController.ts, which calls
+    // confirmFlutterwaveSubscriptionCharge below to finalize
+    // billing_status/emails/audit-log once Flutterwave reports the
+    // definitive outcome). billing_status stays 'past_due' (as already
+    // inserted above) so weeklySubscriptionHealthCheck still nags the
+    // member if the webhook confirmation never arrives.
+    await notificationService.create({
+      userId, type: 'subscription_payment_processing', title: 'Payment is being processed',
+      message: 'Your subscription payment is still being confirmed. We\'ll email you as soon as it goes through.',
+    });
+    return;
+  }
+
+  if (chargeStatus !== 'succeeded') {
     await db.update(schema.subscriptions).set({ first_charge_failed_at: new Date() }).where(eq(schema.subscriptions.user_id, userId));
     await notificationService.create({
       userId, type: 'subscription_payment_failed', title: 'Payment could not be completed',
@@ -267,6 +286,142 @@ async function chargeFirstFlutterwaveSubscription(
     title: 'Payment successful — your subscription has begun',
     message: 'You\'re now an active member of a launched group. Your card was charged successfully and your monthly PadiHub subscription has begun.',
   });
+}
+
+/**
+ * Finalizes a Flutterwave subscription first-charge/renewal once
+ * Flutterwave's `charge.completed` webhook reports the definitive outcome
+ * for a charge that came back `pending` synchronously (see
+ * chargeFirstFlutterwaveSubscription and monthlySubscriptionRenewalCharge
+ * in scheduledJobs.ts). `tx_ref` for these charges is never a real
+ * `contributions.id` (format: `sub-first-charge-{subId}-{ts}` or
+ * `sub-renewal-{subId}-{ts}`), so webhookFlutterwaveController must route
+ * them here instead of contributionService.markPaid/markFailed. Returns
+ * `true` if the tx_ref was recognized/handled (whether or not any state
+ * actually changed) so the webhook can distinguish "not a subscription
+ * charge, fall through to contribution handling" from "handled".
+ *
+ * Idempotent both ways: a success event is a no-op if billing_status is
+ * already 'active' (already confirmed synchronously or by an earlier
+ * webhook delivery); a failure event is a no-op if the synchronous attempt
+ * already reported failure itself (first_charge_failed_at set for a first
+ * charge, or billing_status already flipped to 'past_due' for a renewal) —
+ * a genuinely stale/duplicate webhook must never demote a subscription that
+ * has since been separately reconciled as active.
+ */
+async function confirmFlutterwaveSubscriptionCharge(
+  txRef: string, providerStatus: string, flwRef?: string,
+): Promise<boolean> {
+  const isFirstCharge = txRef.startsWith('sub-first-charge-');
+  const isRenewal = txRef.startsWith('sub-renewal-');
+  if (!isFirstCharge && !isRenewal) return false;
+
+  const withoutPrefix = txRef.slice((isFirstCharge ? 'sub-first-charge-' : 'sub-renewal-').length);
+  const lastDash = withoutPrefix.lastIndexOf('-');
+  const subId = lastDash > -1 ? withoutPrefix.slice(0, lastDash) : '';
+  if (!subId) {
+    console.warn(`[SubscriptionService] confirmFlutterwaveSubscriptionCharge: could not parse subscription id from tx_ref "${txRef}".`);
+    return true;
+  }
+
+  const subRows = await db.select().from(schema.subscriptions).where(eq(schema.subscriptions.id, subId)).limit(1);
+  const sub = subRows[0];
+  if (!sub || sub.provider !== 'flutterwave') return true;
+
+  const userRows = await db.select().from(schema.users).where(eq(schema.users.id, sub.user_id)).limit(1);
+  const user = userRows[0];
+  if (!user) return true;
+
+  const succeeded = providerStatus === 'successful';
+  const wasAlreadyActive = sub.billing_status === 'active';
+
+  if (succeeded) {
+    if (wasAlreadyActive) return true;
+
+    const renewalDate = new Date();
+    renewalDate.setMonth(renewalDate.getMonth() + 1);
+    await db.update(schema.subscriptions)
+      .set({ billing_status: 'active', renewal_date: renewalDate, first_charge_failed_at: null })
+      .where(eq(schema.subscriptions.id, sub.id));
+    await db.update(schema.users).set({ subscription_status: 'active' }).where(eq(schema.users.id, user.id));
+
+    await createAuditLog({
+      userId: user.id,
+      action: isFirstCharge ? 'FLW_SUBSCRIPTION_FIRST_CHARGE' : 'FLW_SUBSCRIPTION_RENEWAL_CHARGED',
+      entity: 'subscriptions', entityId: sub.id,
+      // Billing History (getBillingHistory below) derives paid/failed from
+      // metadata.status === 'succeeded' for these two actions — mirror the
+      // exact key/value the synchronous charge path already spreads in from
+      // ChargeResult so async-confirmed charges show up identically.
+      metadata: { txRef, flwRef, status: 'succeeded', providerStatus, confirmedAsynchronouslyViaWebhook: true },
+    });
+
+    if (isSubscriptionTierKey(user.subscription_tier)) {
+      try {
+        if (isFirstCharge) {
+          await sendSubscriptionCreatedEmail(
+            user.email, SUBSCRIPTION_TIERS[user.subscription_tier].name,
+            formatTierPrice(user.subscription_tier, user.country), renewalDate.toLocaleDateString('en-GB'),
+          );
+        } else {
+          await sendSubscriptionRenewalChargedEmail(
+            user.email, SUBSCRIPTION_TIERS[user.subscription_tier].name,
+            formatTierPrice(user.subscription_tier, user.country), renewalDate.toLocaleDateString('en-GB'),
+          );
+        }
+      } catch (emailError) {
+        console.error(`[SubscriptionService] Failed to send Flutterwave ${isFirstCharge ? 'first-charge' : 'renewal'} confirmation email to ${user.email}:`, emailError);
+      }
+    }
+    await notificationService.create({
+      userId: user.id, type: 'subscription_payment_succeeded',
+      title: 'Payment successful — your subscription is active',
+      message: isFirstCharge
+        ? 'Your card was charged successfully and your monthly PadiHub subscription has begun.'
+        : 'Your card was charged successfully and your PadiHub subscription has been renewed.',
+    });
+    return true;
+  }
+
+  // Definitive async failure. Skip if we've already told the member: a
+  // first charge stamps first_charge_failed_at synchronously on failure
+  // (see above), and a renewal's synchronous failure branch flips
+  // billing_status straight to 'past_due' — a 'pending' outcome is the only
+  // case that leaves neither set, which is exactly what this webhook exists
+  // to resolve.
+  if (wasAlreadyActive) return true;
+  if (isFirstCharge && sub.first_charge_failed_at) return true;
+  if (isRenewal && sub.billing_status === 'past_due') return true;
+
+  if (isFirstCharge) {
+    await db.update(schema.subscriptions).set({ first_charge_failed_at: new Date() }).where(eq(schema.subscriptions.id, sub.id));
+  } else {
+    await db.update(schema.subscriptions).set({ billing_status: 'past_due' }).where(eq(schema.subscriptions.id, sub.id));
+  }
+  await db.update(schema.users).set({ subscription_status: 'expired' }).where(eq(schema.users.id, user.id));
+
+  await createAuditLog({
+    userId: user.id,
+    // Reuse the same action as a successful charge (rather than the
+    // "_FAILED" variant, which is reserved for chargeFirstFlutterwaveSubscription's
+    // no-card-on-file case where no charge was ever attempted) — a
+    // definitive async failure IS a resolved charge attempt, and
+    // getBillingHistory below correctly derives 'failed' status from
+    // metadata.status here, exactly like a synchronous decline does.
+    action: isFirstCharge ? 'FLW_SUBSCRIPTION_FIRST_CHARGE' : 'FLW_SUBSCRIPTION_RENEWAL_CHARGED',
+    entity: 'subscriptions', entityId: sub.id,
+    metadata: { txRef, flwRef, status: 'failed', providerStatus, confirmedAsynchronouslyViaWebhook: true },
+  });
+  await notificationService.create({
+    userId: user.id, type: 'subscription_payment_failed', title: 'Payment could not be completed',
+    message: isFirstCharge
+      ? 'We could not confirm payment for your subscription. Please check your card details or complete any additional verification your bank requires.'
+      : 'Your subscription renewal payment failed. Please update your payment method to keep access.',
+  });
+  await sendSubscriptionPaymentFailedEmail(
+    user.email, isSubscriptionTierKey(user.subscription_tier) ? formatTierPrice(user.subscription_tier, user.country) : '',
+  );
+  return true;
 }
 
 export const subscriptionService = {
@@ -1206,5 +1361,16 @@ export const subscriptionService = {
     } catch (err) {
       console.error('[PadiHub] Retroactive cancellation-timestamp migration failed:', err instanceof Error ? err.message : err);
     }
+  },
+
+  /**
+   * Public entry point for webhookFlutterwaveController's charge.completed
+   * handler — see confirmFlutterwaveSubscriptionCharge above for full
+   * behavior. Returns `false` if txRef doesn't belong to a subscription
+   * charge at all, so the caller knows to fall back to its normal
+   * contribution markPaid/markFailed handling.
+   */
+  async confirmFlutterwaveSubscriptionCharge(txRef: string, providerStatus: string, flwRef?: string): Promise<boolean> {
+    return confirmFlutterwaveSubscriptionCharge(txRef, providerStatus, flwRef);
   },
 };

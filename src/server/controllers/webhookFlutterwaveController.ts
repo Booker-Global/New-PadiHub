@@ -8,6 +8,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { contributionService } from '../services/contributionService.js';
+import { subscriptionService } from '../services/subscriptionService.js';
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { notificationService } from '../services/notificationService.js';
 
@@ -44,11 +45,26 @@ async function handleFlutterwaveEvent(body: Record<string, unknown>) {
 
     case 'charge.completed': {
       const status    = data.status as string;
-      const txRef     = data.tx_ref as string;   // this is our contribution_id
+      const txRef     = data.tx_ref as string;   // this is our contribution_id (or a subscription charge ref)
       const flwRef    = data.flw_ref as string;
       const token     = (data.card as Record<string, unknown> | undefined)?.token as string | undefined;
 
       if (!txRef) break;
+
+      // Subscription first-charge/renewal charges are tagged
+      // `sub-first-charge-{subId}-{ts}` / `sub-renewal-{subId}-{ts}` — never
+      // a real contributions.id — because chargeFirstFlutterwaveSubscription/
+      // monthlySubscriptionRenewalCharge can get a `pending` verdict back
+      // synchronously (extra authentication in progress) and this webhook
+      // is the only place the definitive outcome ever arrives for those.
+      // Routing them into contributionService.markPaid/markFailed below
+      // would 404 (AppError 'Contribution not found.') and silently drop
+      // the confirmation entirely, so they're handled separately first.
+      const isSubscriptionCharge = txRef.startsWith('sub-first-charge-') || txRef.startsWith('sub-renewal-');
+      if (isSubscriptionCharge) {
+        const handled = await subscriptionService.confirmFlutterwaveSubscriptionCharge(txRef, status, flwRef);
+        if (handled) break;
+      }
 
       if (status === 'successful') {
         await contributionService.markPaid(txRef, flwRef ?? txRef);

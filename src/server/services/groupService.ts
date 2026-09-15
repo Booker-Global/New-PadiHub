@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { eq, and, count, inArray, asc } from 'drizzle-orm';
+import { eq, and, count, inArray, notInArray, asc } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -149,28 +149,61 @@ export const groupService = {
     };
   },
 
-  /** How many active groups a user currently leads. */
+  /**
+   * How many groups a user currently leads whose membership row is still
+   * 'active' AND whose group itself hasn't been closed/deleted. A group
+   * closed by its owner (close()) or an admin (forceCloseGroup) only ever
+   * flips savingsGroups.status — it deliberately never touches the
+   * memberships rows (so the group's history/audit trail survives) — so
+   * without the savingsGroups join below, a leader whose group was closed
+   * would be stuck forever counted against their plan's "groups you can
+   * create" limit, unable to create a replacement group. 'draft'/'suspended'
+   * groups still genuinely occupy a slot (they're not gone, just not yet
+   * launched or temporarily paused), so only 'closed'/'expired' are
+   * excluded — matches countGroupsJoined/countActiveGroupMembershipsForUser
+   * below. forceDeleteGroup's hard-delete path removes the membership row
+   * outright, so it's already excluded with or without this join.
+   */
   async countGroupsLed(userId: string): Promise<number> {
-    const rows = await db.select({ value: count() }).from(schema.memberships)
+    const rows = await db.select({ value: count() })
+      .from(schema.memberships)
+      .innerJoin(schema.savingsGroups, eq(schema.memberships.group_id, schema.savingsGroups.id))
       .where(and(
         eq(schema.memberships.user_id, userId),
         eq(schema.memberships.role, 'leader'),
         eq(schema.memberships.status, 'active'),
+        notInArray(schema.savingsGroups.status, ['closed', 'expired']),
       ));
     return rows[0]?.value ?? 0;
   },
 
-  /** How many groups a user is currently an active or pending member of. */
+  /**
+   * How many groups a user is currently an active or pending member of,
+   * excluding groups that have been closed/expired — see countGroupsLed's
+   * doc comment above for why this join is required: closing a group never
+   * deletes its memberships, so without this exclusion a member's slot on
+   * their plan would remain permanently occupied by a group that no longer
+   * exists to them (dashboard "My Groups" already hides closed groups, but
+   * this count — enforced server-side when joining/creating a group, see
+   * membershipService.join()/groupService.create() — would silently drift
+   * from what the member can actually see and disagree with it).
+   */
   async countGroupsJoined(userId: string): Promise<number> {
-    const rows = await db.select({ value: count() }).from(schema.memberships)
+    const rows = await db.select({ value: count() })
+      .from(schema.memberships)
+      .innerJoin(schema.savingsGroups, eq(schema.memberships.group_id, schema.savingsGroups.id))
       .where(and(
         eq(schema.memberships.user_id, userId),
         eq(schema.memberships.status, 'active'),
+        notInArray(schema.savingsGroups.status, ['closed', 'expired']),
       ));
-    const pendingRows = await db.select({ value: count() }).from(schema.memberships)
+    const pendingRows = await db.select({ value: count() })
+      .from(schema.memberships)
+      .innerJoin(schema.savingsGroups, eq(schema.memberships.group_id, schema.savingsGroups.id))
       .where(and(
         eq(schema.memberships.user_id, userId),
         eq(schema.memberships.status, 'pending'),
+        notInArray(schema.savingsGroups.status, ['closed', 'expired']),
       ));
     return (rows[0]?.value ?? 0) + (pendingRows[0]?.value ?? 0);
   },

@@ -105,10 +105,11 @@ export const voteService = {
 
   /**
    * Group leader kicks off a unanimous vote to admit a prospective new
-   * member who already has a pending join request (Section 4). Every active
-   * member must accept within 48 hours; the proposer (the leader, who
-   * already vetted the request) is auto-approved. A single decline or a
-   * timeout invalidates the invite.
+   * member who already has a pending join request (Section 4). Every
+   * active member — including the leader themselves, who is recorded here
+   * only as the proposer, not an automatic "approve" — must cast an
+   * explicit vote within 48 hours; a single decline or a timeout
+   * invalidates the invite.
    */
   async proposeMemberAdmission(groupId: string, proposerId: string, membershipId: string, ipAddress?: string) {
     const membershipRows = await db.select().from(schema.memberships).where(eq(schema.memberships.id, membershipId)).limit(1);
@@ -132,7 +133,7 @@ export const voteService = {
       metadata:           { membership_id: membershipId, invitee_user_id: membership.user_id },
       requires_unanimous: true,
       voting_deadline:    new Date(Date.now() + GOVERNANCE_VOTE_DEADLINE_MS),
-    }, ipAddress, { autoApproveProposer: true });
+    }, ipAddress);
   },
 
   /**

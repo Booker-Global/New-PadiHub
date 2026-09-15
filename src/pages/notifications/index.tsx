@@ -51,6 +51,7 @@ const TYPE_META: Record<string, { color: string; icon: typeof Bell; category: st
   upcoming_payout:                { color: '#2eafaf', icon: CreditCard,  category: 'Payments' },
   subscription_past_due:          { color: '#EF4444', icon: CreditCard,  category: 'Payments' },
   subscription_payment_failed:    { color: '#EF4444', icon: CreditCard,  category: 'Payments' },
+  subscription_payment_processing: { color: '#F59E0B', icon: CreditCard, category: 'Payments' },
   group_created:                  { color: '#2EAF6F', icon: Users,       category: 'Groups' },
   group_closed:                   { color: '#6B7280', icon: Users,       category: 'Groups' },
   joined_group:                   { color: '#2EAF6F', icon: Users,       category: 'Groups' },
