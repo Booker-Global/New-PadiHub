@@ -824,14 +824,45 @@ export async function weeklyExpiredInvitationCleanup(): Promise<void> {
   });
 }
 
-/** Check subscription health — notify users with past_due subscriptions */
+/**
+ * Check subscription health — notify users with past_due subscriptions.
+ *
+ * Before nagging, give Stripe (GB) subscriptions one more automatic chance
+ * to self-heal via subscriptionService.retryStripeIncompleteSubscriptionCharge
+ * — which now also re-checks Stripe for a different, genuinely
+ * active/trialing subscription object for the same customer (see
+ * reconcileStaleStripeSubscriptionReference), covering members whose local
+ * `provider_subscription_id` was left pointing at an abandoned duplicate
+ * subscription by the past_due duplicate-subscription bug (PR #49/50).
+ * Without this, such an account would otherwise keep being told its
+ * payment is "overdue" every week forever, even once Stripe's own
+ * dashboard already shows the real subscription as active/succeeded — the
+ * only way to unstick it would have been to manually run the one-off
+ * reconcileStaleStripeSubscriptionReferences.ts script. Flutterwave (NG)
+ * has no equivalent reconciliation (no multi-subscription-object concept),
+ * so this only applies to Stripe.
+ */
 export async function weeklySubscriptionHealthCheck(): Promise<void> {
   await runJob('weekly_subscription_health_check', async () => {
-    const pastDue = await db.select({ user_id: schema.subscriptions.user_id, renewal_date: schema.subscriptions.renewal_date })
+    const pastDue = await db.select({
+      user_id: schema.subscriptions.user_id,
+      renewal_date: schema.subscriptions.renewal_date,
+      provider: schema.subscriptions.provider,
+      provider_subscription_id: schema.subscriptions.provider_subscription_id,
+    })
       .from(schema.subscriptions)
       .where(eq(schema.subscriptions.billing_status, 'past_due'));
 
     for (const sub of pastDue) {
+      if (sub.provider === 'stripe' && sub.provider_subscription_id) {
+        try {
+          const healed = await subscriptionService.retryStripeIncompleteSubscriptionCharge(sub.user_id, sub.provider_subscription_id);
+          if (healed) continue;
+        } catch (err) {
+          console.error(`[Job] weekly_subscription_health_check: self-heal attempt failed for user ${sub.user_id}:`, err instanceof Error ? err.message : err);
+        }
+      }
+
       await notificationService.create({
         userId: sub.user_id, type: 'subscription_past_due',
         title: 'Subscription Payment Overdue',

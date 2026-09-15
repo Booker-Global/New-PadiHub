@@ -446,6 +446,81 @@ export const subscriptionService = {
   },
 
   /**
+   * Shared by retryStripeIncompleteSubscriptionCharge below and the one-off
+   * reconcileStaleStripeSubscriptionReferences.ts script — see that
+   * script's header comment for the full root-cause explanation. Before the
+   * `past_due` duplicate-subscription guard existed (PR #49/50),
+   * activateSubscription() could create a SECOND Stripe subscription object
+   * for a member already stuck `past_due`, leaving `subscriptions.
+   * provider_subscription_id` pointing at whichever object was created
+   * first/last — not necessarily the one that actually went active with
+   * Stripe. Any local retry keyed off that single stored id can then never
+   * succeed (it keeps re-attempting a genuinely abandoned invoice), even
+   * though Stripe already shows a DIFFERENT subscription object for the
+   * same customer as active/trialing — its invoice.payment_succeeded
+   * webhook was, and remains, silently ignored by webhookStripeController.ts
+   * because no local row's provider_subscription_id matches it. Re-checks
+   * EVERY Stripe subscription object on file for this customer
+   * (read-only) and, only if one is genuinely active/trialing, repoints the
+   * local row at it. Returns true once reconciled. This makes the fix
+   * automatic for every affected account (past and future) instead of only
+   * the handful of hardcoded emails the one-off script covers.
+   */
+  async reconcileStaleStripeSubscriptionReference(userId: string, stripeCustomerId: string, storedProviderSubscriptionId: string | null): Promise<boolean> {
+    const stripeSubscriptions = await getStripeProvider().listSubscriptionsForCustomer(stripeCustomerId);
+    const genuinelyActive = stripeSubscriptions.find(s => s.status === 'active' || s.status === 'trialing');
+    // No subscription for this customer is genuinely active/trialing — this
+    // is either a real, still-unresolved failure, or the single subscription
+    // stored locally simply hasn't been paid yet; either way there is
+    // nothing to reconcile onto, and callers must fall back to their own
+    // handling (e.g. retrying the stored subscription's own invoice).
+    if (!genuinelyActive) return false;
+
+    const wasStaleReference = storedProviderSubscriptionId !== genuinelyActive.id;
+    const renewalDate = new Date(genuinelyActive.currentPeriodEnd * 1000);
+    await db.update(schema.subscriptions)
+      .set({
+        provider_subscription_id: genuinelyActive.id,
+        billing_status:           'active',
+        renewal_date:             renewalDate,
+      })
+      .where(eq(schema.subscriptions.user_id, userId));
+
+    const userRows = await db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1);
+    const user = userRows[0];
+    if (user && user.subscription_status !== 'active' && user.subscription_status !== 'trial') {
+      await db.update(schema.users).set({ subscription_status: 'active' as const }).where(eq(schema.users.id, userId));
+    }
+
+    await createAuditLog({
+      userId, action: 'STRIPE_SUBSCRIPTION_REFERENCE_RECONCILED', entity: 'subscriptions',
+      metadata: {
+        previousProviderSubscriptionId: storedProviderSubscriptionId,
+        reconciledProviderSubscriptionId: genuinelyActive.id,
+        wasStaleReference,
+        stripeSubscriptionsSeen: stripeSubscriptions.map(s => ({ id: s.id, status: s.status })),
+      },
+    });
+
+    await notificationService.create({
+      userId, type: 'subscription_billing_resumed',
+      title: 'Payment successful — your subscription is active',
+      message: 'We reconciled your account with Stripe — your subscription is confirmed active.',
+    });
+
+    if (user && isSubscriptionTierKey(user.subscription_tier)) {
+      await sendSubscriptionCreatedEmail(
+        user.email,
+        SUBSCRIPTION_TIERS[user.subscription_tier].name,
+        formatTierPrice(user.subscription_tier, user.country),
+        renewalDate.toLocaleDateString('en-GB'),
+      );
+    }
+
+    return true;
+  },
+
+  /**
    * Retroactive remediation, called from activateSubscriptionIfEligible's
    * self-heal above: re-attempts off-session collection of an EXISTING
    * Stripe subscription's still-open, never-actually-attempted first
@@ -469,6 +544,17 @@ export const subscriptionService = {
     await db.update(schema.subscriptions)
       .set({ last_activation_attempt_at: new Date() })
       .where(eq(schema.subscriptions.user_id, userId));
+
+    // Check FIRST whether Stripe already has a different, genuinely
+    // active/trialing subscription object for this customer (see
+    // reconcileStaleStripeSubscriptionReference above) — retrying the
+    // stored id's own invoice below is pointless (and can never succeed) if
+    // that id is actually the abandoned half of the past_due
+    // duplicate-subscription bug.
+    if (user.stripe_customer_id) {
+      const reconciled = await this.reconcileStaleStripeSubscriptionReference(userId, user.stripe_customer_id, providerSubscriptionId);
+      if (reconciled) return true;
+    }
 
     let result;
     try {

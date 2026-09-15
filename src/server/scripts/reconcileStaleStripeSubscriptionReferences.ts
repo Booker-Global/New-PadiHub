@@ -28,18 +28,22 @@
  *
  * This script re-checks, for each of the specific emails below, EVERY
  * Stripe subscription object that exists for that customer (read-only
- * `stripe.subscriptions.list`, via the new
+ * `stripe.subscriptions.list`, via
  * StripeProvider.listSubscriptionsForCustomer()) and — only if it finds one
  * that is genuinely active/trialing with Stripe — repoints the local
  * `subscriptions` row at that real id and corrects billing_status/
  * renewal_date/users.subscription_status to match. It never creates,
  * cancels, or charges anything with the provider; it only re-reads
- * Stripe's own existing records and reconciles PadiHub's local copy.
- *
- * Deliberately independent of (and additive to) the activateSubscription()
- * fix — it does not modify subscriptionService.ts, StripeProvider's
- * existing methods, or any webhook/eligibility logic. Re-running this
- * script has no effect on that code path either way.
+ * Stripe's own existing records and reconciles PadiHub's local copy. The
+ * actual reconciliation logic now lives in
+ * subscriptionService.reconcileStaleStripeSubscriptionReference() — this
+ * script is a thin, explicitly-scoped wrapper around it — because
+ * retryStripeIncompleteSubscriptionCharge() (called automatically from
+ * activateSubscriptionIfEligible's self-heal and
+ * scheduledJobs.weeklySubscriptionHealthCheck) now runs the very same check
+ * for every account, not just the ones hardcoded below. This script remains
+ * useful to force an immediate, explicit reconciliation for specific
+ * accounts without waiting for either of those to next run.
  *
  * Safety rules this script follows (same pattern as the other scripts in
  * this directory):
@@ -63,11 +67,7 @@
 import { eq } from 'drizzle-orm';
 import { db, closeConnection } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { getStripeProvider } from '../integrations/payments/PaymentProviderFactory.js';
-import { createAuditLog } from '../middleware/auditLogger.js';
-import { notificationService } from '../services/notificationService.js';
-import { isSubscriptionTierKey, SUBSCRIPTION_TIERS, formatTierPrice } from '../lib/constants.js';
-import { sendSubscriptionCreatedEmail } from '../integrations/email/emailService.js';
+import { subscriptionService } from '../services/subscriptionService.js';
 
 const AFFECTED_EMAILS = [
   'abdulyakubu99@gmail.com',
@@ -117,63 +117,15 @@ async function reconcileAccount(email: string): Promise<void> {
 
   console.log(`[INFO] ${email}: local subscription is billing_status='${sub.billing_status}' (provider_subscription_id=${sub.provider_subscription_id ?? '(none)'}) — checking Stripe for every subscription object on customer ${user.stripe_customer_id}...`);
 
-  const stripeProvider = getStripeProvider();
-  const stripeSubscriptions = await stripeProvider.listSubscriptionsForCustomer(user.stripe_customer_id);
-  if (!stripeSubscriptions.length) {
-    console.log(`[SKIP] ${email}: Stripe reports no subscription objects at all for this customer — nothing to reconcile.`);
-    return;
-  }
-  console.log(`    Stripe subscriptions found: ${stripeSubscriptions.map(s => `${s.id} (${s.status})`).join(', ')}`);
-
-  const genuinelyActive = stripeSubscriptions.find(s => s.status === 'active' || s.status === 'trialing');
-  if (!genuinelyActive) {
-    console.log(`[SKIP] ${email}: none of Stripe's subscription objects for this customer are active/trialing — this is a genuine, still-unresolved failure, not a stale reference. Leaving untouched.`);
+  const reconciled = await subscriptionService.reconcileStaleStripeSubscriptionReference(user.id, user.stripe_customer_id, sub.provider_subscription_id);
+  if (!reconciled) {
+    console.log(`[SKIP] ${email}: none of Stripe's subscription objects for this customer are active/trialing (or Stripe reports none at all) — this is a genuine, still-unresolved failure, not a stale reference. Leaving untouched.`);
     return;
   }
 
-  const wasStaleReference = sub.provider_subscription_id !== genuinelyActive.id;
-  console.log(`[FIX] ${email}: Stripe subscription ${genuinelyActive.id} is genuinely '${genuinelyActive.status}'${wasStaleReference ? ` (local row pointed at the different, abandoned id ${sub.provider_subscription_id ?? '(none)'})` : ' (local row already pointed at the right id — only billing_status/renewal_date were stale)'}. Reconciling...`);
-
-  const renewalDate = new Date(genuinelyActive.currentPeriodEnd * 1000);
-  await db.update(schema.subscriptions)
-    .set({
-      provider_subscription_id: genuinelyActive.id,
-      billing_status:           'active',
-      renewal_date:             renewalDate,
-    })
-    .where(eq(schema.subscriptions.id, sub.id));
-
-  if (user.subscription_status !== 'active' && user.subscription_status !== 'trial') {
-    await db.update(schema.users).set({ subscription_status: 'active' as const }).where(eq(schema.users.id, user.id));
-  }
-
-  await createAuditLog({
-    userId: user.id, action: 'STRIPE_SUBSCRIPTION_REFERENCE_RECONCILED', entity: 'subscriptions', entityId: sub.id,
-    metadata: {
-      previousProviderSubscriptionId: sub.provider_subscription_id,
-      reconciledProviderSubscriptionId: genuinelyActive.id,
-      wasStaleReference,
-      previousBillingStatus: sub.billing_status,
-      stripeSubscriptionsSeen: stripeSubscriptions.map(s => ({ id: s.id, status: s.status })),
-    },
-  });
-
-  await notificationService.create({
-    userId: user.id, type: 'subscription_billing_resumed',
-    title: 'Payment successful — your subscription is active',
-    message: 'We reconciled your account with Stripe — your subscription is confirmed active.',
-  });
-
-  if (isSubscriptionTierKey(user.subscription_tier)) {
-    await sendSubscriptionCreatedEmail(
-      user.email,
-      SUBSCRIPTION_TIERS[user.subscription_tier].name,
-      formatTierPrice(user.subscription_tier, user.country),
-      renewalDate.toLocaleDateString('en-GB'),
-    );
-  }
-
-  console.log(`[DONE] ${email}: subscriptions row now points at ${genuinelyActive.id}, billing_status='active', renewal_date=${renewalDate.toISOString()}.`);
+  const refreshedRows = await db.select().from(schema.subscriptions).where(eq(schema.subscriptions.id, sub.id)).limit(1);
+  const refreshed = refreshedRows[0];
+  console.log(`[DONE] ${email}: subscriptions row now points at ${refreshed?.provider_subscription_id ?? '(unknown)'}, billing_status='${refreshed?.billing_status ?? '(unknown)'}', renewal_date=${refreshed?.renewal_date?.toISOString() ?? '(unknown)'}.`);
 }
 
 async function main(): Promise<void> {
