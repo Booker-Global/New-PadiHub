@@ -10,6 +10,8 @@ import { notificationService } from '../services/notificationService.js';
 import { pp, qs, ip } from '../lib/reqHelpers.js';
 import { isSubscriptionTierKey, getTierMonthlyPrice, resolveUserDisplayName } from '../lib/constants.js';
 import { BILLING_HISTORY_ACTIONS } from '../services/subscriptionService.js';
+import { userService } from '../services/userService.js';
+import { groupService } from '../services/groupService.js';
 import {
   notifySupportTicketUpdated,
   notifySupportTicketClosed,
@@ -372,6 +374,20 @@ export const adminController = {
     } catch (e) { next(e); }
   },
 
+  /**
+   * HARD delete — see userService.forceDeleteUser. Unlike deleteUser()
+   * above (soft-deactivate), this permanently removes the user row and
+   * every row referencing it, and does NOT block the email from being used
+   * to sign up again.
+   */
+  forceDeleteUser: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const uid = pp(req.params.id);
+      await userService.forceDeleteUser(uid, req.user!.userId, ip(req.ip));
+      res.json({ success: true, message: 'User permanently deleted. The email address is free to sign up again.' });
+    } catch (e) { next(e); }
+  },
+
   // ── Group Management ────────────────────────────────────────────────────────
   listGroups: async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -439,6 +455,20 @@ export const adminController = {
 
       await createAuditLog({ userId: req.user!.userId, action: 'GROUP_FORCE_CLOSED', entity: 'savings_groups', entityId: gid, ipAddress: ip(req.ip) });
       res.json({ success: true, message: 'Group closed.' });
+    } catch (e) { next(e); }
+  },
+
+  /**
+   * HARD delete — see groupService.forceDeleteGroup. Unlike forceCloseGroup()
+   * above (which only flips `status` to 'closed'), this permanently removes
+   * the group row and every row referencing it (memberships, contributions,
+   * rotations, votes, invitations).
+   */
+  forceDeleteGroup: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const gid = pp(req.params.id);
+      await groupService.forceDeleteGroup(gid, req.user!.userId, ip(req.ip));
+      res.json({ success: true, message: 'Group permanently deleted.' });
     } catch (e) { next(e); }
   },
 

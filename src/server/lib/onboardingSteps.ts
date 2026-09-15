@@ -2,14 +2,18 @@
  * The ordered onboarding path every member must finish before they can
  * create or join a savings group:
  *   a) sign up and confirm their email address,
- *   b) choose a subscription plan and accept the terms,
- *   c) add a payment card,
- *   d) add payout details,
- *   e) verify their identity — done LAST, on purpose: only once verification
- *      succeeds does the platform subscription actually get charged/created
- *      (see identityVerificationService.completeIdentityVerification), so a
- *      plan + card must already be on file before identity verification can
- *      make the subscription genuinely active.
+ *   b) choose a subscription plan,
+ *   c) add a payment card and payout details,
+ *   d) verify their identity.
+ *
+ * Completing all four sets `account_status` to 'active' and unlocks group
+ * creation/joining — it does NOT create or charge a platform subscription.
+ * `users.subscription_status` stays 'pending' until the member joins/creates
+ * a group that reaches 3+ active members and the group leader launches it —
+ * that is the one and only moment the subscription is actually created and
+ * the member's card is charged (see
+ * subscriptionService.reconcileBillingForActiveGroupMembership, invoked from
+ * groupService.activateGroup).
  *
  * `href` is always a member-facing dashboard page — never an API route — so
  * the same list can drive the blocked-action message, the dashboard's
@@ -29,14 +33,11 @@ export type OnboardingEligibility = {
   emailVerified: boolean;
   identityVerified: boolean;
   subscriptionTierSelected: boolean;
-  subscriptionActive: boolean;
   paymentMethodVerified: boolean;
   payoutVerified: boolean;
 };
 
 export function buildOnboardingSteps(eligibility: OnboardingEligibility): OnboardingStep[] {
-  const subscriptionAwaitingConfirmation = eligibility.subscriptionTierSelected && !eligibility.subscriptionActive;
-
   return [
     {
       key: 'email',
@@ -47,17 +48,15 @@ export function buildOnboardingSteps(eligibility: OnboardingEligibility): Onboar
     },
     {
       key: 'subscription',
-      label: subscriptionAwaitingConfirmation ? 'Complete your subscription payment' : 'Choose your subscription plan',
-      description: subscriptionAwaitingConfirmation
-        ? 'Your plan is selected, but your first subscription charge has not been confirmed yet. Complete any extra bank/card verification your payment provider asks for so your subscription can go active.'
-        : 'Pick Basic or Premium and accept the terms. Your subscription must go active before you can create or join savings groups.',
+      label: 'Choose your subscription plan',
+      description: 'Pick Basic or Premium. Your card is only charged once you join or create a group that launches with 3 or more members.',
       href: '/subscription/manage',
-      complete: eligibility.subscriptionTierSelected && eligibility.subscriptionActive,
+      complete: eligibility.subscriptionTierSelected,
     },
     {
       key: 'payment_method',
       label: 'Add your payment card',
-      description: 'The card your contributions (and your subscription) are charged to.',
+      description: 'The card your contributions (and, once a group you\'re in launches, your subscription) are charged to.',
       href: '/payments/methods',
       complete: eligibility.paymentMethodVerified,
     },
@@ -71,7 +70,7 @@ export function buildOnboardingSteps(eligibility: OnboardingEligibility): Onboar
     {
       key: 'identity',
       label: 'Verify your identity',
-      description: 'A quick ID and selfie check that keeps every PadiHub savings group trustworthy. Completing this last is what makes your subscription go active.',
+      description: 'A quick ID and selfie check that keeps every PadiHub savings group trustworthy.',
       href: '/verify-identity',
       complete: eligibility.identityVerified,
     },

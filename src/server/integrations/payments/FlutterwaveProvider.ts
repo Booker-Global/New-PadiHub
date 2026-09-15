@@ -180,7 +180,6 @@ export class FlutterwaveProvider implements IPaymentProvider {
 
   async createSubscription(params: {
     customerId: string; userId: string; email: string; currency: string; tier?: 'basic' | 'premium';
-    deferBilling?: boolean;
   }): Promise<SubscriptionResult> {
     // Basic (₦5,000/mo) and Premium (₦10,000/mo) map to separate
     // Flutterwave payment plans — see SUBSCRIPTION_TIERS in
@@ -197,12 +196,12 @@ export class FlutterwaveProvider implements IPaymentProvider {
 
     // Note: this never actually charges anything at creation — Flutterwave
     // has no native recurring-billing engine here (this is a bookkeeping
-    // stub only), the real monthly charge is a scheduled job
-    // (monthlySubscriptionRenewalCharge) that already skips users whose
-    // subscriptions.billing_status is 'paused'. So Section D.2 (billing
-    // stays inert until the member is in an active 3+ member group) is
-    // already fully enforced for NG members via that DB flag — `deferBilling`
-    // is accepted here only for interface parity with StripeProvider.
+    // stub only). The real first charge is an explicit chargeContribution()
+    // call made by subscriptionService.chargeFirstFlutterwaveSubscription
+    // right after this returns, and subsequent renewals are a separate
+    // scheduled job (monthlySubscriptionRenewalCharge) — never driven by
+    // this method's returned `status`, which always reports 'active'
+    // regardless of whether any money has actually moved.
     return {
       subscriptionId: `flw_sub_${params.userId}_${Date.now()}`,
       status: 'active',
@@ -221,12 +220,6 @@ export class FlutterwaveProvider implements IPaymentProvider {
     );
     return { cancelled: true };
   }
-
-  /** No-op: Flutterwave billing is gated entirely by our own DB billing_status flag (see createSubscription note above). */
-  async pauseBilling(): Promise<void> { /* no provider-side action needed */ }
-
-  /** No-op: Flutterwave billing is gated entirely by our own DB billing_status flag (see createSubscription note above). */
-  async resumeBilling(): Promise<void> { /* no provider-side action needed */ }
 
   async handleWebhook(params: { rawBody: Buffer; signature: string }): Promise<WebhookResult> {
     const secret = process.env.FLUTTERWAVE_WEBHOOK_SECRET;

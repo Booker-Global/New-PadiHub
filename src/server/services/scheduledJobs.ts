@@ -22,7 +22,7 @@ import {
   SUBSCRIPTION_TIERS, isSubscriptionTierKey, getTierMonthlyPrice, formatTierPrice,
   GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH, GROUP_STUCK_BELOW_MIN_EXPIRY_DAYS, GROUP_STUCK_EXPIRY_REMINDER_DAYS_BEFORE,
   GROUP_SUSPENSION_GRACE_PERIOD_DAYS,
-  ACCOUNT_LIFECYCLE_REMINDER_INTERVAL_DAYS, PENDING_CHARGE_GROUP_JOIN_EXPIRY_DAYS,
+  ACCOUNT_LIFECYCLE_REMINDER_INTERVAL_DAYS,
   INCOMPLETE_PROFILE_EXPIRY_DAYS, CANCELLED_SUBSCRIPTION_EXPIRY_DAYS,
   CONTRIBUTION_REMINDER_ADVANCE_DAYS,
 } from '../lib/constants.js';
@@ -36,8 +36,6 @@ import {
   sendGroupClosedDueToGracePeriodExpiry,
   sendSubscriptionPaymentFailedEmail,
   sendSubscriptionRenewalChargedEmail,
-  sendPendingChargeGroupJoinReminderEmail,
-  sendPendingChargeExpiredEmail,
   sendIncompleteProfileReminderEmail,
   sendResubscribeReminderEmail,
   sendContributionChargeConfigErrorAlertEmail,
@@ -545,22 +543,20 @@ export async function dailyApplyPendingPayoutFrequencyChanges(): Promise<void> {
 }
 
 /**
- * Section D.2 — subscription billing only stays "live" while a user's
- * active-group-membership count is above zero; pause it the moment that
- * count hits exactly zero, and resume it automatically once they're a
- * verified member of an active group again. Every membership/group-status
- * change that could affect this now reconciles billing immediately at the
- * call site (groupService.activateGroup/reevaluateAfterMembershipChange,
- * membershipService.join/_activatePendingMembership/departMember) — this
- * daily sweep is just the safety net in case any of those individual call
- * sites is ever missed. See subscriptionService.reconcileBillingForActiveGroupMembership
- * for the real provider-level pause_collection/resume mechanics.
+ * Section C — a member's platform subscription is only ever created/charged
+ * once: the first time they become a verified member of a group that has
+ * actually launched (see subscriptionService.reconcileBillingForActiveGroupMembership,
+ * the sole trigger point). Every event that could make that true now
+ * reconciles billing immediately at the call site
+ * (groupService.activateGroup/reevaluateAfterMembershipChange,
+ * membershipService.join/_activatePendingMembership) — this daily sweep is
+ * just the safety net in case any of those individual call sites is ever
+ * missed. reconcileBillingForActiveGroupMembership is itself a no-op for
+ * anyone who already has a `subscriptions` row, so this only ever needs to
+ * find active-group members who don't have one yet.
  */
 export async function dailyBillingActiveGroupReconciliation(): Promise<void> {
   await runJob('daily_billing_active_group_reconciliation', async () => {
-    const subs = await db.select({ user_id: schema.subscriptions.user_id })
-      .from(schema.subscriptions)
-      .where(inArray(schema.subscriptions.billing_status, ['active', 'paused']));
     const activeGroupMembersMissingSubscription = await db.select({ user_id: schema.memberships.user_id })
       .from(schema.memberships)
       .innerJoin(schema.savingsGroups, eq(schema.memberships.group_id, schema.savingsGroups.id))
@@ -571,10 +567,7 @@ export async function dailyBillingActiveGroupReconciliation(): Promise<void> {
         isNull(schema.subscriptions.id),
       ));
 
-    const userIds = new Set([
-      ...subs.map(sub => sub.user_id),
-      ...activeGroupMembersMissingSubscription.map(member => member.user_id),
-    ]);
+    const userIds = new Set(activeGroupMembersMissingSubscription.map(member => member.user_id));
 
     for (const userId of userIds) {
       try {
@@ -628,68 +621,6 @@ export async function dailyGovernanceVoteExpiry(): Promise<void> {
   await runJob('daily_governance_vote_expiry', async () => {
     const { voteService } = await import('./voteService.js');
     await voteService.expireOverdueVotes();
-  });
-}
-
-/**
- * Section 1 — a member whose profile is 100% complete (steps a-e) but who
- * hasn't yet joined/launched an active (3+ member) group sits in
- * "Pending Charge" (billing_status 'paused', activeGroupCount 0) — their
- * card is validated but never charged while in this state. Nudges them
- * every ACCOUNT_LIFECYCLE_REMINDER_INTERVAL_DAYS (7) to go join a group,
- * anchored on users.onboarding_completed_email_sent_at (the moment steps
- * a-e finished). After PENDING_CHARGE_GROUP_JOIN_EXPIRY_DAYS (30) with no
- * active group joined, the subscription is cancelled and the plan
- * selection cleared — the profile becomes incomplete again ("subscription
- * plan pending") and the member must re-select a plan and join a group
- * from scratch. They are never charged in this entire flow.
- */
-export async function dailyPendingChargeGroupJoinFollowUp(): Promise<void> {
-  await runJob('daily_pending_charge_group_join_follow_up', async () => {
-    const candidates = await db.select({
-      id:                                schema.users.id,
-      email:                             schema.users.email,
-      first_name:                        schema.users.first_name,
-      onboarding_completed_email_sent_at: schema.users.onboarding_completed_email_sent_at,
-      group_join_reminder_last_sent_at:  schema.users.group_join_reminder_last_sent_at,
-    })
-      .from(schema.users)
-      .innerJoin(schema.subscriptions, eq(schema.subscriptions.user_id, schema.users.id))
-      .where(and(
-        eq(schema.subscriptions.billing_status, 'paused'),
-        isNotNull(schema.users.onboarding_completed_email_sent_at),
-        eq(schema.users.active, true),
-      ));
-
-    const now = Date.now();
-    const expiryMs = PENDING_CHARGE_GROUP_JOIN_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
-    const reminderMs = ACCOUNT_LIFECYCLE_REMINDER_INTERVAL_DAYS * 24 * 60 * 60 * 1000;
-
-    for (const user of candidates) {
-      if (!user.onboarding_completed_email_sent_at) continue;
-      // Only genuinely "no active group" members qualify — a member who has
-      // since joined one is no longer in this cohort even if the nightly
-      // billing-reconciliation sweep hasn't flipped billing_status yet.
-      const activeGroupCount = await groupService.countActiveGroupMembershipsForUser(user.id);
-      if (activeGroupCount > 0) continue;
-
-      const anchorMs = new Date(user.onboarding_completed_email_sent_at).getTime();
-      const elapsedMs = now - anchorMs;
-
-      if (elapsedMs >= expiryMs) {
-        await subscriptionService.expirePendingChargeWithoutGroup(user.id);
-        await sendPendingChargeExpiredEmail(user.email, user.first_name);
-        continue;
-      }
-
-      const lastSentMs = user.group_join_reminder_last_sent_at ? new Date(user.group_join_reminder_last_sent_at).getTime() : null;
-      const dueForReminder = elapsedMs >= reminderMs && (lastSentMs === null || (now - lastSentMs) >= reminderMs);
-      if (!dueForReminder) continue;
-
-      const daysRemaining = Math.max(1, Math.ceil((expiryMs - elapsedMs) / (24 * 60 * 60 * 1000)));
-      await sendPendingChargeGroupJoinReminderEmail(user.email, user.first_name, daysRemaining);
-      await db.update(schema.users).set({ group_join_reminder_last_sent_at: new Date() }).where(eq(schema.users.id, user.id));
-    }
   });
 }
 
@@ -827,7 +758,7 @@ export async function weeklyExpiredInvitationCleanup(): Promise<void> {
 /**
  * Check subscription health — notify users with past_due subscriptions.
  *
- * Before nagging, this job can give Stripe (GB) subscriptions one more
+ * Before nagging, this job gives Stripe (GB) subscriptions one more
  * automatic chance to self-heal via
  * subscriptionService.retryStripeIncompleteSubscriptionCharge — which also
  * re-checks Stripe for a different, genuinely active/trialing subscription
@@ -841,21 +772,7 @@ export async function weeklyExpiredInvitationCleanup(): Promise<void> {
  * been to manually run the one-off reconcileStaleStripeSubscriptionReferences.ts
  * script. Flutterwave (NG) has no equivalent reconciliation (no
  * multi-subscription-object concept), so this only ever applied to Stripe.
- *
- * CURRENTLY DISABLED via WEEKLY_SUBSCRIPTION_SELF_HEAL_ENABLED below: this
- * self-heal step is temporarily switched off (the job still runs and still
- * sends the "past due" notification/renewal-reminder emails below — only
- * the retry call itself is skipped) while the actual duplicate-subscription
- * root cause is fixed and verified — see StripeProvider.createSubscription,
- * which now lists a customer's existing Stripe subscriptions and reuses any
- * active/trialing one instead of ever creating a second, plus a
- * user-ID-derived Stripe idempotency key on the create call itself as a
- * hard backstop. Until that fix is confirmed working in production, no
- * subscription-related self-heal/retry should run unsupervised — re-enable
- * this flag once confirmed, then delete it and the `if` below.
  */
-const WEEKLY_SUBSCRIPTION_SELF_HEAL_ENABLED = false;
-
 export async function weeklySubscriptionHealthCheck(): Promise<void> {
   await runJob('weekly_subscription_health_check', async () => {
     const pastDue = await db.select({
@@ -868,7 +785,7 @@ export async function weeklySubscriptionHealthCheck(): Promise<void> {
       .where(eq(schema.subscriptions.billing_status, 'past_due'));
 
     for (const sub of pastDue) {
-      if (WEEKLY_SUBSCRIPTION_SELF_HEAL_ENABLED && sub.provider === 'stripe' && sub.provider_subscription_id) {
+      if (sub.provider === 'stripe' && sub.provider_subscription_id) {
         try {
           const healed = await subscriptionService.retryStripeIncompleteSubscriptionCharge(sub.user_id, sub.provider_subscription_id);
           if (healed) continue;

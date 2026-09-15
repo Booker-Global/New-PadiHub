@@ -12,9 +12,9 @@
  * from a genuine provider-level outcome (a declined card, a 3DS challenge,
  * a network/API error) — no charge was ever attempted, so it must never be
  * surfaced to the member as "your payment failed" (see subscriptionService
- * .activateSubscriptionIfEligible's catch block, which checks
- * `instanceof PaymentProviderConfigError` to alert the team instead of
- * emailing the member).
+ * .reconcileBillingForActiveGroupMembership's catch block, which checks
+ * `instanceof AppError` with code SUBSCRIPTION_PROVIDER_CONFIG_ERROR to
+ * alert the team instead of emailing the member).
  */
 export class PaymentProviderConfigError extends Error {
   constructor(message: string) {
@@ -123,11 +123,10 @@ export interface IPaymentProvider {
   }): Promise<PayoutResult>;
 
   /**
-   * Create a recurring platform subscription. When `deferBilling` is true,
-   * the subscription must be created WITHOUT attempting to collect any
-   * payment (Section D.2 — billing stays inert at signup and only starts
-   * once the member is verified in an active, 3+ member group). Callers
-   * flip this on the moment that condition is met via resumeBilling().
+   * Create a recurring platform subscription — only ever called once the
+   * member is a verified member of a group that has actually launched (see
+   * subscriptionService.reconcileBillingForActiveGroupMembership); billing
+   * is attempted immediately, synchronously, never deferred.
    */
   createSubscription(params: {
     customerId: string;
@@ -135,36 +134,12 @@ export interface IPaymentProvider {
     email: string;
     currency: string;
     tier?: 'basic' | 'premium'; // which SUBSCRIPTION_TIERS plan to bill — defaults to 'basic'
-    deferBilling?: boolean;
   }): Promise<SubscriptionResult>;
 
   /** Cancel a subscription */
   cancelSubscription(params: {
     subscriptionId: string;
   }): Promise<{ cancelled: boolean }>;
-
-  /**
-   * Actually stop the provider from attempting to collect payment on this
-   * subscription (Stripe: pause_collection). No-op for providers (e.g.
-   * Flutterwave) that never bill automatically at the provider level —
-   * their billing is gated entirely by our own DB billing_status flag
-   * instead (see scheduledJobs.monthlySubscriptionRenewalCharge).
-   */
-  pauseBilling?(subscriptionId: string): Promise<void>;
-
-  /**
-   * Resume provider-side collection previously paused by pauseBilling() —
-   * per Section 1/5/D.2, a member's card must be charged THE MOMENT they
-   * become a verified member of an active (3+ member) group, not merely
-   * whenever the subscription's original (deferred) billing cycle anchor
-   * happens to land on. Implementations that support it (Stripe) must
-   * trigger an immediate out-of-cycle charge, not just resume future
-   * automatic billing — the actual success/failure of that immediate
-   * charge is reported asynchronously via the usual invoice succeeded/
-   * failed webhook, exactly like any other renewal charge, so callers must
-   * NOT assume billing is active just because this call didn't throw.
-   */
-  resumeBilling?(subscriptionId: string): Promise<void>;
 
   /** Verify and parse an inbound webhook payload */
   handleWebhook(params: {

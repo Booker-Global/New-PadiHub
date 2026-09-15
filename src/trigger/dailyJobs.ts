@@ -70,7 +70,6 @@ import {
   dailyBillingActiveGroupReconciliation,
   dailyGovernanceVoteExpiry,
   dailySubscriptionFirstChargeRetry,
-  dailyPendingChargeGroupJoinFollowUp,
   dailyIncompleteProfileFollowUp,
   dailyResubscribeFollowUp,
   monthlySubscriptionRenewalCharge,
@@ -217,15 +216,6 @@ export const dailySubscriptionFirstChargeRetryTask = schedules.task({
   run: async () => {
     await dailySubscriptionFirstChargeRetry();
     return { ok: true, task: 'daily-subscription-first-charge-retry' };
-  },
-});
-
-export const dailyPendingChargeGroupJoinFollowUpTask = schedules.task({
-  id: 'daily-pending-charge-group-join-follow-up',
-  cron: '40 7 * * *',
-  run: async () => {
-    await dailyPendingChargeGroupJoinFollowUp();
-    return { ok: true, task: 'daily-pending-charge-group-join-follow-up' };
   },
 });
 

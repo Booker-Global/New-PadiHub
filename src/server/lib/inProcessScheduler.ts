@@ -62,7 +62,6 @@ const SCHEDULE: ScheduleEntry[] = [
   { jobName: 'daily_billing_active_group_reconciliation', hourUtc: 7, minuteUtc: 25, cadence: 'daily', run: jobs.dailyBillingActiveGroupReconciliation },
   { jobName: 'daily_governance_vote_expiry', hourUtc: 7, minuteUtc: 30, cadence: 'daily', run: jobs.dailyGovernanceVoteExpiry },
   { jobName: 'daily_subscription_first_charge_retry', hourUtc: 7, minuteUtc: 35, cadence: 'daily', run: jobs.dailySubscriptionFirstChargeRetry },
-  { jobName: 'daily_pending_charge_group_join_follow_up', hourUtc: 7, minuteUtc: 40, cadence: 'daily', run: jobs.dailyPendingChargeGroupJoinFollowUp },
   { jobName: 'daily_incomplete_profile_follow_up', hourUtc: 7, minuteUtc: 45, cadence: 'daily', run: jobs.dailyIncompleteProfileFollowUp },
   { jobName: 'daily_resubscribe_follow_up', hourUtc: 7, minuteUtc: 50, cadence: 'daily', run: jobs.dailyResubscribeFollowUp },
   // See dailyJobs.ts comment: subscription renewals must be checked daily —

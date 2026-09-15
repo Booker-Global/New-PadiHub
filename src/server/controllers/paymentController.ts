@@ -19,7 +19,6 @@ import {
 import { createAuditLog } from '../middleware/auditLogger.js';
 import { contributionService } from '../services/contributionService.js';
 import { getPaymentEligibility } from '../services/paymentEligibilityService.js';
-import { subscriptionService } from '../services/subscriptionService.js';
 import { calculateContributionFees } from '../lib/paymentFees.js';
 import { qs } from '../lib/reqHelpers.js';
 
@@ -391,14 +390,14 @@ export const paymentController = {
       // for a member who hasn't verified their identity yet — for UK
       // members, the card is only ever saved (never charged) at this point
       // until Stripe Identity verification succeeds, via
-      // identityVerificationService. However, if identity verification
-      // already happened BEFORE this card was saved (e.g. payout
-      // confirmation is still pending elsewhere), this is now the last
-      // remaining onboarding step, so attempt activation immediately
-      // instead of leaving the subscription stuck forever — see
-      // activateSubscriptionIfEligible, a no-op unless every prerequisite
-      // (tier, payment method, payout, identity) is already in place.
-      await subscriptionService.activateSubscriptionIfEligible(userId);
+      // identityVerificationService. Onboarding completion (account_status
+      // flip) only depends on every prerequisite being verified, not on any
+      // billing event (see Part A/B of the onboarding spec) — this may be
+      // the last remaining prerequisite, so re-check eligibility now rather
+      // than leaving the account stuck "incomplete" until the next
+      // unrelated request happens to trigger it. getPaymentEligibility()
+      // opportunistically finalizes onboarding as a side effect once ready.
+      await getPaymentEligibility(userId);
 
       res.json({
         success: true,
@@ -580,11 +579,12 @@ export const paymentController = {
       // for a member who hasn't verified their identity yet — for NG
       // members, this normally only saves a reusable card token until
       // Flutterwave Account Resolve succeeds, via identityVerificationService.
-      // If identity verification already happened before this card was
-      // saved, this is now the last remaining onboarding step, so attempt
-      // activation immediately — see activateSubscriptionIfEligible, a
-      // no-op unless every prerequisite is already in place.
-      await subscriptionService.activateSubscriptionIfEligible(userId);
+      // Onboarding completion (account_status flip) only depends on every
+      // prerequisite being verified, not on any billing event — this may be
+      // the last remaining prerequisite, so re-check eligibility now.
+      // getPaymentEligibility() opportunistically finalizes onboarding as a
+      // side effect once ready.
+      await getPaymentEligibility(userId);
 
       res.json({
         success: true,
@@ -648,9 +648,11 @@ export const paymentController = {
         }
         // Flutterwave payout destinations verify synchronously (unlike
         // Stripe Express, which waits on the account.updated webhook), so
-        // this may be the last onboarding prerequisite to complete — attempt
-        // activation immediately (no-op unless everything else is done).
-        await subscriptionService.activateSubscriptionIfEligible(userId);
+        // this may be the last remaining onboarding prerequisite — re-check
+        // eligibility now. getPaymentEligibility() opportunistically
+        // finalizes onboarding (account_status flip) as a side effect once
+        // ready; billing itself is never triggered here (see Part C).
+        await getPaymentEligibility(userId);
         return res.json({ success: true, data: result });
       }
 

@@ -232,6 +232,11 @@ const REQUIRED_ENUM_VALUES: Record<string, Record<string, { values: string[]; nu
     // subscription/manage). Some deployed DBs still have this ENUM without 'premium' (created
     // before it was widened), causing `errno 1265 "Data truncated for column"` on selectPlan.
     subscription_tier: { values: ['basic', 'premium'], nullable: true },
+    // 'pending' added when onboarding was rebuilt to only ever charge/create a
+    // provider subscription once a member's group actually launches — before
+    // that moment a fully-onboarded member's subscription_status is 'pending',
+    // never 'active' (see subscriptionService.reconcileBillingForActiveGroupMembership).
+    subscription_status: { values: ['free', 'trial', 'pending', 'active', 'expired', 'cancelled'] },
   },
 };
 

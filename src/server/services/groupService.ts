@@ -1011,6 +1011,60 @@ export const groupService = {
     return true;
   },
 
+  /**
+   * Admin "force delete" — a HARD delete, unlike close()/scheduleClosure()
+   * above (which only ever flip `status`). Every row anywhere in the
+   * platform that references this group is removed too, in FK-safe order
+   * (votes' own children first, then everything referencing the group,
+   * then the group row itself) — regardless of whether the underlying
+   * MySQL table actually has a real ON DELETE CASCADE constraint, since
+   * this codebase manages schema drift via REQUIRED_COLUMNS/ensureSchemaSync
+   * rather than tracked migrations (see db/client.ts) and cannot be relied
+   * on to have one. Irreversible — no audit-log entity survives to look
+   * this up afterwards, so the admin actor/timestamp/group name are
+   * recorded on a dedicated 'GROUP_FORCE_DELETED' audit action instead of
+   * the usual entity-scoped one.
+   */
+  async forceDeleteGroup(groupId: string, adminUserId: string, ipAddress?: string) {
+    const groupRows = await db.select({ id: schema.savingsGroups.id, name: schema.savingsGroups.name })
+      .from(schema.savingsGroups).where(eq(schema.savingsGroups.id, groupId)).limit(1);
+    if (!groupRows.length) throw new AppError('Group not found.', 404);
+    const group = groupRows[0];
+
+    const memberRows = await db.select({ user_id: schema.memberships.user_id })
+      .from(schema.memberships).where(eq(schema.memberships.group_id, groupId));
+
+    await db.transaction(async (tx) => {
+      const voteRows = await tx.select({ id: schema.votes.id })
+        .from(schema.votes).where(eq(schema.votes.group_id, groupId));
+      const voteIds = voteRows.map((v) => v.id);
+      if (voteIds.length) {
+        await tx.delete(schema.voteResponses).where(inArray(schema.voteResponses.vote_id, voteIds));
+        await tx.delete(schema.voteEmailTokens).where(inArray(schema.voteEmailTokens.vote_id, voteIds));
+      }
+      await tx.delete(schema.votes).where(eq(schema.votes.group_id, groupId));
+      await tx.delete(schema.rotations).where(eq(schema.rotations.group_id, groupId));
+      await tx.delete(schema.contributions).where(eq(schema.contributions.group_id, groupId));
+      await tx.delete(schema.groupInvitations).where(eq(schema.groupInvitations.group_id, groupId));
+      await tx.delete(schema.memberships).where(eq(schema.memberships.group_id, groupId));
+      await tx.delete(schema.savingsGroups).where(eq(schema.savingsGroups.id, groupId));
+    });
+
+    for (const m of memberRows) {
+      await notificationService.create({
+        userId: m.user_id, type: 'group_closed',
+        title: 'Group Removed',
+        message: `The savings group "${group.name}" has been permanently removed by an administrator.`,
+      });
+    }
+
+    await createAuditLog({
+      userId: adminUserId, action: 'GROUP_FORCE_DELETED', entity: 'savings_groups', entityId: groupId,
+      ipAddress, metadata: { groupName: group.name, memberCount: memberRows.length },
+    });
+    return true;
+  },
+
   async createInvitation(groupId: string, invitedBy: string, email?: string) {
     
     const group = await this.getById(groupId);

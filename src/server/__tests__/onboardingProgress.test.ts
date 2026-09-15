@@ -5,7 +5,6 @@ const nothingDone: OnboardingEligibility = {
   emailVerified: false,
   identityVerified: false,
   subscriptionTierSelected: false,
-  subscriptionActive: false,
   paymentMethodVerified: false,
   payoutVerified: false,
 };
@@ -45,18 +44,16 @@ describe('buildOnboardingSteps', () => {
     expect(outstanding).toContain('payout');
   });
 
-  it('keeps the subscription step incomplete until billing is active', () => {
+  it('completes the subscription step as soon as a plan is chosen, without requiring billing to be active', () => {
     const subscriptionStep = buildOnboardingSteps({
       ...nothingDone,
       subscriptionTierSelected: true,
-      subscriptionActive: false,
     }).find(step => step.key === 'subscription');
-    expect(subscriptionStep?.complete).toBe(false);
-    expect(subscriptionStep?.label).toContain('payment');
+    expect(subscriptionStep?.complete).toBe(true);
   });
 
-  it('explains that the subscription must go active before group access is allowed', () => {
+  it('explains that billing only starts once a joined/created group launches', () => {
     const subscriptionStep = buildOnboardingSteps(nothingDone).find(step => step.key === 'subscription');
-    expect(subscriptionStep?.description).toContain('go active');
+    expect(subscriptionStep?.description).toContain('launches');
   });
 });
