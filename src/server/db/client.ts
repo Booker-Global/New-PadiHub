@@ -139,6 +139,7 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
     { column: 'verified_address_city',        sqlType: 'VARCHAR(100) NULL' },
     { column: 'verified_address_postal_code', sqlType: 'VARCHAR(20) NULL' },
     { column: 'verified_address_state',       sqlType: 'VARCHAR(100) NULL' },
+    { column: 'subscription_activation_claimed_at', sqlType: 'TIMESTAMP NULL' },
   ],
   savings_groups: [
     { column: 'description',     sqlType: 'TEXT NULL' },
@@ -197,6 +198,8 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
     { column: 'last_activation_attempt_at', sqlType: 'TIMESTAMP NULL' },
     { column: 'cancelled_at',               sqlType: 'TIMESTAMP NULL' },
     { column: 'first_charge_failed_at',     sqlType: 'TIMESTAMP NULL' },
+    { column: 'last_processed_invoice_id',  sqlType: 'VARCHAR(255) NULL' },
+    { column: 'past_due_notification_sent_at', sqlType: 'TIMESTAMP NULL' },
   ],
   votes: [
     { column: 'target_member_id',    sqlType: 'VARCHAR(36) NULL' },

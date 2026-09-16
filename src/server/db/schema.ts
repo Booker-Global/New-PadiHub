@@ -31,6 +31,18 @@ export const users = mysqlTable('users', {
   // user picks a plan; group creation/joining requires this to be set — see
   // paymentEligibilityService.ts.
   subscription_tier:           mysqlEnum('subscription_tier', ['basic', 'premium']),
+  // Atomic claim guarding subscriptionService.reconcileBillingForActiveGroupMembership's
+  // "no subscriptions row yet — attempt the first charge" critical section.
+  // Concurrent triggers for the same user (e.g. the intraday safety-net
+  // sweep firing at the same moment as an inline join/activation trigger,
+  // or the user being admitted to two different groups at nearly the same
+  // instant) could otherwise both pass the "no existing subscription" check
+  // before either finishes creating one, charging the member's card twice.
+  // Stamped right before the provider is contacted, cleared in a `finally`
+  // once the attempt completes; SUBSCRIPTION_ACTIVATION_CLAIM_TTL_MS
+  // (constants.ts) lets a stale claim (crashed process) self-heal instead
+  // of permanently blocking future attempts.
+  subscription_activation_claimed_at: timestamp('subscription_activation_claimed_at'),
   stripe_customer_id:          varchar('stripe_customer_id', { length: 100 }),
   stripe_payment_method_id:    varchar('stripe_payment_method_id', { length: 100 }),
   stripe_connected_account_id: varchar('stripe_connected_account_id', { length: 100 }),
@@ -525,6 +537,23 @@ export const subscriptions = mysqlTable('subscriptions', {
   // for an actual failed charge attempt" policy. Cleared as soon as the
   // retry succeeds (or the member is removed), so it never re-fires.
   first_charge_failed_at: timestamp('first_charge_failed_at'),
+  // Stripe sends BOTH `invoice.paid` and `invoice.payment_succeeded` for the
+  // exact same successful invoice (and may redeliver either one on retry) —
+  // webhookStripeController.ts's shared handler for those two event types
+  // stamps the invoice.id here the first time it fully processes a given
+  // invoice, and short-circuits (skips re-sending the confirmation
+  // email/notification/audit-log) on every subsequent delivery for that
+  // same invoice, however it arrives. Flutterwave has no equivalent
+  // duplicate-event risk, so this column is Stripe-only.
+  last_processed_invoice_id: varchar('last_processed_invoice_id', { length: 255 }),
+  // Throttles scheduledJobs.dailySubscriptionPastDueRecovery's "Subscription
+  // Payment Overdue" notification to once every PAST_DUE_NOTIFICATION_
+  // COOLDOWN_DAYS (see constants.ts) instead of every single daily run —
+  // that job's Stripe/Flutterwave self-heal retry attempt must stay daily
+  // (a stuck past_due subscription shouldn't wait longer to self-heal), but
+  // re-notifying the member every day for the same still-unresolved
+  // problem, with no cooldown, is just alert fatigue, not new information.
+  past_due_notification_sent_at: timestamp('past_due_notification_sent_at'),
   created_at:              timestamp('created_at').notNull().defaultNow(),
   updated_at:              timestamp('updated_at').notNull().defaultNow().onUpdateNow(),
 });

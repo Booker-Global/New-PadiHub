@@ -40,3 +40,15 @@ export function getGroupStatusColor(status: SavingsGroupStatus | string): string
       return '#6B7280';
   }
 }
+
+/**
+ * Whether a group has permanently ended ("Deleted" — see getGroupStatusLabel
+ * above): closed by its owner or auto-expired. Deliberately excludes
+ * 'suspended', which is only a temporary state (membership dropped below the
+ * 3-member launch threshold) that resumes normal activity on its own once
+ * membership recovers. Used to declutter "My Groups" behind a toggle so
+ * permanently-ended groups don't clutter a member's default view.
+ */
+export function isGroupPermanentlyClosed(status: SavingsGroupStatus | string): boolean {
+  return status === 'closed' || status === 'expired';
+}

@@ -295,6 +295,73 @@ export const contributionService = {
   },
 
   /**
+   * Section D.3 — a member who joins an ALREADY-LAUNCHED group (invited
+   * join, a leader-approved join request, or a passed member_admission
+   * vote) arrives into a cycle whose contribution schedule was already
+   * generated for whoever was active at the time (generateCycleSchedule
+   * only ever runs once per cycle, seeded from that moment's membership
+   * list — see groupService.activateGroup and
+   * monthlyGenerateContributionSchedule below). Without this, the new
+   * member gets NO contribution row for the cycle they actually joined —
+   * they are silently never charged and never shown as "due" until the
+   * group's NEXT cycle happens to regenerate a schedule that includes them.
+   * Called synchronously the instant a new member goes active
+   * (membershipService.join/_activatePendingMembership) so they're caught
+   * up immediately; monthlyGenerateContributionSchedule's daily backfill is
+   * the safety net (and also retroactively fixes every account already
+   * affected by this gap before this fix existed, with no one-off script
+   * needed). A no-op for draft groups (their schedule is generated in full,
+   * once, at launch) and suspended groups (collection is deliberately
+   * paused — see groupService.reevaluateAfterMembershipChange), and
+   * idempotent if the member already has a row for the current cycle.
+   *
+   * Runs inside a transaction that row-locks the group (the same
+   * `SELECT ... FOR UPDATE` on savingsGroups used by
+   * membershipService's rotation-order assignment) so that this call and
+   * monthlyGenerateContributionSchedule's daily backfill loop — which can
+   * legitimately be evaluating the very same member at the very same
+   * moment a live join/approval fires this method — can never both see the
+   * row missing and both insert a duplicate contribution for the member.
+   */
+  async enrollMemberInCurrentCycleIfMissing(groupId: string, userId: string): Promise<void> {
+    await db.transaction(async (tx) => {
+      await tx.select({ id: schema.savingsGroups.id }).from(schema.savingsGroups)
+        .where(eq(schema.savingsGroups.id, groupId)).for('update');
+
+      const groupRows = await tx.select({
+        status:               schema.savingsGroups.status,
+        current_cycle:        schema.savingsGroups.current_cycle,
+        contribution_amount:  schema.savingsGroups.contribution_amount,
+      }).from(schema.savingsGroups).where(eq(schema.savingsGroups.id, groupId)).limit(1);
+      if (!groupRows.length) return;
+      const group = groupRows[0];
+      if (group.status !== 'active') return;
+
+      const existingForCycle = await tx.select({
+        member_id: schema.contributions.member_id,
+        due_date:  schema.contributions.due_date,
+      }).from(schema.contributions)
+        .where(and(eq(schema.contributions.group_id, groupId), eq(schema.contributions.cycle_number, group.current_cycle)));
+
+      // No schedule generated for the current cycle at all yet — nothing to
+      // backfill; the normal generation path will create this member's row
+      // along with everyone else's the moment it runs.
+      if (!existingForCycle.length) return;
+      if (existingForCycle.some(c => c.member_id === userId)) return;
+
+      await tx.insert(schema.contributions).values({
+        id:             uuidv4(),
+        group_id:       groupId,
+        member_id:      userId,
+        cycle_number:   group.current_cycle,
+        amount_due:     group.contribution_amount,
+        due_date:       existingForCycle[0].due_date,
+        payment_status: 'scheduled',
+      });
+    });
+  },
+
+  /**
    * The real monetary size of a cycle's payout pot: the sum of what the
    * members who are ACTUALLY contributing this cycle owe (or have already
    * paid) — never the group's `maximum_members` capacity. A group can have

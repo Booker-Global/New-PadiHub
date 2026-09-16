@@ -29,7 +29,7 @@
  *     active/trialing (e.g. a 3DS/SCA confirmation that only ever
  *     completed later). Reuses
  *     subscriptionService.retryStripeIncompleteSubscriptionCharge(), the
- *     same self-heal weeklySubscriptionHealthCheck already runs weekly —
+ *     same self-heal dailySubscriptionPastDueRecovery already runs daily —
  *     this just runs it now, for every such row, instead of waiting.
  *
  *   Step C — A local Stripe `subscriptions` row that IS already

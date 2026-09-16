@@ -5,7 +5,7 @@
  *
  * These are named exports ready for Trigger.dev or any cron runner.
  */
-import { eq, lt, lte, gt, and, or, inArray, isNotNull, isNull, ne } from 'drizzle-orm';
+import { eq, lt, lte, gt, and, or, inArray, notInArray, isNotNull, isNull, ne } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { contributionService } from './contributionService.js';
@@ -25,6 +25,7 @@ import {
   ACCOUNT_LIFECYCLE_REMINDER_INTERVAL_DAYS,
   INCOMPLETE_PROFILE_EXPIRY_DAYS, CANCELLED_SUBSCRIPTION_EXPIRY_DAYS,
   CONTRIBUTION_REMINDER_ADVANCE_DAYS,
+  PAST_DUE_NOTIFICATION_COOLDOWN_DAYS,
 } from '../lib/constants.js';
 import { planCode, subscriptionService } from './subscriptionService.js';
 import { getOnboardingProgress } from './paymentEligibilityService.js';
@@ -87,6 +88,25 @@ async function runJob(name: string, fn: () => Promise<void>): Promise<void> {
 // ─── Daily Jobs ───────────────────────────────────────────────────────────────
 
 /**
+ * Group IDs that are permanently closed/deleted (`savingsGroups.status`
+ * 'closed' or 'expired') — as opposed to merely 'suspended' (temporarily
+ * inactive because membership dropped below the launch threshold, which
+ * must keep behaving normally and resume once membership recovers).
+ *
+ * Several jobs below act directly on `contributions`/`rotations` rows —
+ * closing/force-closing a group (groupService.close) only ever flips
+ * `savingsGroups.status`, it never touches those rows — so without this
+ * exclusion a member of a closed/deleted group would still get charged,
+ * marked missed, or sent a reminder/upcoming-payout email for a group that
+ * no longer exists to them.
+ */
+async function getClosedOrExpiredGroupIds(): Promise<string[]> {
+  const rows = await db.select({ id: schema.savingsGroups.id }).from(schema.savingsGroups)
+    .where(inArray(schema.savingsGroups.status, ['closed', 'expired']));
+  return rows.map(row => row.id);
+}
+
+/**
  * Send a one-time "contribution due soon" reminder, no earlier than
  * CONTRIBUTION_REMINDER_ADVANCE_DAYS before due_date. Deduplicated via
  * reminder_sent_at (a dedicated throttle column — see contributions schema
@@ -102,6 +122,7 @@ export async function dailyContributionReminders(): Promise<void> {
   await runJob('daily_contribution_reminders', async () => {
     const now = new Date();
     const reminderWindowEnd = new Date(now.getTime() + CONTRIBUTION_REMINDER_ADVANCE_DAYS * 24 * 60 * 60 * 1000);
+    const excludedGroupIds = await getClosedOrExpiredGroupIds();
 
     const due = await db.select().from(schema.contributions)
       .where(and(
@@ -109,6 +130,7 @@ export async function dailyContributionReminders(): Promise<void> {
         gt(schema.contributions.due_date, now),
         lte(schema.contributions.due_date, reminderWindowEnd),
         isNull(schema.contributions.reminder_sent_at),
+        notInArray(schema.contributions.group_id, excludedGroupIds),
       ));
 
     for (const c of due) {
@@ -153,8 +175,12 @@ export async function dailyUpcomingPayoutReminders(): Promise<void> {
  */
 export async function dailyAutoChargeDueContributions(): Promise<void> {
   await runJob('daily_auto_charge_due_contributions', async () => {
+    const excludedGroupIds = await getClosedOrExpiredGroupIds();
     const due = await db.select().from(schema.contributions)
-      .where(eq(schema.contributions.payment_status, 'due'));
+      .where(and(
+        eq(schema.contributions.payment_status, 'due'),
+        notInArray(schema.contributions.group_id, excludedGroupIds),
+      ));
 
     for (const c of due) {
       try {
@@ -204,10 +230,12 @@ export async function dailyAutoChargeDueContributions(): Promise<void> {
 export async function dailyOverdueCheck(): Promise<void> {
   await runJob('daily_overdue_check', async () => {
     const now = new Date();
+    const excludedGroupIds = await getClosedOrExpiredGroupIds();
     const overdue = await db.select().from(schema.contributions)
       .where(and(
         eq(schema.contributions.payment_status, 'due'),
         lt(schema.contributions.due_date, now),
+        notInArray(schema.contributions.group_id, excludedGroupIds),
       ));
 
     for (const c of overdue) {
@@ -224,11 +252,13 @@ export async function dailyOverdueCheck(): Promise<void> {
 export async function dailyTrustScoreUpdates(): Promise<void> {
   await runJob('daily_trust_score_updates', async () => {
     const now = new Date();
+    const excludedGroupIds = await getClosedOrExpiredGroupIds();
     await db.update(schema.contributions)
       .set({ payment_status: 'due' })
       .where(and(
         eq(schema.contributions.payment_status, 'scheduled'),
         lte(schema.contributions.due_date, now),
+        notInArray(schema.contributions.group_id, excludedGroupIds),
       ));
   });
 }
@@ -257,10 +287,12 @@ export async function dailyChargeCatchUp(): Promise<void> {
 export async function dailyFailedPaymentCheck(): Promise<void> {
   await runJob('daily_failed_payment_check', async () => {
     const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const excludedGroupIds = await getClosedOrExpiredGroupIds();
     const failed = await db.select().from(schema.contributions)
       .where(and(
         eq(schema.contributions.payment_status, 'failed'),
         lte(schema.contributions.due_date, yesterday),
+        notInArray(schema.contributions.group_id, excludedGroupIds),
       ));
 
     for (const c of failed) {
@@ -284,11 +316,13 @@ export async function dailyFailedPaymentCheck(): Promise<void> {
 export async function dailyContributionDefaultRetry(): Promise<void> {
   await runJob('daily_contribution_default_retry', async () => {
     const now = new Date();
+    const excludedGroupIds = await getClosedOrExpiredGroupIds();
     const due = await db.select().from(schema.contributions)
       .where(and(
         eq(schema.contributions.payment_status, 'pending_default'),
         eq(schema.contributions.retry_attempted, false),
         lte(schema.contributions.grace_period_ends_at, now),
+        notInArray(schema.contributions.group_id, excludedGroupIds),
       ));
 
     for (const c of due) {
@@ -549,14 +583,22 @@ export async function dailyApplyPendingPayoutFrequencyChanges(): Promise<void> {
  * the sole trigger point). Every event that could make that true now
  * reconciles billing immediately at the call site
  * (groupService.activateGroup/reevaluateAfterMembershipChange,
- * membershipService.join/_activatePendingMembership) — this daily sweep is
- * just the safety net in case any of those individual call sites is ever
- * missed. reconcileBillingForActiveGroupMembership is itself a no-op for
- * anyone who already has a `subscriptions` row, so this only ever needs to
- * find active-group members who don't have one yet.
+ * membershipService.join/_activatePendingMembership) — this sweep is just
+ * the safety net in case any of those individual call sites is ever missed
+ * (or lost a concurrent claim to another in-flight attempt — see
+ * reconcileBillingForActiveGroupMembership's atomic claim). It runs several
+ * times a day (not just once) so a missed member is found within hours
+ * rather than up to 24h later — safe to run this often only because that
+ * same claim makes every invocation mutually exclusive per user, so more
+ * frequent runs can never cause a duplicate charge. `jobNameSuffix` lets
+ * each scheduled slot (see inProcessScheduler.ts) log its own distinct
+ * job_runs row instead of them all colliding under one name.
+ * reconcileBillingForActiveGroupMembership is itself a no-op for anyone
+ * who already has a `subscriptions` row, so this only ever needs to find
+ * active-group members who don't have one yet.
  */
-export async function dailyBillingActiveGroupReconciliation(): Promise<void> {
-  await runJob('daily_billing_active_group_reconciliation', async () => {
+export async function dailyBillingActiveGroupReconciliation(jobNameSuffix = ''): Promise<void> {
+  await runJob(`daily_billing_active_group_reconciliation${jobNameSuffix}`, async () => {
     const activeGroupMembersMissingSubscription = await db.select({ user_id: schema.memberships.user_id })
       .from(schema.memberships)
       .innerJoin(schema.savingsGroups, eq(schema.memberships.group_id, schema.savingsGroups.id))
@@ -573,7 +615,7 @@ export async function dailyBillingActiveGroupReconciliation(): Promise<void> {
       try {
         await subscriptionService.reconcileBillingForActiveGroupMembership(userId);
       } catch (err) {
-        console.error(`[Job] daily_billing_active_group_reconciliation: failed for user ${userId}:`, err instanceof Error ? err.message : err);
+        console.error(`[Job] daily_billing_active_group_reconciliation${jobNameSuffix}: failed for user ${userId}:`, err instanceof Error ? err.message : err);
       }
     }
   });
@@ -605,6 +647,66 @@ export async function dailySubscriptionFirstChargeRetry(): Promise<void> {
       } catch (err) {
         console.error(`[Job] daily_subscription_first_charge_retry: failed for user ${sub.user_id}:`, err instanceof Error ? err.message : err);
       }
+    }
+  });
+}
+
+/**
+ * Give past_due Stripe/Flutterwave subscriptions a daily automatic chance
+ * to self-heal, and notify the member if it's still stuck.
+ *
+ * This used to only run once a week as part of weeklySubscriptionHealthCheck
+ * — meaning a member whose subscription got stuck as "Pending Charge"/
+ * "past_due" (e.g. the very first charge on group launch didn't go through)
+ * could wait up to 6 days before PadiHub even tried again automatically.
+ * Running the same self-heal daily means it's retried the very next morning
+ * instead. See weeklySubscriptionHealthCheck's doc comment (now covering
+ * only the 7-day renewal-reminder email) for why
+ * retryStripeIncompleteSubscriptionCharge (which also re-checks Stripe for a
+ * different, genuinely active/trialing subscription object for the same
+ * customer) is attempted before ever nagging the member.
+ *
+ * The self-heal retry itself stays daily (unthrottled — a quicker retry is
+ * always desirable), but the member-facing "still stuck" notification is
+ * throttled to at most once every PAST_DUE_NOTIFICATION_COOLDOWN_DAYS (via
+ * past_due_notification_sent_at) — moving the RETRY from weekly to daily
+ * should not also mean re-notifying the member every single day about the
+ * exact same still-unresolved problem.
+ */
+export async function dailySubscriptionPastDueRecovery(): Promise<void> {
+  await runJob('daily_subscription_past_due_recovery', async () => {
+    const pastDue = await db.select({
+      id: schema.subscriptions.id,
+      user_id: schema.subscriptions.user_id,
+      provider: schema.subscriptions.provider,
+      provider_subscription_id: schema.subscriptions.provider_subscription_id,
+      past_due_notification_sent_at: schema.subscriptions.past_due_notification_sent_at,
+    })
+      .from(schema.subscriptions)
+      .where(eq(schema.subscriptions.billing_status, 'past_due'));
+
+    const notificationCutoff = new Date(Date.now() - PAST_DUE_NOTIFICATION_COOLDOWN_DAYS * 24 * 60 * 60 * 1000);
+
+    for (const sub of pastDue) {
+      if (sub.provider === 'stripe' && sub.provider_subscription_id) {
+        try {
+          const healed = await subscriptionService.retryStripeIncompleteSubscriptionCharge(sub.user_id, sub.provider_subscription_id);
+          if (healed) continue;
+        } catch (err) {
+          console.error(`[Job] daily_subscription_past_due_recovery: self-heal attempt failed for user ${sub.user_id}:`, err instanceof Error ? err.message : err);
+        }
+      }
+
+      if (sub.past_due_notification_sent_at && sub.past_due_notification_sent_at > notificationCutoff) continue;
+
+      await notificationService.create({
+        userId: sub.user_id, type: 'subscription_past_due',
+        title: 'Subscription Payment Overdue',
+        message: 'Your subscription payment is overdue. Please update your payment method to avoid losing access.',
+      });
+      await db.update(schema.subscriptions)
+        .set({ past_due_notification_sent_at: new Date() })
+        .where(eq(schema.subscriptions.id, sub.id));
     }
   });
 }
@@ -756,51 +858,16 @@ export async function weeklyExpiredInvitationCleanup(): Promise<void> {
 }
 
 /**
- * Check subscription health — notify users with past_due subscriptions.
- *
- * Before nagging, this job gives Stripe (GB) subscriptions one more
- * automatic chance to self-heal via
- * subscriptionService.retryStripeIncompleteSubscriptionCharge — which also
- * re-checks Stripe for a different, genuinely active/trialing subscription
- * object for the same customer (see reconcileStaleStripeSubscriptionReference),
- * covering members whose local `provider_subscription_id` was left pointing
- * at an abandoned duplicate subscription by the past_due
- * duplicate-subscription bug (PR #49/50). Without this, such an account
- * would otherwise keep being told its payment is "overdue" every week
- * forever, even once Stripe's own dashboard already shows the real
- * subscription as active/succeeded — the only way to unstick it would have
- * been to manually run the one-off reconcileStaleStripeSubscriptionReferences.ts
- * script. Flutterwave (NG) has no equivalent reconciliation (no
- * multi-subscription-object concept), so this only ever applied to Stripe.
+ * Send renewal-reminder emails 7 days before an active subscription's next
+ * charge. The past_due self-heal + "overdue" nag notification that used to
+ * live in this weekly job now runs daily instead — see
+ * dailySubscriptionPastDueRecovery above — since a subscription stuck as
+ * "Pending Charge"/past_due should not have to wait up to 6 days for its
+ * next automatic retry. This job keeps only the renewal reminder, for which
+ * a weekly cadence is still perfectly fine.
  */
 export async function weeklySubscriptionHealthCheck(): Promise<void> {
   await runJob('weekly_subscription_health_check', async () => {
-    const pastDue = await db.select({
-      user_id: schema.subscriptions.user_id,
-      renewal_date: schema.subscriptions.renewal_date,
-      provider: schema.subscriptions.provider,
-      provider_subscription_id: schema.subscriptions.provider_subscription_id,
-    })
-      .from(schema.subscriptions)
-      .where(eq(schema.subscriptions.billing_status, 'past_due'));
-
-    for (const sub of pastDue) {
-      if (sub.provider === 'stripe' && sub.provider_subscription_id) {
-        try {
-          const healed = await subscriptionService.retryStripeIncompleteSubscriptionCharge(sub.user_id, sub.provider_subscription_id);
-          if (healed) continue;
-        } catch (err) {
-          console.error(`[Job] weekly_subscription_health_check: self-heal attempt failed for user ${sub.user_id}:`, err instanceof Error ? err.message : err);
-        }
-      }
-
-      await notificationService.create({
-        userId: sub.user_id, type: 'subscription_past_due',
-        title: 'Subscription Payment Overdue',
-        message: 'Your subscription payment is overdue. Please update your payment method to avoid losing access.',
-      });
-    }
-
     // Send renewal reminders 7 days before renewal
     const in7Days = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
     const renewingSoon = await db.select({ user_id: schema.subscriptions.user_id, renewal_date: schema.subscriptions.renewal_date })
@@ -842,7 +909,19 @@ export async function weeklyDatabaseMaintenance(): Promise<void> {
 // only a once-a-month safety net. Both functions are idempotent (they check
 // existing state before acting), so running them more often is safe.
 
-/** Generate the next cycle's contribution schedule for active groups that don't have one yet. */
+/**
+ * Generate the next cycle's contribution schedule for active groups that
+ * don't have one yet. Also backfills any active member who is MISSING a
+ * contribution row for a cycle that's already been scheduled — this
+ * happens whenever someone joins an already-launched group mid-cycle
+ * (invited join, approved join request, or a passed member_admission vote)
+ * AFTER generateCycleSchedule already ran for that cycle; see
+ * contributionService.enrollMemberInCurrentCycleIfMissing's doc comment for
+ * the full explanation. That method already covers the moment a member
+ * joins going forward — this daily sweep is the safety net for it (and, on
+ * first deploy, retroactively fixes every member already affected by this
+ * gap, with no separate one-off script needed).
+ */
 export async function monthlyGenerateContributionSchedule(): Promise<void> {
   await runJob('monthly_generate_contribution_schedule', async () => {
     const activeGroups = await db.select().from(schema.savingsGroups)
@@ -854,11 +933,33 @@ export async function monthlyGenerateContributionSchedule(): Promise<void> {
         .where(and(eq(schema.memberships.group_id, group.id), eq(schema.memberships.status, 'active')));
       if (!activeMembers.length) continue;
 
-      // Skip if this group's current cycle already has a schedule generated.
-      const existing = await db.select({ id: schema.contributions.id }).from(schema.contributions)
-        .where(and(eq(schema.contributions.group_id, group.id), eq(schema.contributions.cycle_number, group.current_cycle)))
-        .limit(1);
-      if (existing.length) continue;
+      // A schedule already exists for this cycle if ANY contribution row is
+      // present for it — but that doesn't mean EVERY currently active
+      // member has one. Backfill anyone missing, using the SAME due date
+      // already set for their peers, instead of skipping the whole cycle.
+      const existingForCycle = await db.select({
+        member_id: schema.contributions.member_id,
+        due_date:  schema.contributions.due_date,
+      }).from(schema.contributions)
+        .where(and(eq(schema.contributions.group_id, group.id), eq(schema.contributions.cycle_number, group.current_cycle)));
+
+      if (existingForCycle.length) {
+        const scheduledMemberIds = new Set(existingForCycle.map(c => c.member_id));
+        const missingMembers = activeMembers.filter(m => !scheduledMemberIds.has(m.user_id));
+        if (missingMembers.length) {
+          // Delegates to the SAME method a live join/approval calls
+          // (contributionService.enrollMemberInCurrentCycleIfMissing) —
+          // single source of truth for "is this member missing from the
+          // current cycle, and if so enroll them", including its
+          // transaction/row-lock so this daily sweep can never race with a
+          // live join happening for the same member at the same moment.
+          for (const m of missingMembers) {
+            await contributionService.enrollMemberInCurrentCycleIfMissing(group.id, m.user_id);
+          }
+          generated += missingMembers.length;
+        }
+        continue;
+      }
 
       const { dueDate } = resolveFirstScheduleDate(group.contribution_frequency, group.payout_day, new Date());
       await contributionService.generateCycleSchedule(
@@ -1098,6 +1199,7 @@ export const dailyJobs = [
   dailyOverdueCheck,
   dailyContributionDefaultRetry,
   dailyFailedPaymentCheck,
+  dailySubscriptionPastDueRecovery,
   dailyGroupLifecycleExpiry,
   dailyApplyPendingPayoutFrequencyChanges,
   dailyBillingActiveGroupReconciliation,

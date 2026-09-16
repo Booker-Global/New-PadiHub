@@ -325,7 +325,7 @@ export class StripeProvider implements IPaymentProvider {
    * a subscription that's already past `incomplete` (paid, or genuinely
    * failed into `incomplete_expired`/canceled) is simply re-reported as-is
    * with no further Stripe calls. Called by
-   * scheduledJobs.weeklySubscriptionHealthCheck's self-heal so accounts
+   * scheduledJobs.dailySubscriptionPastDueRecovery's self-heal so accounts
    * stuck this way get actually billed the next time they're found still
    * `past_due`, instead of being nagged with a "payment overdue"
    * notification forever.
@@ -604,6 +604,77 @@ export class StripeProvider implements IPaymentProvider {
     const stripe = getStripe();
     await stripe.accounts.update(accountId, {
       individual: {
+        verification: {
+          document: { front: 'file_identity_document_success' },
+        },
+      },
+    });
+  }
+
+  /**
+   * SANDBOX/TEST-MODE-ONLY TEST UTILITY. Submitting just the identity
+   * document (submitSandboxIdentityTestDocument above) is not always enough
+   * to unblock payouts — Stripe's Express onboarding for individuals can
+   * also require `individual.dob`, `individual.address` and/or
+   * `individual.id_number` to be verified before `payouts_enabled` flips to
+   * true, and no real document exists in test mode for those. This method
+   * submits Stripe's documented test values that always resolve to a
+   * successful match in test mode — see
+   * https://docs.stripe.com/connect/testing#test-personal-id-numbers and
+   * https://docs.stripe.com/connect/testing#test-addresses:
+   *   - dob 1901-01-01                     → always a successful DOB match
+   *   - address line1 "address_full_match" → always a successful address match
+   *   - id_number "000000000"              → a syntactically valid test ID
+   *   - verification.document              → the same test file token as
+   *                                           submitSandboxIdentityTestDocument
+   * Combined, these clear every outstanding `individual.verification`/KYC
+   * requirement Stripe's test mode can raise for an Express account, so
+   * `payouts_enabled` can flip to true without any real document ever being
+   * uploaded — exactly what's needed to unblock payout testing in
+   * sandbox/QA. In production, every one of these must always be supplied
+   * by the account holder themselves via Stripe's hosted onboarding flow
+   * (createOnboardingLink() above) — never by this method.
+   *
+   * Hard-refuses to run unless BOTH `NODE_ENV !== 'production'` AND
+   * `STRIPE_SECRET_KEY` is itself a test-mode key (starts with `sk_test_`) —
+   * same gating as submitSandboxIdentityTestDocument, and for the same
+   * reason: Stripe would in any case reject these test-only values against
+   * a live-mode key, but this does not rely on that alone.
+   *
+   * Deliberately NOT part of `IPaymentProvider`/never called from any
+   * controller or user-reachable route — it exists solely for the one-off
+   * sandbox scripts under src/server/scripts/ (e.g.
+   * submitSandboxIdentityTestDocuments.ts) to unblock test Connect accounts
+   * during manual QA. Only overwrites fields the caller doesn't already
+   * have real values for — real dob/address pre-filled from a member's
+   * genuine (even if test-mode) Stripe Identity verification is left alone
+   * unless `force` is passed, so this never silently clobbers legitimate
+   * data captured elsewhere in the app.
+   */
+  async applySandboxConnectTestVerificationData(accountId: string, options?: { force?: boolean }): Promise<void> {
+    const key = process.env.STRIPE_SECRET_KEY ?? '';
+    if (process.env.NODE_ENV === 'production' || !key.startsWith('sk_test_')) {
+      throw new Error(
+        'applySandboxConnectTestVerificationData refused: this is a sandbox/test-mode-only utility and must never run in production or against a live Stripe key.',
+      );
+    }
+    const stripe = getStripe();
+    const account = await stripe.accounts.retrieve(accountId);
+    const hasDob = Boolean(account.individual?.dob?.day && account.individual?.dob?.month && account.individual?.dob?.year);
+    const hasAddress = Boolean(account.individual?.address?.line1);
+
+    await stripe.accounts.update(accountId, {
+      individual: {
+        ...(options?.force || !hasDob ? { dob: { day: 1, month: 1, year: 1901 } } : {}),
+        ...(options?.force || !hasAddress ? {
+          address: {
+            line1:       'address_full_match',
+            city:        'London',
+            postal_code: 'EC1A 1BB',
+            country:     account.country ?? 'GB',
+          },
+        } : {}),
+        id_number: '000000000',
         verification: {
           document: { front: 'file_identity_document_success' },
         },

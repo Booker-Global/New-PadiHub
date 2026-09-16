@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { Link } from 'react-router-dom';
 import { MotionDiv } from '@/lib/motion-safe';
-import { getGroupStatusLabel, getGroupStatusColor } from '@/lib/groupStatus';
+import { getGroupStatusLabel, getGroupStatusColor, isGroupPermanentlyClosed } from '@/lib/groupStatus';
 import {
   PiggyBank,
   Plus,
@@ -14,6 +14,8 @@ import {
   AlertTriangle,
   Wallet,
   HandCoins,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { SkeletonPage } from '@/components/ui/loading-skeleton';
@@ -125,6 +127,11 @@ export default function SavingsGroupsPage() {
   const [rotations, setRotations] = useState<Rotation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  // Off by default so closed/deleted groups don't clutter "My Groups" — the
+  // API always returns them (see groupService.list's comment: a closed/
+  // deleted group a member was part of should still be reachable for its
+  // history), so this is a purely client-side view filter.
+  const [showClosedGroups, setShowClosedGroups] = useState(false);
 
   const loadData = useCallback(async () => {
     const session = getValidSession();
@@ -236,6 +243,19 @@ export default function SavingsGroupsPage() {
       { label: 'Monthly Groups', value: monthlyGroups.toString(), color: '#2EAF6F', icon: Clock },
     ];
   }, [groups]);
+
+  const closedGroupCount = useMemo(
+    () => groups.filter(group => isGroupPermanentlyClosed(group.status)).length,
+    [groups],
+  );
+
+  // Hides closed/deleted groups by default so a member's list isn't
+  // cluttered with groups that no longer exist to them; the toggle below
+  // lets them bring those back into view without losing their history.
+  const visibleGroups = useMemo(
+    () => (showClosedGroups ? groups : groups.filter(group => !isGroupPermanentlyClosed(group.status))),
+    [groups, showClosedGroups],
+  );
 
   const groupNameById = useMemo(
     () => Object.fromEntries(groups.map(group => [group.id, group.name])),
@@ -365,14 +385,38 @@ export default function SavingsGroupsPage() {
                 ))}
               </MotionDiv>
 
+              {tab === 'groups' && closedGroupCount > 0 && (
+                <MotionDiv variants={fadeUp} className="flex items-center justify-end mb-4">
+                  <button
+                    type="button"
+                    onClick={() => setShowClosedGroups((current) => !current)}
+                    className="flex items-center gap-2 px-4 py-2 rounded-2xl text-xs font-bold transition-all"
+                    style={{
+                      background: showClosedGroups ? 'rgba(46,175,111,0.08)' : '#F9FAFB',
+                      color: showClosedGroups ? '#2EAF6F' : '#6B7280',
+                      border: '1px solid #F3F4F6',
+                    }}
+                  >
+                    {showClosedGroups ? <Eye size={14} /> : <EyeOff size={14} />}
+                    {showClosedGroups ? 'Showing closed/deleted groups' : `Show closed/deleted groups (${closedGroupCount})`}
+                  </button>
+                </MotionDiv>
+              )}
+
               {tab === 'groups' && (
-                groups.length === 0 ? (
+                visibleGroups.length === 0 ? (
                   <MotionDiv variants={fadeUp} className="rounded-3xl bg-white p-8 text-center" style={{ border: '1px solid #F3F4F6' }}>
                     <div className="w-16 h-16 rounded-3xl flex items-center justify-center mx-auto mb-4" style={{ background: 'rgba(46,175,111,0.08)' }}>
                       <PiggyBank size={28} style={{ color: '#2EAF6F' }} />
                     </div>
-                    <h2 className="text-xl font-extrabold text-gray-900 mb-2" style={{ fontFamily: 'Nunito, sans-serif' }}>No savings groups yet</h2>
-                    <p className="text-sm text-gray-500 mb-6">You haven&apos;t joined or created any groups yet.</p>
+                    <h2 className="text-xl font-extrabold text-gray-900 mb-2" style={{ fontFamily: 'Nunito, sans-serif' }}>
+                      {groups.length === 0 ? 'No savings groups yet' : 'No active groups to show'}
+                    </h2>
+                    <p className="text-sm text-gray-500 mb-6">
+                      {groups.length === 0
+                        ? "You haven't joined or created any groups yet."
+                        : 'All your groups are closed or deleted. Toggle "Show closed/deleted groups" above to see them.'}
+                    </p>
                     <Link
                       to="/savings-groups/create"
                       className="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl text-sm font-bold text-white"
@@ -383,7 +427,7 @@ export default function SavingsGroupsPage() {
                   </MotionDiv>
                 ) : (
                   <MotionDiv initial="hidden" animate="visible" variants={stagger} className="r-grid-2">
-                    {groups.map((group, index) => {
+                    {visibleGroups.map((group, index) => {
                       const color = GROUP_COLORS[index % GROUP_COLORS.length];
                       const statusMeta = getGroupStatusMeta(group.status);
 

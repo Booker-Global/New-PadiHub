@@ -5,7 +5,7 @@
  */
 import type { Request, Response, NextFunction } from 'express';
 import Stripe from 'stripe';
-import { eq } from 'drizzle-orm';
+import { eq, and, isNull } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { getStripeProvider } from '../integrations/payments/PaymentProviderFactory.js';
@@ -38,6 +38,30 @@ function formatInvoiceAmount(amountMinorUnits: number | null | undefined, curren
 function stripeInvoiceSubscriptionId(invoice: Stripe.Invoice): string | null {
   const subId = (invoice as unknown as Record<string, unknown>).subscription;
   return typeof subId === 'string' ? subId : (subId as Stripe.Subscription | null)?.id ?? null;
+}
+
+/**
+ * The service period this invoice covers (Stripe always includes `lines` on
+ * an Invoice object, no expand needed) — for a subscription invoice, its
+ * `period.end` IS the subscription's new `current_period_end`, i.e. the
+ * date of the NEXT renewal after this one. Used to keep `subscriptions.
+ * renewal_date` current on every successful charge (first charge AND
+ * ordinary renewals) instead of it staying frozen at whatever value was
+ * set at subscription creation — which is exactly what previously made
+ * weeklySubscriptionHealthCheck's `renewal_date <= in7Days` reminder query
+ * (and the "next billing date" shown in confirmation emails) go stale
+ * after the very first renewal, since nothing advanced it from there.
+ */
+function nextRenewalDateFromInvoice(invoice: Stripe.Invoice): Date | null {
+  const periodEnd = invoice.lines?.data?.[0]?.period?.end;
+  return typeof periodEnd === 'number' ? new Date(periodEnd * 1000) : null;
+}
+
+/** mysql2's UPDATE result shape isn't typed by drizzle — same pattern used in rotationService/paymentEligibilityService for atomic claim-style updates. */
+function extractAffectedRows(result: unknown): number {
+  return (result as { affectedRows?: number }[])[0]?.affectedRows
+    ?? (result as { affectedRows?: number }).affectedRows
+    ?? 0;
 }
 
 export async function stripeWebhookHandler(req: Request, res: Response, next: NextFunction) {
@@ -90,7 +114,15 @@ async function handleStripeEvent(event: Stripe.Event) {
       break;
     }
 
-    case 'invoice.payment_succeeded': {
+    // Stripe fires BOTH of these for the exact same successful invoice
+    // (invoice.paid is the modern/recommended one; invoice.payment_succeeded
+    // is the older event still sent alongside it), and may redeliver either
+    // one on retry — the idempotency guard just below (keyed on
+    // last_processed_invoice_id) makes it safe to react to both without
+    // double-sending confirmation emails/audit-log entries for the same
+    // charge.
+    case 'invoice.payment_succeeded':
+    case 'invoice.paid': {
       const invoice = event.data.object as Stripe.Invoice;
       const customerId = typeof invoice.customer === 'string' ? invoice.customer : invoice.customer?.id;
       const subIdStr = stripeInvoiceSubscriptionId(invoice);
@@ -100,7 +132,7 @@ async function handleStripeEvent(event: Stripe.Event) {
         .where(eq(schema.subscriptions.provider_subscription_id, subIdStr)).limit(1);
       const sub = subRows[0];
       if (!sub || sub.provider !== 'stripe') {
-        console.log(`[StripeWebhook] Ignoring invoice.payment_succeeded for untracked subscription ${subIdStr}`);
+        console.log(`[StripeWebhook] Ignoring ${event.type} for untracked subscription ${subIdStr}`);
         break;
       }
 
@@ -114,157 +146,242 @@ async function handleStripeEvent(event: Stripe.Event) {
       const user = userRows[0];
       if (!user) break;
       if (user.stripe_customer_id && user.stripe_customer_id !== customerId) {
-        console.warn(`[StripeWebhook] Ignoring invoice.payment_succeeded for subscription ${subIdStr} due to customer mismatch.`);
+        console.warn(`[StripeWebhook] Ignoring ${event.type} for subscription ${subIdStr} due to customer mismatch.`);
         break;
       }
 
-      // Stripe's `billing_reason` distinguishes a brand-new subscription's
-      // very first invoice ('subscription_create') from an ordinary
-      // recurring renewal ('subscription_cycle') — mirrors the same check
-      // already used in the invoice.payment_failed case below. USUALLY the
-      // initial invoice for every subscription created by this codebase
-      // (group launch first charge, or switchPlan's upgrade
-      // recreate-subscription) is already paid off-session SYNCHRONOUSLY by
-      // StripeProvider.createSubscription() before it ever returns (see
-      // there), in which case subscriptionService.createSubscription()/
-      // switchPlan() already updated billing_status/subscription_status and
-      // sent the member their "subscription created"/"plan changed"
-      // email/audit-log entry the moment that synchronous call resolved —
-      // this webhook event for that same invoice then arrives strictly
-      // AFTER the outcome is already known and communicated, so re-sending
-      // a second confirmation email or logging a second
-      // BILLING_HISTORY_ACTIONS entry (double-counting the same charge in
-      // admin revenue/Billing History) must be avoided.
-      //
-      // However, `default_incomplete` subscriptions whose synchronous
-      // invoices.pay() attempt did NOT resolve to active/trialing (SCA/3DS
-      // required, or the off-session attempt was otherwise deferred) are
-      // left `past_due` locally with no confirmation sent — Stripe only
-      // confirms the charge LATER, asynchronously, via this very webhook.
-      // `wasAlreadyActiveBeforeThisWebhook` (captured from `sub` as loaded
-      // above, i.e. BEFORE the updates below) distinguishes that case: if
-      // the subscription wasn't already active before this event arrived,
-      // this webhook is the FIRST confirmation the member ever gets, so it
-      // must send the email/notification/billing-history entry itself,
-      // regardless of billing_reason.
-      const isInitialInvoiceCharge = invoice.billing_reason === 'subscription_create';
-      const wasAlreadyActiveBeforeThisWebhook = sub.billing_status === 'active';
+      // invoice.paid and invoice.payment_succeeded both fire for the same
+      // successful charge, and either can be redelivered by Stripe on
+      // retry — a plain "already processed?" read-then-write check has a
+      // race window where two concurrent deliveries could both pass the
+      // check before either commits its write. This is closed in two
+      // steps:
+      //  1. If THIS exact invoice was already fully processed (by
+      //     whichever event/delivery got there first), there's nothing
+      //     left to do — skip immediately.
+      //  2. Otherwise, claim the subscription with an OPTIMISTIC-CONCURRENCY
+      //     conditional UPDATE keyed on the value of
+      //     last_processed_invoice_id as it was when `sub` was read above
+      //     (not on invoiceId) — so if a DIFFERENT invoice for this same
+      //     subscription is concurrently being processed by another
+      //     delivery, only the one whose WHERE clause still matches at the
+      //     instant it runs wins the claim (affectedRows > 0); the loser
+      //     sees affectedRows === 0 and backs off, guaranteeing only one
+      //     invoice is ever processed for a subscription at a time. Mirrors
+      //     the existing atomic-claim pattern in
+      //     rotationService.advanceIfCycleComplete/paymentEligibilityService.
+      const invoiceId = invoice.id;
+      const previouslyProcessedInvoiceId = sub.last_processed_invoice_id ?? null;
+      if (invoiceId && previouslyProcessedInvoiceId === invoiceId) {
+        console.log(`[StripeWebhook] Ignoring ${event.type} — invoice ${invoiceId} already processed for subscription ${subIdStr}.`);
+        break;
+      }
 
-      await db.update(schema.users)
-        .set({ subscription_status: 'active' })
-        .where(eq(schema.users.id, sub.user_id));
-      await db.update(schema.subscriptions)
-        .set({ billing_status: 'active' })
-        .where(eq(schema.subscriptions.id, sub.id));
+      let claimedThisInvoice = true;
+      if (invoiceId) {
+        const claimResult = await db.update(schema.subscriptions)
+          .set({ last_processed_invoice_id: invoiceId })
+          .where(and(
+            eq(schema.subscriptions.id, sub.id),
+            previouslyProcessedInvoiceId === null
+              ? isNull(schema.subscriptions.last_processed_invoice_id)
+              : eq(schema.subscriptions.last_processed_invoice_id, previouslyProcessedInvoiceId),
+          ));
+        claimedThisInvoice = extractAffectedRows(claimResult) > 0;
+      }
+      if (!claimedThisInvoice) {
+        console.log(`[StripeWebhook] Ignoring ${event.type} — invoice ${invoiceId} — subscription ${subIdStr} was concurrently claimed for a different update.`);
+        break;
+      }
 
-      // An upgrade's first invoice that needed 3D-Secure/extra confirmation
-      // (or was otherwise not yet confirmed) deliberately leaves
-      // users.subscription_tier unchanged until billing is genuinely
-      // active — see subscriptionService.switchPlan's upgrade branch.
-      // subscriptions.plan, however, already reflects the new tier (it's
-      // set immediately, tied to the specific provider subscription object
-      // just created for the upgrade). Now that Stripe confirms this
-      // invoice was actually paid, apply it. Guarded on `!sub.pending_tier`
-      // so this never fires for/collides with the separate
-      // downgrade-at-renewal case handled just below.
-      if (!sub.pending_tier) {
-        const confirmedTier = tierFromPlanCode(sub.plan);
-        if (confirmedTier && confirmedTier !== user.subscription_tier) {
-          await db.update(schema.users).set({ subscription_tier: confirmedTier }).where(eq(schema.users.id, sub.user_id));
-          await createAuditLog({ userId: sub.user_id, action: 'SUBSCRIPTION_TIER_SWITCHED', entity: 'subscriptions', entityId: sub.id, metadata: { from: user.subscription_tier, to: confirmedTier, confirmedAfter3ds: true } });
+      // Everything below this point is the actual "processing" of the
+      // claimed invoice (tier switches, audit logs, emails, notifications).
+      // The claim above only proves NO OTHER concurrent delivery is also
+      // processing this invoice right now — it does not by itself mean
+      // processing will succeed. If any of the following throws (a
+      // transient DB error, etc.), the claim must be rolled back so that
+      // Stripe's automatic retry of this same event can actually finish
+      // the job, instead of the retry seeing `claimedThisInvoice` already
+      // set and silently skipping a charge that was never fully
+      // communicated to the member.
+      try {
+        // Stripe's `billing_reason` distinguishes a brand-new subscription's
+        // very first invoice ('subscription_create') from an ordinary
+        // recurring renewal ('subscription_cycle') — mirrors the same check
+        // already used in the invoice.payment_failed case below. USUALLY the
+        // initial invoice for every subscription created by this codebase
+        // (group launch first charge, or switchPlan's upgrade
+        // recreate-subscription) is already paid off-session SYNCHRONOUSLY by
+        // StripeProvider.createSubscription() before it ever returns (see
+        // there), in which case subscriptionService.createSubscription()/
+        // switchPlan() already updated billing_status/subscription_status and
+        // sent the member their "subscription created"/"plan changed"
+        // email/audit-log entry the moment that synchronous call resolved —
+        // this webhook event for that same invoice then arrives strictly
+        // AFTER the outcome is already known and communicated, so re-sending
+        // a second confirmation email or logging a second
+        // BILLING_HISTORY_ACTIONS entry (double-counting the same charge in
+        // admin revenue/Billing History) must be avoided.
+        //
+        // However, `default_incomplete` subscriptions whose synchronous
+        // invoices.pay() attempt did NOT resolve to active/trialing (SCA/3DS
+        // required, or the off-session attempt was otherwise deferred) are
+        // left `past_due` locally with no confirmation sent — Stripe only
+        // confirms the charge LATER, asynchronously, via this very webhook.
+        // `wasAlreadyActiveBeforeThisWebhook` (captured from `sub` as loaded
+        // above, i.e. BEFORE the updates below) distinguishes that case: if
+        // the subscription wasn't already active before this event arrived,
+        // this webhook is the FIRST confirmation the member ever gets, so it
+        // must send the email/notification/billing-history entry itself,
+        // regardless of billing_reason.
+        const isInitialInvoiceCharge = invoice.billing_reason === 'subscription_create';
+        const wasAlreadyActiveBeforeThisWebhook = sub.billing_status === 'active';
+        const nextRenewalDate = nextRenewalDateFromInvoice(invoice);
+
+        await db.update(schema.users)
+          .set({ subscription_status: 'active' })
+          .where(eq(schema.users.id, sub.user_id));
+        await db.update(schema.subscriptions)
+          .set({ billing_status: 'active', ...(nextRenewalDate ? { renewal_date: nextRenewalDate } : {}) })
+          .where(eq(schema.subscriptions.id, sub.id));
+
+        // An upgrade's first invoice that needed 3D-Secure/extra confirmation
+        // (or was otherwise not yet confirmed) deliberately leaves
+        // users.subscription_tier unchanged until billing is genuinely
+        // active — see subscriptionService.switchPlan's upgrade branch.
+        // subscriptions.plan, however, already reflects the new tier (it's
+        // set immediately, tied to the specific provider subscription object
+        // just created for the upgrade). Now that Stripe confirms this
+        // invoice was actually paid, apply it. Guarded on `!sub.pending_tier`
+        // so this never fires for/collides with the separate
+        // downgrade-at-renewal case handled just below.
+        if (!sub.pending_tier) {
+          const confirmedTier = tierFromPlanCode(sub.plan);
+          if (confirmedTier && confirmedTier !== user.subscription_tier) {
+            await db.update(schema.users).set({ subscription_tier: confirmedTier }).where(eq(schema.users.id, sub.user_id));
+            await createAuditLog({ userId: sub.user_id, action: 'SUBSCRIPTION_TIER_SWITCHED', entity: 'subscriptions', entityId: sub.id, metadata: { from: user.subscription_tier, to: confirmedTier, confirmedAfter3ds: true } });
+          }
         }
-      }
 
-      // A mid-cycle downgrade request keeps the member on their current
-      // tier's limits until this renewal — apply it now that the renewal
-      // invoice has actually been paid. See subscriptionService's
-      // switchPlan for where pending_tier is set.
-      if (sub.pending_tier && isSubscriptionTierKey(sub.pending_tier) && sub.pending_tier !== user.subscription_tier) {
-        const previousTier = user.subscription_tier;
-        await db.update(schema.users).set({ subscription_tier: sub.pending_tier }).where(eq(schema.users.id, sub.user_id));
-        await db.update(schema.subscriptions).set({ plan: planCode(user.country, sub.pending_tier), pending_tier: null }).where(eq(schema.subscriptions.id, sub.id));
-        await createAuditLog({ userId: sub.user_id, action: 'SUBSCRIPTION_TIER_SWITCHED', entity: 'subscriptions', entityId: sub.id, metadata: { from: previousTier, to: sub.pending_tier, appliedAtRenewal: true } });
-      }
+        // A mid-cycle downgrade request keeps the member on their current
+        // tier's limits until this renewal — apply it now that the renewal
+        // invoice has actually been paid. See subscriptionService's
+        // switchPlan for where pending_tier is set.
+        if (sub.pending_tier && isSubscriptionTierKey(sub.pending_tier) && sub.pending_tier !== user.subscription_tier) {
+          const previousTier = user.subscription_tier;
+          await db.update(schema.users).set({ subscription_tier: sub.pending_tier }).where(eq(schema.users.id, sub.user_id));
+          await db.update(schema.subscriptions).set({ plan: planCode(user.country, sub.pending_tier), pending_tier: null }).where(eq(schema.subscriptions.id, sub.id));
+          await createAuditLog({ userId: sub.user_id, action: 'SUBSCRIPTION_TIER_SWITCHED', entity: 'subscriptions', entityId: sub.id, metadata: { from: previousTier, to: sub.pending_tier, appliedAtRenewal: true } });
+        }
 
-      if (isInitialInvoiceCharge) {
-        // Already confirmed/communicated synchronously by
-        // subscriptionService.createSubscription() at creation time —
-        // nothing left to do here.
-        if (wasAlreadyActiveBeforeThisWebhook) break;
+        if (isInitialInvoiceCharge) {
+          // Already confirmed/communicated synchronously by
+          // subscriptionService.createSubscription() at creation time —
+          // nothing left to do here.
+          if (wasAlreadyActiveBeforeThisWebhook) break;
 
-        // Wasn't active before this event arrived, so THIS webhook is the
-        // first time Stripe has confirmed the charge — send the same
-        // "subscription created" confirmation createSubscription() would
-        // have sent had the off-session charge resolved synchronously, and
-        // log it under STRIPE_SUBSCRIPTION_FIRST_CHARGE (in
-        // BILLING_HISTORY_ACTIONS) so it shows up in the member's Billing
-        // History exactly like a synchronous first charge would have.
+          // Wasn't active before this event arrived, so THIS webhook is the
+          // first time Stripe has confirmed the charge — send the same
+          // "subscription created" confirmation createSubscription() would
+          // have sent had the off-session charge resolved synchronously, and
+          // log it under STRIPE_SUBSCRIPTION_FIRST_CHARGE (in
+          // BILLING_HISTORY_ACTIONS) so it shows up in the member's Billing
+          // History exactly like a synchronous first charge would have.
+          await createAuditLog({
+            userId: sub.user_id, action: 'STRIPE_SUBSCRIPTION_FIRST_CHARGE', entity: 'subscriptions',
+            metadata: {
+              customerId, invoiceId: invoice.id,
+              tier: tierFromPlanCode(sub.plan),
+              amount_display: formatInvoiceAmount(invoice.amount_paid, invoice.currency),
+              confirmedAsynchronouslyViaWebhook: true,
+            },
+          });
+          if (isSubscriptionTierKey(user.subscription_tier)) {
+            // Prefer the freshly-derived `nextRenewalDate` (this invoice's
+            // period end, just persisted above) over `sub`'s pre-webhook
+            // value, which — for a subscription confirmed only
+            // asynchronously here — can still be stale/unset.
+            const billingDateForEmail = nextRenewalDate ?? (sub.renewal_date ? new Date(sub.renewal_date) : null);
+            try {
+              await sendSubscriptionCreatedEmail(
+                user.email,
+                SUBSCRIPTION_TIERS[user.subscription_tier].name,
+                formatInvoiceAmount(invoice.amount_paid, invoice.currency) || formatTierPrice(user.subscription_tier, user.country),
+                billingDateForEmail ? billingDateForEmail.toLocaleDateString('en-GB') : 'your next billing date',
+              );
+            } catch (emailError) {
+              console.error(`[StripeWebhook] Failed to send first-charge confirmation email to ${user.email} for subscription ${sub.id}:`, emailError);
+            }
+          }
+          await notificationService.create({
+            userId: sub.user_id,
+            type: 'subscription_payment_succeeded',
+            title: 'Payment successful — your subscription is active',
+            message: 'Your card was charged successfully and your PadiHub subscription is now active.',
+          });
+          break;
+        }
+
         await createAuditLog({
-          userId: sub.user_id, action: 'STRIPE_SUBSCRIPTION_FIRST_CHARGE', entity: 'subscriptions',
+          userId: sub?.user_id, action: 'STRIPE_INVOICE_PAID', entity: 'subscriptions',
           metadata: {
             customerId, invoiceId: invoice.id,
-            tier: tierFromPlanCode(sub.plan),
+            tier: tierFromPlanCode(sub?.plan),
             amount_display: formatInvoiceAmount(invoice.amount_paid, invoice.currency),
-            confirmedAsynchronouslyViaWebhook: true,
           },
         });
+
+        // Item 8.d — every ordinary monthly renewal must be confirmed by
+        // email so the member can see it reflected in their Billing History
+        // (the first charge on a brand-new subscription is confirmed
+        // synchronously by createSubscription()/switchPlan() instead — see
+        // above). See webhookFlutterwaveController.ts /
+        // scheduledJobs.ts's monthlySubscriptionRenewalCharge for the NG
+        // equivalent.
         if (isSubscriptionTierKey(user.subscription_tier)) {
+          const tierName = SUBSCRIPTION_TIERS[user.subscription_tier].name;
+          const priceDisplay = formatInvoiceAmount(invoice.amount_paid, invoice.currency) || formatTierPrice(user.subscription_tier, user.country);
           try {
-            await sendSubscriptionCreatedEmail(
+            await sendSubscriptionRenewalChargedEmail(
               user.email,
-              SUBSCRIPTION_TIERS[user.subscription_tier].name,
-              formatInvoiceAmount(invoice.amount_paid, invoice.currency) || formatTierPrice(user.subscription_tier, user.country),
-              sub.renewal_date ? new Date(sub.renewal_date).toLocaleDateString('en-GB') : 'your next billing date',
+              tierName,
+              priceDisplay,
+              // `nextRenewalDate` (this invoice's period end, i.e. the
+              // UPCOMING renewal after this one) — not `sub.renewal_date`,
+              // which is the date THIS renewal was originally due and is
+              // now in the past.
+              nextRenewalDate ? nextRenewalDate.toLocaleDateString('en-GB') : 'next month',
             );
           } catch (emailError) {
-            console.error(`[StripeWebhook] Failed to send first-charge confirmation email to ${user.email} for subscription ${sub.id}:`, emailError);
+            console.error(`[StripeWebhook] Failed to send subscription charge confirmation email to ${user.email} for subscription ${sub.id}:`, emailError);
           }
         }
         await notificationService.create({
           userId: sub.user_id,
           type: 'subscription_payment_succeeded',
-          title: 'Payment successful — your subscription is active',
-          message: 'Your card was charged successfully and your PadiHub subscription is now active.',
+          title: 'Subscription renewed',
+          message: 'Your PadiHub subscription was renewed successfully.',
         });
-        break;
-      }
-
-      await createAuditLog({
-        userId: sub?.user_id, action: 'STRIPE_INVOICE_PAID', entity: 'subscriptions',
-        metadata: {
-          customerId, invoiceId: invoice.id,
-          tier: tierFromPlanCode(sub?.plan),
-          amount_display: formatInvoiceAmount(invoice.amount_paid, invoice.currency),
-        },
-      });
-
-      // Item 8.d — every ordinary monthly renewal must be confirmed by
-      // email so the member can see it reflected in their Billing History
-      // (the first charge on a brand-new subscription is confirmed
-      // synchronously by createSubscription()/switchPlan() instead — see
-      // above). See webhookFlutterwaveController.ts /
-      // scheduledJobs.ts's monthlySubscriptionRenewalCharge for the NG
-      // equivalent.
-      if (isSubscriptionTierKey(user.subscription_tier)) {
-        const tierName = SUBSCRIPTION_TIERS[user.subscription_tier].name;
-        const priceDisplay = formatInvoiceAmount(invoice.amount_paid, invoice.currency) || formatTierPrice(user.subscription_tier, user.country);
-        try {
-          await sendSubscriptionRenewalChargedEmail(
-            user.email,
-            tierName,
-            priceDisplay,
-            sub.renewal_date ? new Date(sub.renewal_date).toLocaleDateString('en-GB') : 'next month',
-          );
-        } catch (emailError) {
-          console.error(`[StripeWebhook] Failed to send subscription charge confirmation email to ${user.email} for subscription ${sub.id}:`, emailError);
+      } catch (processingError) {
+        // Roll back the claim so a Stripe retry of this same event can
+        // still complete the (failed) processing, instead of the retry
+        // seeing this invoice as already claimed and silently skipping it
+        // — leaving the member's billing status/confirmation/history
+        // permanently incomplete for a charge that genuinely succeeded.
+        // Conditional on the row STILL holding the invoiceId we ourselves
+        // claimed: if a later, unrelated successful webhook has already
+        // moved this subscription on to a newer invoice by the time this
+        // catch runs, that newer claim must not be clobbered.
+        if (invoiceId) {
+          await db.update(schema.subscriptions)
+            .set({ last_processed_invoice_id: previouslyProcessedInvoiceId })
+            .where(and(
+              eq(schema.subscriptions.id, sub.id),
+              eq(schema.subscriptions.last_processed_invoice_id, invoiceId),
+            ));
         }
+        throw processingError;
       }
-      await notificationService.create({
-        userId: sub.user_id,
-        type: 'subscription_payment_succeeded',
-        title: 'Subscription renewed',
-        message: 'Your PadiHub subscription was renewed successfully.',
-      });
       break;
     }
 

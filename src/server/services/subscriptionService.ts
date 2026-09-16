@@ -6,7 +6,7 @@
  * There is no free trial and no annual billing option.
  */
 import { v4 as uuidv4 } from 'uuid';
-import { eq, and, inArray, isNull, desc } from 'drizzle-orm';
+import { eq, and, or, inArray, isNull, lte, desc } from 'drizzle-orm';
 import axios from 'axios';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
@@ -17,8 +17,10 @@ import { PaymentProviderConfigError } from '../integrations/payments/PaymentProv
 import { groupService } from './groupService.js';
 import { membershipService } from './membershipService.js';
 import { notificationService } from './notificationService.js';
+import { monitoringService } from './monitoringService.js';
 import {
   SUBSCRIPTION_TIERS,
+  SUBSCRIPTION_ACTIVATION_CLAIM_TTL_MS,
   isSubscriptionTierKey,
   getTierMonthlyPrice,
   formatTierPrice,
@@ -95,6 +97,16 @@ function shouldSendConfigErrorAlertEmail(): boolean {
   if (Date.now() - lastConfigErrorAlertSentAt < CONFIG_ERROR_ALERT_COOLDOWN_MS) return false;
   lastConfigErrorAlertSentAt = Date.now();
   return true;
+}
+
+// Same MySQL-driver result-shape quirk handled identically in
+// rotationService.advanceIfCycleComplete, paymentEligibilityService and
+// webhookStripeController's atomic-claim UPDATEs — drizzle's mysql2 driver
+// sometimes wraps the OkPacket in a 1-element array, sometimes not.
+function extractAffectedRows(result: unknown): number {
+  return (result as { affectedRows?: number }[])[0]?.affectedRows
+    ?? (result as { affectedRows?: number }).affectedRows
+    ?? 0;
 }
 
 type PlanSelectionResult = { tier: SubscriptionTierKey; plan: string; monthly_amount: number };
@@ -251,7 +263,7 @@ async function chargeFirstFlutterwaveSubscription(
     // confirmFlutterwaveSubscriptionCharge below to finalize
     // billing_status/emails/audit-log once Flutterwave reports the
     // definitive outcome). billing_status stays 'past_due' (as already
-    // inserted above) so weeklySubscriptionHealthCheck still nags the
+    // inserted above) so dailySubscriptionPastDueRecovery still nags the
     // member if the webhook confirmation never arrives.
     await notificationService.create({
       userId, type: 'subscription_payment_processing', title: 'Payment is being processed',
@@ -561,7 +573,7 @@ export const subscriptionService = {
   },
 
   /**
-   * Retroactive remediation, called from weeklySubscriptionHealthCheck's
+   * Retroactive remediation, called from dailySubscriptionPastDueRecovery's
    * self-heal (scheduledJobs.ts): re-attempts off-session collection of an
    * EXISTING Stripe subscription's still-open, never-actually-attempted
    * first invoice (see StripeProvider.retryIncompleteSubscriptionCharge/
@@ -600,14 +612,37 @@ export const subscriptionService = {
     try {
       result = await getStripeProvider().retryIncompleteSubscriptionCharge(providerSubscriptionId);
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       console.error('[SubscriptionService] Retry of existing incomplete Stripe subscription failed:', {
-        providerSubscriptionId, userId, error: err instanceof Error ? err.message : err,
+        providerSubscriptionId, userId, error: message,
+      });
+      // The team must be able to see WHY a subscription is still stuck
+      // without digging through raw server logs — previously this was
+      // console.error-only and invisible to anyone but a developer with
+      // direct server access. Visible via the admin-gated
+      // /api/system/errors endpoint (monitoringService.getRecentErrors).
+      await monitoringService.logError({
+        type: 'payment_error',
+        endpoint: 'subscriptionService.retryStripeIncompleteSubscriptionCharge',
+        message: `Retry of incomplete Stripe subscription ${providerSubscriptionId} for user ${userId} (${user.email}) failed: ${message}`,
       });
       return false;
     }
 
     const billingIsActive = result.status === 'active' || result.status === 'trialing';
-    if (!billingIsActive) return false;
+    if (!billingIsActive) {
+      // Stripe was reached successfully, but the invoice still didn't clear
+      // (e.g. genuinely declined, or still needs interactive 3D-Secure) —
+      // same visibility requirement as the catch block above: record the
+      // actual provider status so the team knows this isn't a silent gap,
+      // it's a real, still-unresolved payment outcome.
+      await monitoringService.logError({
+        type: 'payment_error',
+        endpoint: 'subscriptionService.retryStripeIncompleteSubscriptionCharge',
+        message: `Retry of incomplete Stripe subscription ${providerSubscriptionId} for user ${userId} (${user.email}) did not activate — provider status: "${result.status}".`,
+      });
+      return false;
+    }
 
     await db.update(schema.subscriptions)
       .set({ billing_status: 'active', renewal_date: result.renewalDate })
@@ -788,6 +823,18 @@ export const subscriptionService = {
         type: 'subscription_payment_failed',
         title: 'Payment could not be completed',
         message: 'We could not confirm payment for your subscription. Please check your card details or complete any additional verification your bank requires.',
+      });
+      // Previously this outcome was only ever visible in raw server
+      // console output — nobody without direct server access (including the
+      // team) could see why a specific member's subscription got stuck.
+      // Recorded here, visible via the admin-gated /api/system/errors
+      // endpoint, every time (not cooldown-gated like the member-facing
+      // email below — this is the team's diagnostic trail, not a
+      // customer notification).
+      await monitoringService.logError({
+        type: 'payment_error',
+        endpoint: 'subscriptionService.createSubscription',
+        message: `Subscription charge for user ${userId} (${user.email}, ${country}) did not activate — provider "${country === 'NG' ? 'flutterwave' : 'stripe'}" status: "${result.status}".`,
       });
       // This branch is reached again on every retry of a persistently
       // declined/unconfirmed card, so only actually email once per hour.
@@ -1147,35 +1194,78 @@ export const subscriptionService = {
     // — but never attempt to bill a member with no tier selected.
     if (!isSubscriptionTierKey(user.subscription_tier)) return;
 
-    if (user.country === 'NG') {
-      await chargeFirstFlutterwaveSubscription(userId, user, user.subscription_tier, activeGroupCount);
+    // Atomic claim — this function can legitimately be triggered for the
+    // SAME user by two different, genuinely concurrent events (e.g. the
+    // intraday safety-net sweep firing at the same moment as an inline
+    // join/group-activation trigger, or a member being admitted to two
+    // different groups within moments of each other). Both callers would
+    // otherwise see `existingSub` as empty above and BOTH go on to charge
+    // the member's card — a real double-charge, not just a duplicate
+    // confirmation email. The conditional UPDATE below ensures only one
+    // caller ever wins the right to actually attempt the first charge;
+    // the loser (affectedRows === 0) backs off immediately. Mirrors the
+    // same atomic-claim pattern already used in
+    // rotationService.advanceIfCycleComplete/paymentEligibilityService/
+    // webhookStripeController.
+    const claimStaleBefore = new Date(Date.now() - SUBSCRIPTION_ACTIVATION_CLAIM_TTL_MS);
+    const claimResult = await db.update(schema.users)
+      .set({ subscription_activation_claimed_at: new Date() })
+      .where(and(
+        eq(schema.users.id, userId),
+        or(isNull(schema.users.subscription_activation_claimed_at), lte(schema.users.subscription_activation_claimed_at, claimStaleBefore)),
+      ));
+    if (extractAffectedRows(claimResult) === 0) {
+      console.log(`[SubscriptionService] Skipping first-charge attempt for user ${userId} — another attempt is already in flight.`);
       return;
     }
 
     try {
-      await this.createSubscription(userId, user.country, user.subscription_tier);
-    } catch (err) {
-      // A missing Stripe secret key or Price ID env var
-      // (PaymentProviderConfigError, surfaced here as AppError code
-      // SUBSCRIPTION_PROVIDER_CONFIG_ERROR — see createSubscription()
-      // above) means no request was ever sent to Stripe at all — this is a
-      // PadiHub-side setup problem, not a genuine card decline. The
-      // member's card is not at fault, so they must never be told their
-      // payment failed; only the team should be alerted, loudly, to go fix
-      // the missing configuration.
-      if (err instanceof AppError && err.code === 'SUBSCRIPTION_PROVIDER_CONFIG_ERROR') {
-        console.error(`[PadiHub] CONFIGURATION ERROR — subscription activation blocked for user ${userId} (${user.email}): ${err.message}`);
-        if (shouldSendConfigErrorAlertEmail()) {
-          await sendPaymentProviderConfigErrorAlertEmail(userId, err.message);
-        }
+      if (user.country === 'NG') {
+        await chargeFirstFlutterwaveSubscription(userId, user, user.subscription_tier, activeGroupCount);
         return;
       }
-      // Any other provider/network error here is already turned into a
-      // "payment could not be completed" notification+email by
-      // createSubscription() itself before it throws — just log for
-      // visibility, never let it bubble up and fail the group-launch/join
-      // request that triggered this reconciliation.
-      console.error('[SubscriptionService] Could not create Stripe subscription on group launch:', err instanceof Error ? err.message : err);
+
+      try {
+        await this.createSubscription(userId, user.country, user.subscription_tier);
+      } catch (err) {
+        // A missing Stripe secret key or Price ID env var
+        // (PaymentProviderConfigError, surfaced here as AppError code
+        // SUBSCRIPTION_PROVIDER_CONFIG_ERROR — see createSubscription()
+        // above) means no request was ever sent to Stripe at all — this is a
+        // PadiHub-side setup problem, not a genuine card decline. The
+        // member's card is not at fault, so they must never be told their
+        // payment failed; only the team should be alerted, loudly, to go fix
+        // the missing configuration.
+        if (err instanceof AppError && err.code === 'SUBSCRIPTION_PROVIDER_CONFIG_ERROR') {
+          console.error(`[PadiHub] CONFIGURATION ERROR — subscription activation blocked for user ${userId} (${user.email}): ${err.message}`);
+          if (shouldSendConfigErrorAlertEmail()) {
+            await sendPaymentProviderConfigErrorAlertEmail(userId, err.message);
+          }
+          return;
+        }
+        // A genuine provider/network error reaching Stripe itself (as opposed
+        // to Stripe being reached but declining the charge, which
+        // createSubscription() already handles and notifies the member about
+        // without throwing) — previously only visible in raw server console
+        // output. Recorded here too so the team doesn't have to guess why a
+        // specific member's "Pending Charge" never resolved.
+        const message = err instanceof Error ? err.message : String(err);
+        console.error('[SubscriptionService] Could not create Stripe subscription on group launch:', message);
+        await monitoringService.logError({
+          type: 'payment_error',
+          endpoint: 'subscriptionService.reconcileBillingForActiveGroupMembership',
+          message: `Could not create/charge Stripe subscription for user ${userId} (${user.email}) on group launch: ${message}`,
+        });
+      }
+    } finally {
+      // Always release the claim once this attempt is fully resolved
+      // (success or failure) — a permanently-held claim would otherwise
+      // block every future safety-net retry for this member forever. The
+      // staleness check above is only a fallback for a claim left behind by
+      // a crashed/killed process, not the primary release mechanism.
+      await db.update(schema.users)
+        .set({ subscription_activation_claimed_at: null })
+        .where(eq(schema.users.id, userId));
     }
   },
 

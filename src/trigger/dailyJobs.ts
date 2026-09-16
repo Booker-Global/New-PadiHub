@@ -17,6 +17,10 @@
  *   07:00  PRIMARY charge trigger: trust-score status flip (scheduled → due)
  *   07:05  PRIMARY charge trigger: auto-charge newly-due contributions
  *   07:10  failed-payment notifications
+ *   07:12  past_due subscription self-heal + "overdue" notification (moved from
+ *          weekly to daily — see weeklyJobs.ts's note on
+ *          weeklySubscriptionHealthCheck; a subscription stuck past_due should
+ *          not have to wait up to 6 days for its next automatic retry)
  *   07:15  72-hour contribution-default retry (Section 6)
  *   07:20  stuck (draft/suspended) group lifecycle expiry (Section 1)
  *   07:22  apply pending payout day/frequency changes whose effective_date has
@@ -24,7 +28,14 @@
  *          day (weekly) picks a future start date on the "Edit group" screen;
  *          this run flips the pending change live and reschedules the current
  *          cycle's still-scheduled contributions/payout to the new date.
- *   07:25  Section D.2 billing/active-group-membership reconciliation safety net
+ *   07:25, 11:25, 15:25, 19:25, 23:25
+ *          Section D.2 billing/active-group-membership reconciliation safety net — runs 5x/day
+ *          (not just once) so a member stuck without a subscriptions row (e.g. a transient
+ *          failure, or one that lost a concurrent claim to another in-flight attempt — see
+ *          subscriptionService.reconcileBillingForActiveGroupMembership's atomic claim) is
+ *          picked up within hours instead of waiting up to 24h for the next run. Safe to run
+ *          this often only because that same claim makes every run mutually exclusive per user,
+ *          so more frequent runs can never cause a duplicate charge.
  *   07:30  governance vote expiry (Section 4)
  *   07:35  72-hour subscription first-charge-on-join retry/removal (Section 7)
  *   07:40  Pending Charge → no active group joined: 7-day reminders / 30-day expiry (Section 1)
@@ -63,6 +74,7 @@ import {
   dailyAutoChargeDueContributions,
   dailyChargeCatchUp,
   dailyFailedPaymentCheck,
+  dailySubscriptionPastDueRecovery,
   dailyNotificationCleanup,
   dailyContributionDefaultRetry,
   dailyGroupLifecycleExpiry,
@@ -156,6 +168,15 @@ export const dailyFailedPaymentCheckTask = schedules.task({
   },
 });
 
+export const dailySubscriptionPastDueRecoveryTask = schedules.task({
+  id: 'daily-subscription-past-due-recovery',
+  cron: '12 7 * * *',
+  run: async () => {
+    await dailySubscriptionPastDueRecovery();
+    return { ok: true, task: 'daily-subscription-past-due-recovery' };
+  },
+});
+
 export const dailyNotificationCleanupTask = schedules.task({
   id: 'daily-notification-cleanup',
   cron: '0 3 * * *',
@@ -194,7 +215,19 @@ export const dailyApplyPendingPayoutFrequencyChangesTask = schedules.task({
 
 export const dailyBillingActiveGroupReconciliationTask = schedules.task({
   id: 'daily-billing-active-group-reconciliation',
-  cron: '25 7 * * *',
+  // Runs 5x/day (not just once) — this is the safety net that catches an
+  // active group member who somehow never got a subscriptions row created
+  // for them (e.g. a group launch/join event whose inline
+  // reconcileMemberBilling call failed transiently, was itself skipped, or
+  // lost a concurrent claim to another in-flight attempt — see
+  // subscriptionService.reconcileBillingForActiveGroupMembership's atomic
+  // claim). Running it several times a day instead of waiting a full 24h
+  // for the next attempt is safe purely because that claim makes every
+  // run — and every OTHER trigger of the same reconciliation — mutually
+  // exclusive per user: only one caller ever wins the right to actually
+  // charge, everyone else backs off immediately, so more frequent runs can
+  // never cause a duplicate charge, only find the gap sooner.
+  cron: '25 7,11,15,19,23 * * *',
   run: async () => {
     await dailyBillingActiveGroupReconciliation();
     return { ok: true, task: 'daily-billing-active-group-reconciliation' };

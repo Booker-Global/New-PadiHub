@@ -261,6 +261,17 @@ export const membershipService = {
       // Section D.2 — this member just became active in this group; if it's
       // their first active group, resume any deferred billing immediately.
       await groupService.reconcileMemberBilling([userId]);
+      // Section D.3 — this group may already be past launch, mid-cycle;
+      // make sure this member is actually on the current cycle's
+      // contribution schedule (see enrollMemberInCurrentCycleIfMissing's
+      // doc comment) instead of being silently skipped until next cycle.
+      // Best-effort — must never fail the join itself.
+      try {
+        const { contributionService } = await import('./contributionService.js');
+        await contributionService.enrollMemberInCurrentCycleIfMissing(groupId, userId);
+      } catch (error) {
+        console.error('[MembershipService] Failed to enroll member in current cycle:', { userId, groupId, error });
+      }
 
       return { success: true, status: 'active' as const, message: 'You have joined the group.' };
     }
@@ -442,6 +453,16 @@ export const membershipService = {
     // Section D.2 — this member just became active in this group; if it's
     // their first active group, resume any deferred billing immediately.
     await groupService.reconcileMemberBilling([membership.user_id]);
+    // Section D.3 — see enrollMemberInCurrentCycleIfMissing's doc comment:
+    // this covers both leader-approved join requests and vote-admission
+    // (voteService calls this same method). Best-effort — must never fail
+    // the approval itself.
+    try {
+      const { contributionService } = await import('./contributionService.js');
+      await contributionService.enrollMemberInCurrentCycleIfMissing(group.id, membership.user_id);
+    } catch (error) {
+      console.error('[MembershipService] Failed to enroll member in current cycle:', { userId: membership.user_id, groupId: group.id, error });
+    }
 
     return { success: true, rotation_order: nextRotationOrder };
   },
