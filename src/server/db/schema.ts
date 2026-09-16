@@ -31,6 +31,18 @@ export const users = mysqlTable('users', {
   // user picks a plan; group creation/joining requires this to be set — see
   // paymentEligibilityService.ts.
   subscription_tier:           mysqlEnum('subscription_tier', ['basic', 'premium']),
+  // Atomic claim guarding subscriptionService.reconcileBillingForActiveGroupMembership's
+  // "no subscriptions row yet — attempt the first charge" critical section.
+  // Concurrent triggers for the same user (e.g. the intraday safety-net
+  // sweep firing at the same moment as an inline join/activation trigger,
+  // or the user being admitted to two different groups at nearly the same
+  // instant) could otherwise both pass the "no existing subscription" check
+  // before either finishes creating one, charging the member's card twice.
+  // Stamped right before the provider is contacted, cleared in a `finally`
+  // once the attempt completes; SUBSCRIPTION_ACTIVATION_CLAIM_TTL_MS
+  // (constants.ts) lets a stale claim (crashed process) self-heal instead
+  // of permanently blocking future attempts.
+  subscription_activation_claimed_at: timestamp('subscription_activation_claimed_at'),
   stripe_customer_id:          varchar('stripe_customer_id', { length: 100 }),
   stripe_payment_method_id:    varchar('stripe_payment_method_id', { length: 100 }),
   stripe_connected_account_id: varchar('stripe_connected_account_id', { length: 100 }),

@@ -113,6 +113,16 @@ export const CONTRIBUTION_DEFAULT_GRACE_PERIOD_MS = 72 * 60 * 60 * 1000;
 export const GOVERNANCE_VOTE_DEADLINE_MS = 48 * 60 * 60 * 1000;
 
 /**
+ * subscriptionService.reconcileBillingForActiveGroupMembership's atomic
+ * claim (users.subscription_activation_claimed_at) is only ever held for
+ * the few seconds a first-charge attempt takes against Stripe/Flutterwave —
+ * this TTL exists purely so a claim left behind by a crashed/killed process
+ * (finally block never ran) self-heals instead of permanently blocking
+ * every future attempt to bill that member.
+ */
+export const SUBSCRIPTION_ACTIVATION_CLAIM_TTL_MS = 5 * 60 * 1000;
+
+/**
  * Daily contribution frequency is disabled in production — it exists only
  * to speed up manual/QA testing of rotation logic. Production groups may
  * only choose Weekly or Monthly. See groupService.create/update.

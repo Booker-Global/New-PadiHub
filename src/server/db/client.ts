@@ -139,6 +139,7 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
     { column: 'verified_address_city',        sqlType: 'VARCHAR(100) NULL' },
     { column: 'verified_address_postal_code', sqlType: 'VARCHAR(20) NULL' },
     { column: 'verified_address_state',       sqlType: 'VARCHAR(100) NULL' },
+    { column: 'subscription_activation_claimed_at', sqlType: 'TIMESTAMP NULL' },
   ],
   savings_groups: [
     { column: 'description',     sqlType: 'TEXT NULL' },

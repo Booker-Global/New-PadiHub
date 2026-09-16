@@ -6,7 +6,7 @@
  * There is no free trial and no annual billing option.
  */
 import { v4 as uuidv4 } from 'uuid';
-import { eq, and, inArray, isNull, desc } from 'drizzle-orm';
+import { eq, and, or, inArray, isNull, lte, desc } from 'drizzle-orm';
 import axios from 'axios';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
@@ -20,6 +20,7 @@ import { notificationService } from './notificationService.js';
 import { monitoringService } from './monitoringService.js';
 import {
   SUBSCRIPTION_TIERS,
+  SUBSCRIPTION_ACTIVATION_CLAIM_TTL_MS,
   isSubscriptionTierKey,
   getTierMonthlyPrice,
   formatTierPrice,
@@ -96,6 +97,16 @@ function shouldSendConfigErrorAlertEmail(): boolean {
   if (Date.now() - lastConfigErrorAlertSentAt < CONFIG_ERROR_ALERT_COOLDOWN_MS) return false;
   lastConfigErrorAlertSentAt = Date.now();
   return true;
+}
+
+// Same MySQL-driver result-shape quirk handled identically in
+// rotationService.advanceIfCycleComplete, paymentEligibilityService and
+// webhookStripeController's atomic-claim UPDATEs — drizzle's mysql2 driver
+// sometimes wraps the OkPacket in a 1-element array, sometimes not.
+function extractAffectedRows(result: unknown): number {
+  return (result as { affectedRows?: number }[])[0]?.affectedRows
+    ?? (result as { affectedRows?: number }).affectedRows
+    ?? 0;
 }
 
 type PlanSelectionResult = { tier: SubscriptionTierKey; plan: string; monthly_amount: number };
@@ -1183,42 +1194,78 @@ export const subscriptionService = {
     // — but never attempt to bill a member with no tier selected.
     if (!isSubscriptionTierKey(user.subscription_tier)) return;
 
-    if (user.country === 'NG') {
-      await chargeFirstFlutterwaveSubscription(userId, user, user.subscription_tier, activeGroupCount);
+    // Atomic claim — this function can legitimately be triggered for the
+    // SAME user by two different, genuinely concurrent events (e.g. the
+    // intraday safety-net sweep firing at the same moment as an inline
+    // join/group-activation trigger, or a member being admitted to two
+    // different groups within moments of each other). Both callers would
+    // otherwise see `existingSub` as empty above and BOTH go on to charge
+    // the member's card — a real double-charge, not just a duplicate
+    // confirmation email. The conditional UPDATE below ensures only one
+    // caller ever wins the right to actually attempt the first charge;
+    // the loser (affectedRows === 0) backs off immediately. Mirrors the
+    // same atomic-claim pattern already used in
+    // rotationService.advanceIfCycleComplete/paymentEligibilityService/
+    // webhookStripeController.
+    const claimStaleBefore = new Date(Date.now() - SUBSCRIPTION_ACTIVATION_CLAIM_TTL_MS);
+    const claimResult = await db.update(schema.users)
+      .set({ subscription_activation_claimed_at: new Date() })
+      .where(and(
+        eq(schema.users.id, userId),
+        or(isNull(schema.users.subscription_activation_claimed_at), lte(schema.users.subscription_activation_claimed_at, claimStaleBefore)),
+      ));
+    if (extractAffectedRows(claimResult) === 0) {
+      console.log(`[SubscriptionService] Skipping first-charge attempt for user ${userId} — another attempt is already in flight.`);
       return;
     }
 
     try {
-      await this.createSubscription(userId, user.country, user.subscription_tier);
-    } catch (err) {
-      // A missing Stripe secret key or Price ID env var
-      // (PaymentProviderConfigError, surfaced here as AppError code
-      // SUBSCRIPTION_PROVIDER_CONFIG_ERROR — see createSubscription()
-      // above) means no request was ever sent to Stripe at all — this is a
-      // PadiHub-side setup problem, not a genuine card decline. The
-      // member's card is not at fault, so they must never be told their
-      // payment failed; only the team should be alerted, loudly, to go fix
-      // the missing configuration.
-      if (err instanceof AppError && err.code === 'SUBSCRIPTION_PROVIDER_CONFIG_ERROR') {
-        console.error(`[PadiHub] CONFIGURATION ERROR — subscription activation blocked for user ${userId} (${user.email}): ${err.message}`);
-        if (shouldSendConfigErrorAlertEmail()) {
-          await sendPaymentProviderConfigErrorAlertEmail(userId, err.message);
-        }
+      if (user.country === 'NG') {
+        await chargeFirstFlutterwaveSubscription(userId, user, user.subscription_tier, activeGroupCount);
         return;
       }
-      // A genuine provider/network error reaching Stripe itself (as opposed
-      // to Stripe being reached but declining the charge, which
-      // createSubscription() already handles and notifies the member about
-      // without throwing) — previously only visible in raw server console
-      // output. Recorded here too so the team doesn't have to guess why a
-      // specific member's "Pending Charge" never resolved.
-      const message = err instanceof Error ? err.message : String(err);
-      console.error('[SubscriptionService] Could not create Stripe subscription on group launch:', message);
-      await monitoringService.logError({
-        type: 'payment_error',
-        endpoint: 'subscriptionService.reconcileBillingForActiveGroupMembership',
-        message: `Could not create/charge Stripe subscription for user ${userId} (${user.email}) on group launch: ${message}`,
-      });
+
+      try {
+        await this.createSubscription(userId, user.country, user.subscription_tier);
+      } catch (err) {
+        // A missing Stripe secret key or Price ID env var
+        // (PaymentProviderConfigError, surfaced here as AppError code
+        // SUBSCRIPTION_PROVIDER_CONFIG_ERROR — see createSubscription()
+        // above) means no request was ever sent to Stripe at all — this is a
+        // PadiHub-side setup problem, not a genuine card decline. The
+        // member's card is not at fault, so they must never be told their
+        // payment failed; only the team should be alerted, loudly, to go fix
+        // the missing configuration.
+        if (err instanceof AppError && err.code === 'SUBSCRIPTION_PROVIDER_CONFIG_ERROR') {
+          console.error(`[PadiHub] CONFIGURATION ERROR — subscription activation blocked for user ${userId} (${user.email}): ${err.message}`);
+          if (shouldSendConfigErrorAlertEmail()) {
+            await sendPaymentProviderConfigErrorAlertEmail(userId, err.message);
+          }
+          return;
+        }
+        // A genuine provider/network error reaching Stripe itself (as opposed
+        // to Stripe being reached but declining the charge, which
+        // createSubscription() already handles and notifies the member about
+        // without throwing) — previously only visible in raw server console
+        // output. Recorded here too so the team doesn't have to guess why a
+        // specific member's "Pending Charge" never resolved.
+        const message = err instanceof Error ? err.message : String(err);
+        console.error('[SubscriptionService] Could not create Stripe subscription on group launch:', message);
+        await monitoringService.logError({
+          type: 'payment_error',
+          endpoint: 'subscriptionService.reconcileBillingForActiveGroupMembership',
+          message: `Could not create/charge Stripe subscription for user ${userId} (${user.email}) on group launch: ${message}`,
+        });
+      }
+    } finally {
+      // Always release the claim once this attempt is fully resolved
+      // (success or failure) — a permanently-held claim would otherwise
+      // block every future safety-net retry for this member forever. The
+      // staleness check above is only a fallback for a claim left behind by
+      // a crashed/killed process, not the primary release mechanism.
+      await db.update(schema.users)
+        .set({ subscription_activation_claimed_at: null })
+        .where(eq(schema.users.id, userId));
     }
   },
 
