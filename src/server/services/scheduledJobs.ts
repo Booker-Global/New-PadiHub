@@ -889,10 +889,15 @@ export async function monthlyGenerateContributionSchedule(): Promise<void> {
         const scheduledMemberIds = new Set(existingForCycle.map(c => c.member_id));
         const missingMembers = activeMembers.filter(m => !scheduledMemberIds.has(m.user_id));
         if (missingMembers.length) {
-          await contributionService.generateCycleSchedule(
-            group.id, group.current_cycle, existingForCycle[0].due_date,
-            missingMembers.map(m => ({ user_id: m.user_id, amount_due: group.contribution_amount })),
-          );
+          // Delegates to the SAME method a live join/approval calls
+          // (contributionService.enrollMemberInCurrentCycleIfMissing) —
+          // single source of truth for "is this member missing from the
+          // current cycle, and if so enroll them", including its
+          // transaction/row-lock so this daily sweep can never race with a
+          // live join happening for the same member at the same moment.
+          for (const m of missingMembers) {
+            await contributionService.enrollMemberInCurrentCycleIfMissing(group.id, m.user_id);
+          }
           generated += missingMembers.length;
         }
         continue;

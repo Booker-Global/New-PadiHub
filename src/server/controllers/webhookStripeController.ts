@@ -5,7 +5,7 @@
  */
 import type { Request, Response, NextFunction } from 'express';
 import Stripe from 'stripe';
-import { eq } from 'drizzle-orm';
+import { eq, and, isNull, ne, or } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { getStripeProvider } from '../integrations/payments/PaymentProviderFactory.js';
@@ -38,6 +38,13 @@ function formatInvoiceAmount(amountMinorUnits: number | null | undefined, curren
 function stripeInvoiceSubscriptionId(invoice: Stripe.Invoice): string | null {
   const subId = (invoice as unknown as Record<string, unknown>).subscription;
   return typeof subId === 'string' ? subId : (subId as Stripe.Subscription | null)?.id ?? null;
+}
+
+/** mysql2's UPDATE result shape isn't typed by drizzle — same pattern used in rotationService/paymentEligibilityService for atomic claim-style updates. */
+function extractAffectedRows(result: unknown): number {
+  return (result as { affectedRows?: number }[])[0]?.affectedRows
+    ?? (result as { affectedRows?: number }).affectedRows
+    ?? 0;
 }
 
 export async function stripeWebhookHandler(req: Request, res: Response, next: NextFunction) {
@@ -128,10 +135,28 @@ async function handleStripeEvent(event: Stripe.Event) {
 
       // invoice.paid and invoice.payment_succeeded both fire for the same
       // successful charge, and either can be redelivered by Stripe on
-      // retry — if this exact invoice was already fully processed (by
-      // whichever event arrived first), there is nothing left to do.
-      if (invoice.id && sub.last_processed_invoice_id === invoice.id) {
-        console.log(`[StripeWebhook] Ignoring ${event.type} — invoice ${invoice.id} already processed for subscription ${subIdStr}.`);
+      // retry — a plain "already processed?" read-then-write check has a
+      // race window where two concurrent deliveries (e.g. both event types
+      // arriving moments apart) could both pass the check before either
+      // commits its write. The CONDITIONAL UPDATE below closes that
+      // window: only the delivery whose WHERE clause still matches at the
+      // instant it runs actually claims this invoice (affectedRows > 0);
+      // the loser sees affectedRows === 0 and skips straight to break,
+      // exactly like the existing atomic-claim pattern in
+      // rotationService.advanceIfCycleComplete/paymentEligibilityService.
+      const invoiceId = invoice.id;
+      let claimedThisInvoice = true;
+      if (invoiceId) {
+        const claimResult = await db.update(schema.subscriptions)
+          .set({ last_processed_invoice_id: invoiceId })
+          .where(and(
+            eq(schema.subscriptions.id, sub.id),
+            or(isNull(schema.subscriptions.last_processed_invoice_id), ne(schema.subscriptions.last_processed_invoice_id, invoiceId)),
+          ));
+        claimedThisInvoice = extractAffectedRows(claimResult) > 0;
+      }
+      if (!claimedThisInvoice) {
+        console.log(`[StripeWebhook] Ignoring ${event.type} — invoice ${invoiceId} already processed (or claimed concurrently) for subscription ${subIdStr}.`);
         break;
       }
 
@@ -171,7 +196,7 @@ async function handleStripeEvent(event: Stripe.Event) {
         .set({ subscription_status: 'active' })
         .where(eq(schema.users.id, sub.user_id));
       await db.update(schema.subscriptions)
-        .set({ billing_status: 'active', last_processed_invoice_id: invoice.id ?? sub.last_processed_invoice_id })
+        .set({ billing_status: 'active' })
         .where(eq(schema.subscriptions.id, sub.id));
 
       // An upgrade's first invoice that needed 3D-Secure/extra confirmation

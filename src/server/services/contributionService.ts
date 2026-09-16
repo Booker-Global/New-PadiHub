@@ -314,35 +314,50 @@ export const contributionService = {
    * once, at launch) and suspended groups (collection is deliberately
    * paused — see groupService.reevaluateAfterMembershipChange), and
    * idempotent if the member already has a row for the current cycle.
+   *
+   * Runs inside a transaction that row-locks the group (the same
+   * `SELECT ... FOR UPDATE` on savingsGroups used by
+   * membershipService's rotation-order assignment) so that this call and
+   * monthlyGenerateContributionSchedule's daily backfill loop — which can
+   * legitimately be evaluating the very same member at the very same
+   * moment a live join/approval fires this method — can never both see the
+   * row missing and both insert a duplicate contribution for the member.
    */
   async enrollMemberInCurrentCycleIfMissing(groupId: string, userId: string): Promise<void> {
-    const groupRows = await db.select({
-      status:               schema.savingsGroups.status,
-      current_cycle:        schema.savingsGroups.current_cycle,
-      contribution_amount:  schema.savingsGroups.contribution_amount,
-    }).from(schema.savingsGroups).where(eq(schema.savingsGroups.id, groupId)).limit(1);
-    if (!groupRows.length) return;
-    const group = groupRows[0];
-    if (group.status !== 'active') return;
+    await db.transaction(async (tx) => {
+      await tx.select({ id: schema.savingsGroups.id }).from(schema.savingsGroups)
+        .where(eq(schema.savingsGroups.id, groupId)).for('update');
 
-    const existingForCycle = await db.select({
-      member_id: schema.contributions.member_id,
-      due_date:  schema.contributions.due_date,
-    }).from(schema.contributions)
-      .where(and(eq(schema.contributions.group_id, groupId), eq(schema.contributions.cycle_number, group.current_cycle)));
+      const groupRows = await tx.select({
+        status:               schema.savingsGroups.status,
+        current_cycle:        schema.savingsGroups.current_cycle,
+        contribution_amount:  schema.savingsGroups.contribution_amount,
+      }).from(schema.savingsGroups).where(eq(schema.savingsGroups.id, groupId)).limit(1);
+      if (!groupRows.length) return;
+      const group = groupRows[0];
+      if (group.status !== 'active') return;
 
-    // No schedule generated for the current cycle at all yet — nothing to
-    // backfill; the normal generation path will create this member's row
-    // along with everyone else's the moment it runs.
-    if (!existingForCycle.length) return;
-    if (existingForCycle.some(c => c.member_id === userId)) return;
+      const existingForCycle = await tx.select({
+        member_id: schema.contributions.member_id,
+        due_date:  schema.contributions.due_date,
+      }).from(schema.contributions)
+        .where(and(eq(schema.contributions.group_id, groupId), eq(schema.contributions.cycle_number, group.current_cycle)));
 
-    await this.create({
-      group_id:     groupId,
-      member_id:    userId,
-      cycle_number: group.current_cycle,
-      amount_due:   group.contribution_amount,
-      due_date:     existingForCycle[0].due_date,
+      // No schedule generated for the current cycle at all yet — nothing to
+      // backfill; the normal generation path will create this member's row
+      // along with everyone else's the moment it runs.
+      if (!existingForCycle.length) return;
+      if (existingForCycle.some(c => c.member_id === userId)) return;
+
+      await tx.insert(schema.contributions).values({
+        id:             uuidv4(),
+        group_id:       groupId,
+        member_id:      userId,
+        cycle_number:   group.current_cycle,
+        amount_due:     group.contribution_amount,
+        due_date:       existingForCycle[0].due_date,
+        payment_status: 'scheduled',
+      });
     });
   },
 
