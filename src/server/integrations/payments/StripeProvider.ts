@@ -19,12 +19,31 @@ function getStripe(): Stripe {
  * `latest_invoice.payment_intent` — used by both createSubscription() and
  * retryIncompleteSubscriptionCharge() below. */
 type SubscriptionWithExpandedInvoice = Stripe.Subscription & {
-  current_period_end: number;
   latest_invoice?: (Stripe.Invoice & { payment_intent?: Stripe.PaymentIntent | string | null }) | string | null;
 };
 
+/**
+ * Since Stripe API version 2025-03-31.basil, `current_period_end` (and
+ * `current_period_start`) no longer exist on the top-level Subscription
+ * object — they moved to each subscription item
+ * (`items.data[].current_period_end`) to support mixed billing cycles
+ * within one subscription. Reading `subscription.current_period_end`
+ * (undefined, since STRIPE_SECRET_KEY here pins a newer apiVersion) used to
+ * silently produce `new Date(NaN)` ("Invalid Date"), which only surfaced
+ * later as a bare, unhelpful "Invalid time value" RangeError the first time
+ * something (e.g. drizzle serializing it for the `renewal_date` column, or
+ * `.toLocaleDateString()` in the confirmation email) touched that Date.
+ * PadiHub only ever creates single-item subscriptions (one Price per
+ * subscription — see createSubscription() below), so the first item's
+ * period always represents the whole subscription's billing cycle.
+ */
+function subscriptionCurrentPeriodEnd(subscription: Stripe.Subscription): number | undefined {
+  return subscription.items?.data?.[0]?.current_period_end;
+}
+
 function toSubscriptionResult(subscription: SubscriptionWithExpandedInvoice): SubscriptionResult {
-  const renewalDate = new Date(subscription.current_period_end * 1000);
+  const periodEnd = subscriptionCurrentPeriodEnd(subscription);
+  const renewalDate = typeof periodEnd === 'number' ? new Date(periodEnd * 1000) : undefined;
   const latestInvoice = subscription.latest_invoice && typeof subscription.latest_invoice !== 'string'
     ? subscription.latest_invoice
     : undefined;
@@ -358,17 +377,17 @@ export class StripeProvider implements IPaymentProvider {
    * already relied on by createSubscription/reconcileStaleStripeSubscriptionReference
    * purely for reporting purposes — see reportDuplicateActiveStripeSubscriptions.ts.
    */
-  async listSubscriptionsForCustomer(customerId: string): Promise<{ id: string; status: Stripe.Subscription.Status; currentPeriodEnd: number; created: number }[]> {
+  async listSubscriptionsForCustomer(customerId: string): Promise<{ id: string; status: Stripe.Subscription.Status; currentPeriodEnd: number | undefined; created: number }[]> {
     const stripe = getStripe();
     const subscriptions = await stripe.subscriptions.list({ customer: customerId, limit: 100 });
     return subscriptions.data
       .map(sub => ({
         id:              sub.id,
         status:          sub.status,
-        currentPeriodEnd: (sub as unknown as { current_period_end: number }).current_period_end,
+        currentPeriodEnd: subscriptionCurrentPeriodEnd(sub),
         created:          sub.created,
       }))
-      .sort((a, b) => b.currentPeriodEnd - a.currentPeriodEnd);
+      .sort((a, b) => (b.currentPeriodEnd ?? 0) - (a.currentPeriodEnd ?? 0));
   }
 
   async cancelSubscription(params: { subscriptionId: string }): Promise<{ cancelled: boolean }> {

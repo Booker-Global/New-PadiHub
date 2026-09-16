@@ -529,7 +529,13 @@ export const subscriptionService = {
     if (!genuinelyActive) return false;
 
     const wasStaleReference = storedProviderSubscriptionId !== genuinelyActive.id;
-    const renewalDate = new Date(genuinelyActive.currentPeriodEnd * 1000);
+    // `currentPeriodEnd` can be undefined for a subscription whose item-level
+    // billing period Stripe hasn't reported (see StripeProvider's
+    // subscriptionCurrentPeriodEnd) — fall back to a month out rather than
+    // writing an Invalid Date, which throws downstream when persisted/formatted.
+    const renewalDate = typeof genuinelyActive.currentPeriodEnd === 'number'
+      ? new Date(genuinelyActive.currentPeriodEnd * 1000)
+      : (() => { const d = new Date(); d.setMonth(d.getMonth() + 1); return d; })();
     await db.update(schema.subscriptions)
       .set({
         provider_subscription_id: genuinelyActive.id,
