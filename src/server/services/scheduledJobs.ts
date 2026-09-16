@@ -5,7 +5,7 @@
  *
  * These are named exports ready for Trigger.dev or any cron runner.
  */
-import { eq, lt, lte, gt, and, or, inArray, isNotNull, isNull, ne } from 'drizzle-orm';
+import { eq, lt, lte, gt, and, or, inArray, notInArray, isNotNull, isNull, ne } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { contributionService } from './contributionService.js';
@@ -88,6 +88,25 @@ async function runJob(name: string, fn: () => Promise<void>): Promise<void> {
 // ─── Daily Jobs ───────────────────────────────────────────────────────────────
 
 /**
+ * Group IDs that are permanently closed/deleted (`savingsGroups.status`
+ * 'closed' or 'expired') — as opposed to merely 'suspended' (temporarily
+ * inactive because membership dropped below the launch threshold, which
+ * must keep behaving normally and resume once membership recovers).
+ *
+ * Several jobs below act directly on `contributions`/`rotations` rows —
+ * closing/force-closing a group (groupService.close) only ever flips
+ * `savingsGroups.status`, it never touches those rows — so without this
+ * exclusion a member of a closed/deleted group would still get charged,
+ * marked missed, or sent a reminder/upcoming-payout email for a group that
+ * no longer exists to them.
+ */
+async function getClosedOrExpiredGroupIds(): Promise<string[]> {
+  const rows = await db.select({ id: schema.savingsGroups.id }).from(schema.savingsGroups)
+    .where(inArray(schema.savingsGroups.status, ['closed', 'expired']));
+  return rows.map(row => row.id);
+}
+
+/**
  * Send a one-time "contribution due soon" reminder, no earlier than
  * CONTRIBUTION_REMINDER_ADVANCE_DAYS before due_date. Deduplicated via
  * reminder_sent_at (a dedicated throttle column — see contributions schema
@@ -103,6 +122,7 @@ export async function dailyContributionReminders(): Promise<void> {
   await runJob('daily_contribution_reminders', async () => {
     const now = new Date();
     const reminderWindowEnd = new Date(now.getTime() + CONTRIBUTION_REMINDER_ADVANCE_DAYS * 24 * 60 * 60 * 1000);
+    const excludedGroupIds = await getClosedOrExpiredGroupIds();
 
     const due = await db.select().from(schema.contributions)
       .where(and(
@@ -110,6 +130,7 @@ export async function dailyContributionReminders(): Promise<void> {
         gt(schema.contributions.due_date, now),
         lte(schema.contributions.due_date, reminderWindowEnd),
         isNull(schema.contributions.reminder_sent_at),
+        notInArray(schema.contributions.group_id, excludedGroupIds),
       ));
 
     for (const c of due) {
@@ -154,8 +175,12 @@ export async function dailyUpcomingPayoutReminders(): Promise<void> {
  */
 export async function dailyAutoChargeDueContributions(): Promise<void> {
   await runJob('daily_auto_charge_due_contributions', async () => {
+    const excludedGroupIds = await getClosedOrExpiredGroupIds();
     const due = await db.select().from(schema.contributions)
-      .where(eq(schema.contributions.payment_status, 'due'));
+      .where(and(
+        eq(schema.contributions.payment_status, 'due'),
+        notInArray(schema.contributions.group_id, excludedGroupIds),
+      ));
 
     for (const c of due) {
       try {
@@ -205,10 +230,12 @@ export async function dailyAutoChargeDueContributions(): Promise<void> {
 export async function dailyOverdueCheck(): Promise<void> {
   await runJob('daily_overdue_check', async () => {
     const now = new Date();
+    const excludedGroupIds = await getClosedOrExpiredGroupIds();
     const overdue = await db.select().from(schema.contributions)
       .where(and(
         eq(schema.contributions.payment_status, 'due'),
         lt(schema.contributions.due_date, now),
+        notInArray(schema.contributions.group_id, excludedGroupIds),
       ));
 
     for (const c of overdue) {
@@ -225,11 +252,13 @@ export async function dailyOverdueCheck(): Promise<void> {
 export async function dailyTrustScoreUpdates(): Promise<void> {
   await runJob('daily_trust_score_updates', async () => {
     const now = new Date();
+    const excludedGroupIds = await getClosedOrExpiredGroupIds();
     await db.update(schema.contributions)
       .set({ payment_status: 'due' })
       .where(and(
         eq(schema.contributions.payment_status, 'scheduled'),
         lte(schema.contributions.due_date, now),
+        notInArray(schema.contributions.group_id, excludedGroupIds),
       ));
   });
 }
@@ -258,10 +287,12 @@ export async function dailyChargeCatchUp(): Promise<void> {
 export async function dailyFailedPaymentCheck(): Promise<void> {
   await runJob('daily_failed_payment_check', async () => {
     const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const excludedGroupIds = await getClosedOrExpiredGroupIds();
     const failed = await db.select().from(schema.contributions)
       .where(and(
         eq(schema.contributions.payment_status, 'failed'),
         lte(schema.contributions.due_date, yesterday),
+        notInArray(schema.contributions.group_id, excludedGroupIds),
       ));
 
     for (const c of failed) {
@@ -285,11 +316,13 @@ export async function dailyFailedPaymentCheck(): Promise<void> {
 export async function dailyContributionDefaultRetry(): Promise<void> {
   await runJob('daily_contribution_default_retry', async () => {
     const now = new Date();
+    const excludedGroupIds = await getClosedOrExpiredGroupIds();
     const due = await db.select().from(schema.contributions)
       .where(and(
         eq(schema.contributions.payment_status, 'pending_default'),
         eq(schema.contributions.retry_attempted, false),
         lte(schema.contributions.grace_period_ends_at, now),
+        notInArray(schema.contributions.group_id, excludedGroupIds),
       ));
 
     for (const c of due) {

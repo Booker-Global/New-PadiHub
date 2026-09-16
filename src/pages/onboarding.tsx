@@ -188,6 +188,12 @@ type SelectPlanResult = {
 type OnboardingPreferences = {
   bio: string;
   location: string;
+  // Saving goals ("What are you saving for?") and community-type interests
+  // captured at onboarding step 6 — stored purely as backend data for now
+  // (not used anywhere on the frontend yet), so we can later use them to
+  // tailor which communities/groups are shown or recommended to a member.
+  savingsGoals: string[];
+  communityTypes: string[];
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -200,6 +206,10 @@ function getBooleanValue(value: unknown, fallback: boolean) {
 
 function getStringValue(value: unknown) {
   return typeof value === 'string' ? value : '';
+}
+
+function getStringArrayValue(value: unknown) {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
 }
 
 function getErrorMessage<T>(json: ApiResponse<T> | null, fallback: string) {
@@ -252,6 +262,8 @@ function getOnboardingPreferences(preferences: Record<string, unknown>): Onboard
   return {
     bio: getStringValue(source.bio),
     location: getStringValue(source.location),
+    savingsGoals: getStringArrayValue(source.savingsGoals),
+    communityTypes: getStringArrayValue(source.communityTypes),
   };
 }
 
@@ -383,6 +395,7 @@ export default function OnboardingPage() {
   const [planSaving, setPlanSaving] = useState(false);
   const [photoSaving, setPhotoSaving] = useState(false);
   const [profileSaving, setProfileSaving] = useState(false);
+  const [goalsSaving, setGoalsSaving] = useState(false);
   const [notificationSaving, setNotificationSaving] = useState(false);
   const [identityLoading, setIdentityLoading] = useState(false);
   const [paymentRefreshLoading, setPaymentRefreshLoading] = useState(false);
@@ -407,6 +420,8 @@ export default function OnboardingPage() {
       bio: onboardingPreferences.bio,
       location: onboardingPreferences.location,
     });
+    setSelectedInterests(onboardingPreferences.savingsGoals);
+    setSelectedTypes(onboardingPreferences.communityTypes);
     setNotifs(getNotificationSettings(preferences));
     setSelectedPlan(loadedProfile.subscription_tier ?? '');
     setSavedPlan(loadedProfile.subscription_tier ?? '');
@@ -578,6 +593,7 @@ export default function OnboardingPage() {
   const buildProfilePreferences = useCallback((overrides?: {
     avatarDataUrl?: string | null;
     includeProfileDetails?: boolean;
+    includeGoals?: boolean;
   }) => {
     const nextPreferences: Record<string, unknown> = { ...existingPreferences };
     const avatarDataUrl = overrides?.avatarDataUrl;
@@ -588,19 +604,28 @@ export default function OnboardingPage() {
       delete nextPreferences.avatarDataUrl;
     }
 
-    if (overrides?.includeProfileDetails) {
+    if (overrides?.includeProfileDetails || overrides?.includeGoals) {
       const currentOnboarding = isRecord(existingPreferences.onboarding)
         ? existingPreferences.onboarding
         : {};
       nextPreferences.onboarding = {
         ...currentOnboarding,
-        bio: profile.bio.trim(),
-        location: profile.location.trim(),
+        ...(overrides?.includeProfileDetails ? {
+          bio: profile.bio.trim(),
+          location: profile.location.trim(),
+        } : {}),
+        // Saving goals/community types are stored as backend data only —
+        // not used anywhere on the frontend yet (may be used later to
+        // recommend/filter which communities a member is shown).
+        ...(overrides?.includeGoals ? {
+          savingsGoals: selectedInterests,
+          communityTypes: selectedTypes,
+        } : {}),
       };
     }
 
     return nextPreferences;
-  }, [existingPreferences, profile.bio, profile.location]);
+  }, [existingPreferences, profile.bio, profile.location, selectedInterests, selectedTypes]);
 
   const buildNotificationPreferences = useCallback(() => {
     const nextPreferences: Record<string, unknown> = { ...existingPreferences };
@@ -936,6 +961,46 @@ export default function OnboardingPage() {
       setActionError(saveError instanceof Error ? saveError.message : 'Could not save your profile.');
     } finally {
       setProfileSaving(false);
+    }
+  };
+
+  // Persists the "What are you saving for?" goal + community-type selections
+  // to the backend (notification_preferences.onboarding) so they're not lost
+  // — this data is not read/used anywhere on the frontend yet; it's captured
+  // purely so it can inform recommendations later.
+  const handleGoalsContinue = async () => {
+    const session = getValidSession();
+    if (!session?.token) {
+      setActionError('Please log in again before continuing.');
+      return;
+    }
+
+    setGoalsSaving(true);
+    setActionError('');
+    setActionNotice('');
+
+    try {
+      const response = await window.fetch('/api/users/profile', {
+        method: 'PUT',
+        headers: {
+          Authorization: 'Bearer ' + session.token,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          notification_preferences: buildProfilePreferences({ includeGoals: true }),
+        }),
+      });
+      const json = await response.json().catch(() => null) as ApiResponse<UserProfile> | null;
+      if (!response.ok || !json?.data) {
+        throw new Error(getErrorMessage(json, 'Could not save your selections.'));
+      }
+
+      syncProfileState(json.data);
+      nextStep();
+    } catch (saveError) {
+      setActionError(saveError instanceof Error ? saveError.message : 'Could not save your selections.');
+    } finally {
+      setGoalsSaving(false);
     }
   };
 
@@ -1412,7 +1477,6 @@ export default function OnboardingPage() {
                       type="text"
                       value={profile.location}
                       onChange={(event) => setProfile((current) => ({ ...current, location: event.target.value }))}
-                      placeholder="e.g. London, UK or Lagos, Nigeria"
                       className="w-full px-4 py-3.5 rounded-2xl border border-gray-200 text-sm focus:outline-none focus:ring-2 transition-all"
                       style={{ '--tw-ring-color': '#2EAF6F' } as CSSProperties}
                     />
@@ -1508,12 +1572,12 @@ export default function OnboardingPage() {
                     <ArrowLeft size={16} />
                   </Button>
                   <Button
-                    onClick={nextStep}
-                    disabled={selectedInterests.length === 0}
+                    onClick={() => void handleGoalsContinue()}
+                    disabled={selectedInterests.length === 0 || goalsSaving}
                     className="flex-1 rounded-2xl py-4 font-bold gap-2"
                     style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)', color: '#fff' }}
                   >
-                    Continue <ArrowRight size={18} />
+                    {goalsSaving ? 'Saving…' : 'Continue'} <ArrowRight size={18} />
                   </Button>
                 </div>
               </div>

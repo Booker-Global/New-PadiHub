@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { eq, and, desc, inArray, lte, isNull } from 'drizzle-orm';
+import { eq, and, desc, inArray, notInArray, lte, isNull } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -333,11 +333,23 @@ export const rotationService = {
   async sendDueUpcomingPayoutReminders(): Promise<void> {
     const windowEnd = new Date(Date.now() + UPCOMING_PAYOUT_REMINDER_ADVANCE_DAYS * 24 * 60 * 60 * 1000);
 
+    // Exclude rotations belonging to a permanently closed/deleted group
+    // ('closed'/'expired') — closing a group only ever flips
+    // savingsGroups.status, it never touches this rotation row, so without
+    // this filter a member could keep getting "upcoming payout" emails for
+    // a group that's already been closed or deleted. 'suspended' (below the
+    // 3-member launch threshold) is deliberately NOT excluded here — it is
+    // only temporary and must keep behaving normally.
+    const closedOrExpiredGroups = await db.select({ id: schema.savingsGroups.id }).from(schema.savingsGroups)
+      .where(inArray(schema.savingsGroups.status, ['closed', 'expired']));
+    const excludedGroupIds = closedOrExpiredGroups.map(row => row.id);
+
     const due = await db.select().from(schema.rotations)
       .where(and(
         eq(schema.rotations.payout_status, 'pending'),
         lte(schema.rotations.scheduled_payout_date, windowEnd),
         isNull(schema.rotations.upcoming_payout_reminder_sent_at),
+        notInArray(schema.rotations.group_id, excludedGroupIds),
       ));
 
     for (const rotation of due) {
