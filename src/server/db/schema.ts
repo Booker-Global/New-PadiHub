@@ -525,6 +525,15 @@ export const subscriptions = mysqlTable('subscriptions', {
   // for an actual failed charge attempt" policy. Cleared as soon as the
   // retry succeeds (or the member is removed), so it never re-fires.
   first_charge_failed_at: timestamp('first_charge_failed_at'),
+  // Stripe sends BOTH `invoice.paid` and `invoice.payment_succeeded` for the
+  // exact same successful invoice (and may redeliver either one on retry) —
+  // webhookStripeController.ts's shared handler for those two event types
+  // stamps the invoice.id here the first time it fully processes a given
+  // invoice, and short-circuits (skips re-sending the confirmation
+  // email/notification/audit-log) on every subsequent delivery for that
+  // same invoice, however it arrives. Flutterwave has no equivalent
+  // duplicate-event risk, so this column is Stripe-only.
+  last_processed_invoice_id: varchar('last_processed_invoice_id', { length: 255 }),
   created_at:              timestamp('created_at').notNull().defaultNow(),
   updated_at:              timestamp('updated_at').notNull().defaultNow().onUpdateNow(),
 });

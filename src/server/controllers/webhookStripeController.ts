@@ -90,7 +90,15 @@ async function handleStripeEvent(event: Stripe.Event) {
       break;
     }
 
-    case 'invoice.payment_succeeded': {
+    // Stripe fires BOTH of these for the exact same successful invoice
+    // (invoice.paid is the modern/recommended one; invoice.payment_succeeded
+    // is the older event still sent alongside it), and may redeliver either
+    // one on retry — the idempotency guard just below (keyed on
+    // last_processed_invoice_id) makes it safe to react to both without
+    // double-sending confirmation emails/audit-log entries for the same
+    // charge.
+    case 'invoice.payment_succeeded':
+    case 'invoice.paid': {
       const invoice = event.data.object as Stripe.Invoice;
       const customerId = typeof invoice.customer === 'string' ? invoice.customer : invoice.customer?.id;
       const subIdStr = stripeInvoiceSubscriptionId(invoice);
@@ -100,7 +108,7 @@ async function handleStripeEvent(event: Stripe.Event) {
         .where(eq(schema.subscriptions.provider_subscription_id, subIdStr)).limit(1);
       const sub = subRows[0];
       if (!sub || sub.provider !== 'stripe') {
-        console.log(`[StripeWebhook] Ignoring invoice.payment_succeeded for untracked subscription ${subIdStr}`);
+        console.log(`[StripeWebhook] Ignoring ${event.type} for untracked subscription ${subIdStr}`);
         break;
       }
 
@@ -114,7 +122,16 @@ async function handleStripeEvent(event: Stripe.Event) {
       const user = userRows[0];
       if (!user) break;
       if (user.stripe_customer_id && user.stripe_customer_id !== customerId) {
-        console.warn(`[StripeWebhook] Ignoring invoice.payment_succeeded for subscription ${subIdStr} due to customer mismatch.`);
+        console.warn(`[StripeWebhook] Ignoring ${event.type} for subscription ${subIdStr} due to customer mismatch.`);
+        break;
+      }
+
+      // invoice.paid and invoice.payment_succeeded both fire for the same
+      // successful charge, and either can be redelivered by Stripe on
+      // retry — if this exact invoice was already fully processed (by
+      // whichever event arrived first), there is nothing left to do.
+      if (invoice.id && sub.last_processed_invoice_id === invoice.id) {
+        console.log(`[StripeWebhook] Ignoring ${event.type} — invoice ${invoice.id} already processed for subscription ${subIdStr}.`);
         break;
       }
 
@@ -154,7 +171,7 @@ async function handleStripeEvent(event: Stripe.Event) {
         .set({ subscription_status: 'active' })
         .where(eq(schema.users.id, sub.user_id));
       await db.update(schema.subscriptions)
-        .set({ billing_status: 'active' })
+        .set({ billing_status: 'active', last_processed_invoice_id: invoice.id ?? sub.last_processed_invoice_id })
         .where(eq(schema.subscriptions.id, sub.id));
 
       // An upgrade's first invoice that needed 3D-Secure/extra confirmation
