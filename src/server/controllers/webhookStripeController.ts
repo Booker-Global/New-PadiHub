@@ -297,12 +297,17 @@ async function handleStripeEvent(event: Stripe.Event) {
             },
           });
           if (isSubscriptionTierKey(user.subscription_tier)) {
+            // Prefer the freshly-derived `nextRenewalDate` (this invoice's
+            // period end, just persisted above) over `sub`'s pre-webhook
+            // value, which — for a subscription confirmed only
+            // asynchronously here — can still be stale/unset.
+            const billingDateForEmail = nextRenewalDate ?? (sub.renewal_date ? new Date(sub.renewal_date) : null);
             try {
               await sendSubscriptionCreatedEmail(
                 user.email,
                 SUBSCRIPTION_TIERS[user.subscription_tier].name,
                 formatInvoiceAmount(invoice.amount_paid, invoice.currency) || formatTierPrice(user.subscription_tier, user.country),
-                sub.renewal_date ? new Date(sub.renewal_date).toLocaleDateString('en-GB') : 'your next billing date',
+                billingDateForEmail ? billingDateForEmail.toLocaleDateString('en-GB') : 'your next billing date',
               );
             } catch (emailError) {
               console.error(`[StripeWebhook] Failed to send first-charge confirmation email to ${user.email} for subscription ${sub.id}:`, emailError);
