@@ -40,6 +40,23 @@ function stripeInvoiceSubscriptionId(invoice: Stripe.Invoice): string | null {
   return typeof subId === 'string' ? subId : (subId as Stripe.Subscription | null)?.id ?? null;
 }
 
+/**
+ * The service period this invoice covers (Stripe always includes `lines` on
+ * an Invoice object, no expand needed) — for a subscription invoice, its
+ * `period.end` IS the subscription's new `current_period_end`, i.e. the
+ * date of the NEXT renewal after this one. Used to keep `subscriptions.
+ * renewal_date` current on every successful charge (first charge AND
+ * ordinary renewals) instead of it staying frozen at whatever value was
+ * set at subscription creation — which is exactly what previously made
+ * weeklySubscriptionHealthCheck's `renewal_date <= in7Days` reminder query
+ * (and the "next billing date" shown in confirmation emails) go stale
+ * after the very first renewal, since nothing advanced it from there.
+ */
+function nextRenewalDateFromInvoice(invoice: Stripe.Invoice): Date | null {
+  const periodEnd = invoice.lines?.data?.[0]?.period?.end;
+  return typeof periodEnd === 'number' ? new Date(periodEnd * 1000) : null;
+}
+
 /** mysql2's UPDATE result shape isn't typed by drizzle — same pattern used in rotationService/paymentEligibilityService for atomic claim-style updates. */
 function extractAffectedRows(result: unknown): number {
   return (result as { affectedRows?: number }[])[0]?.affectedRows
@@ -219,12 +236,13 @@ async function handleStripeEvent(event: Stripe.Event) {
         // regardless of billing_reason.
         const isInitialInvoiceCharge = invoice.billing_reason === 'subscription_create';
         const wasAlreadyActiveBeforeThisWebhook = sub.billing_status === 'active';
+        const nextRenewalDate = nextRenewalDateFromInvoice(invoice);
 
         await db.update(schema.users)
           .set({ subscription_status: 'active' })
           .where(eq(schema.users.id, sub.user_id));
         await db.update(schema.subscriptions)
-          .set({ billing_status: 'active' })
+          .set({ billing_status: 'active', ...(nextRenewalDate ? { renewal_date: nextRenewalDate } : {}) })
           .where(eq(schema.subscriptions.id, sub.id));
 
         // An upgrade's first invoice that needed 3D-Secure/extra confirmation
@@ -323,7 +341,11 @@ async function handleStripeEvent(event: Stripe.Event) {
               user.email,
               tierName,
               priceDisplay,
-              sub.renewal_date ? new Date(sub.renewal_date).toLocaleDateString('en-GB') : 'next month',
+              // `nextRenewalDate` (this invoice's period end, i.e. the
+              // UPCOMING renewal after this one) — not `sub.renewal_date`,
+              // which is the date THIS renewal was originally due and is
+              // now in the past.
+              nextRenewalDate ? nextRenewalDate.toLocaleDateString('en-GB') : 'next month',
             );
           } catch (emailError) {
             console.error(`[StripeWebhook] Failed to send subscription charge confirmation email to ${user.email} for subscription ${sub.id}:`, emailError);

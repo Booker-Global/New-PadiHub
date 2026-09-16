@@ -546,6 +546,14 @@ export const subscriptions = mysqlTable('subscriptions', {
   // same invoice, however it arrives. Flutterwave has no equivalent
   // duplicate-event risk, so this column is Stripe-only.
   last_processed_invoice_id: varchar('last_processed_invoice_id', { length: 255 }),
+  // Throttles scheduledJobs.dailySubscriptionPastDueRecovery's "Subscription
+  // Payment Overdue" notification to once every PAST_DUE_NOTIFICATION_
+  // COOLDOWN_DAYS (see constants.ts) instead of every single daily run —
+  // that job's Stripe/Flutterwave self-heal retry attempt must stay daily
+  // (a stuck past_due subscription shouldn't wait longer to self-heal), but
+  // re-notifying the member every day for the same still-unresolved
+  // problem, with no cooldown, is just alert fatigue, not new information.
+  past_due_notification_sent_at: timestamp('past_due_notification_sent_at'),
   created_at:              timestamp('created_at').notNull().defaultNow(),
   updated_at:              timestamp('updated_at').notNull().defaultNow().onUpdateNow(),
 });

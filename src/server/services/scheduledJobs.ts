@@ -25,6 +25,7 @@ import {
   ACCOUNT_LIFECYCLE_REMINDER_INTERVAL_DAYS,
   INCOMPLETE_PROFILE_EXPIRY_DAYS, CANCELLED_SUBSCRIPTION_EXPIRY_DAYS,
   CONTRIBUTION_REMINDER_ADVANCE_DAYS,
+  PAST_DUE_NOTIFICATION_COOLDOWN_DAYS,
 } from '../lib/constants.js';
 import { planCode, subscriptionService } from './subscriptionService.js';
 import { getOnboardingProgress } from './paymentEligibilityService.js';
@@ -631,16 +632,27 @@ export async function dailySubscriptionFirstChargeRetry(): Promise<void> {
  * retryStripeIncompleteSubscriptionCharge (which also re-checks Stripe for a
  * different, genuinely active/trialing subscription object for the same
  * customer) is attempted before ever nagging the member.
+ *
+ * The self-heal retry itself stays daily (unthrottled — a quicker retry is
+ * always desirable), but the member-facing "still stuck" notification is
+ * throttled to at most once every PAST_DUE_NOTIFICATION_COOLDOWN_DAYS (via
+ * past_due_notification_sent_at) — moving the RETRY from weekly to daily
+ * should not also mean re-notifying the member every single day about the
+ * exact same still-unresolved problem.
  */
 export async function dailySubscriptionPastDueRecovery(): Promise<void> {
   await runJob('daily_subscription_past_due_recovery', async () => {
     const pastDue = await db.select({
+      id: schema.subscriptions.id,
       user_id: schema.subscriptions.user_id,
       provider: schema.subscriptions.provider,
       provider_subscription_id: schema.subscriptions.provider_subscription_id,
+      past_due_notification_sent_at: schema.subscriptions.past_due_notification_sent_at,
     })
       .from(schema.subscriptions)
       .where(eq(schema.subscriptions.billing_status, 'past_due'));
+
+    const notificationCutoff = new Date(Date.now() - PAST_DUE_NOTIFICATION_COOLDOWN_DAYS * 24 * 60 * 60 * 1000);
 
     for (const sub of pastDue) {
       if (sub.provider === 'stripe' && sub.provider_subscription_id) {
@@ -652,11 +664,16 @@ export async function dailySubscriptionPastDueRecovery(): Promise<void> {
         }
       }
 
+      if (sub.past_due_notification_sent_at && sub.past_due_notification_sent_at > notificationCutoff) continue;
+
       await notificationService.create({
         userId: sub.user_id, type: 'subscription_past_due',
         title: 'Subscription Payment Overdue',
         message: 'Your subscription payment is overdue. Please update your payment method to avoid losing access.',
       });
+      await db.update(schema.subscriptions)
+        .set({ past_due_notification_sent_at: new Date() })
+        .where(eq(schema.subscriptions.id, sub.id));
     }
   });
 }

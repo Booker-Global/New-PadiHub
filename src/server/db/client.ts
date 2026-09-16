@@ -199,6 +199,7 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
     { column: 'cancelled_at',               sqlType: 'TIMESTAMP NULL' },
     { column: 'first_charge_failed_at',     sqlType: 'TIMESTAMP NULL' },
     { column: 'last_processed_invoice_id',  sqlType: 'VARCHAR(255) NULL' },
+    { column: 'past_due_notification_sent_at', sqlType: 'TIMESTAMP NULL' },
   ],
   votes: [
     { column: 'target_member_id',    sqlType: 'VARCHAR(36) NULL' },
