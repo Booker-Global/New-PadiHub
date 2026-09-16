@@ -549,14 +549,22 @@ export async function dailyApplyPendingPayoutFrequencyChanges(): Promise<void> {
  * the sole trigger point). Every event that could make that true now
  * reconciles billing immediately at the call site
  * (groupService.activateGroup/reevaluateAfterMembershipChange,
- * membershipService.join/_activatePendingMembership) — this daily sweep is
- * just the safety net in case any of those individual call sites is ever
- * missed. reconcileBillingForActiveGroupMembership is itself a no-op for
- * anyone who already has a `subscriptions` row, so this only ever needs to
- * find active-group members who don't have one yet.
+ * membershipService.join/_activatePendingMembership) — this sweep is just
+ * the safety net in case any of those individual call sites is ever missed
+ * (or lost a concurrent claim to another in-flight attempt — see
+ * reconcileBillingForActiveGroupMembership's atomic claim). It runs several
+ * times a day (not just once) so a missed member is found within hours
+ * rather than up to 24h later — safe to run this often only because that
+ * same claim makes every invocation mutually exclusive per user, so more
+ * frequent runs can never cause a duplicate charge. `jobNameSuffix` lets
+ * each scheduled slot (see inProcessScheduler.ts) log its own distinct
+ * job_runs row instead of them all colliding under one name.
+ * reconcileBillingForActiveGroupMembership is itself a no-op for anyone
+ * who already has a `subscriptions` row, so this only ever needs to find
+ * active-group members who don't have one yet.
  */
-export async function dailyBillingActiveGroupReconciliation(): Promise<void> {
-  await runJob('daily_billing_active_group_reconciliation', async () => {
+export async function dailyBillingActiveGroupReconciliation(jobNameSuffix = ''): Promise<void> {
+  await runJob(`daily_billing_active_group_reconciliation${jobNameSuffix}`, async () => {
     const activeGroupMembersMissingSubscription = await db.select({ user_id: schema.memberships.user_id })
       .from(schema.memberships)
       .innerJoin(schema.savingsGroups, eq(schema.memberships.group_id, schema.savingsGroups.id))
@@ -573,7 +581,7 @@ export async function dailyBillingActiveGroupReconciliation(): Promise<void> {
       try {
         await subscriptionService.reconcileBillingForActiveGroupMembership(userId);
       } catch (err) {
-        console.error(`[Job] daily_billing_active_group_reconciliation: failed for user ${userId}:`, err instanceof Error ? err.message : err);
+        console.error(`[Job] daily_billing_active_group_reconciliation${jobNameSuffix}: failed for user ${userId}:`, err instanceof Error ? err.message : err);
       }
     }
   });

@@ -62,7 +62,22 @@ const SCHEDULE: ScheduleEntry[] = [
   { jobName: 'daily_subscription_past_due_recovery', hourUtc: 7, minuteUtc: 12, cadence: 'daily', run: jobs.dailySubscriptionPastDueRecovery },
   { jobName: 'daily_contribution_default_retry', hourUtc: 7, minuteUtc: 15, cadence: 'daily', run: jobs.dailyContributionDefaultRetry },
   { jobName: 'daily_group_lifecycle_expiry', hourUtc: 7, minuteUtc: 20, cadence: 'daily', run: jobs.dailyGroupLifecycleExpiry },
-  { jobName: 'daily_billing_active_group_reconciliation', hourUtc: 7, minuteUtc: 25, cadence: 'daily', run: jobs.dailyBillingActiveGroupReconciliation },
+  // Runs 5x/day, not just once — see subscriptionService.
+  // reconcileBillingForActiveGroupMembership's atomic claim doc comment
+  // for why more frequent runs are safe (mutually-exclusive per user, so
+  // they can only find a missed member sooner, never double-charge one).
+  // Each slot passes its own jobNameSuffix (see
+  // scheduledJobs.dailyBillingActiveGroupReconciliation) so the job_runs
+  // row it writes matches this entry's own jobName — otherwise this
+  // scheduler's once-per-day hasRunSince dedupe would either wrongly
+  // suppress the later slots (if every slot shared one name) or never
+  // recognise its own past runs across a restart (if the recorded name
+  // never matched any entry's name at all).
+  { jobName: 'daily_billing_active_group_reconciliation_0725', hourUtc: 7, minuteUtc: 25, cadence: 'daily', run: () => jobs.dailyBillingActiveGroupReconciliation('_0725') },
+  { jobName: 'daily_billing_active_group_reconciliation_1125', hourUtc: 11, minuteUtc: 25, cadence: 'daily', run: () => jobs.dailyBillingActiveGroupReconciliation('_1125') },
+  { jobName: 'daily_billing_active_group_reconciliation_1525', hourUtc: 15, minuteUtc: 25, cadence: 'daily', run: () => jobs.dailyBillingActiveGroupReconciliation('_1525') },
+  { jobName: 'daily_billing_active_group_reconciliation_1925', hourUtc: 19, minuteUtc: 25, cadence: 'daily', run: () => jobs.dailyBillingActiveGroupReconciliation('_1925') },
+  { jobName: 'daily_billing_active_group_reconciliation_2325', hourUtc: 23, minuteUtc: 25, cadence: 'daily', run: () => jobs.dailyBillingActiveGroupReconciliation('_2325') },
   { jobName: 'daily_governance_vote_expiry', hourUtc: 7, minuteUtc: 30, cadence: 'daily', run: jobs.dailyGovernanceVoteExpiry },
   { jobName: 'daily_subscription_first_charge_retry', hourUtc: 7, minuteUtc: 35, cadence: 'daily', run: jobs.dailySubscriptionFirstChargeRetry },
   { jobName: 'daily_incomplete_profile_follow_up', hourUtc: 7, minuteUtc: 45, cadence: 'daily', run: jobs.dailyIncompleteProfileFollowUp },
