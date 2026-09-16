@@ -5,7 +5,7 @@
  */
 import type { Request, Response, NextFunction } from 'express';
 import Stripe from 'stripe';
-import { eq, and, isNull, ne, or } from 'drizzle-orm';
+import { eq, and, isNull } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { getStripeProvider } from '../integrations/payments/PaymentProviderFactory.js';
@@ -136,27 +136,44 @@ async function handleStripeEvent(event: Stripe.Event) {
       // invoice.paid and invoice.payment_succeeded both fire for the same
       // successful charge, and either can be redelivered by Stripe on
       // retry — a plain "already processed?" read-then-write check has a
-      // race window where two concurrent deliveries (e.g. both event types
-      // arriving moments apart) could both pass the check before either
-      // commits its write. The CONDITIONAL UPDATE below closes that
-      // window: only the delivery whose WHERE clause still matches at the
-      // instant it runs actually claims this invoice (affectedRows > 0);
-      // the loser sees affectedRows === 0 and skips straight to break,
-      // exactly like the existing atomic-claim pattern in
-      // rotationService.advanceIfCycleComplete/paymentEligibilityService.
+      // race window where two concurrent deliveries could both pass the
+      // check before either commits its write. This is closed in two
+      // steps:
+      //  1. If THIS exact invoice was already fully processed (by
+      //     whichever event/delivery got there first), there's nothing
+      //     left to do — skip immediately.
+      //  2. Otherwise, claim the subscription with an OPTIMISTIC-CONCURRENCY
+      //     conditional UPDATE keyed on the value of
+      //     last_processed_invoice_id as it was when `sub` was read above
+      //     (not on invoiceId) — so if a DIFFERENT invoice for this same
+      //     subscription is concurrently being processed by another
+      //     delivery, only the one whose WHERE clause still matches at the
+      //     instant it runs wins the claim (affectedRows > 0); the loser
+      //     sees affectedRows === 0 and backs off, guaranteeing only one
+      //     invoice is ever processed for a subscription at a time. Mirrors
+      //     the existing atomic-claim pattern in
+      //     rotationService.advanceIfCycleComplete/paymentEligibilityService.
       const invoiceId = invoice.id;
+      const previouslyProcessedInvoiceId = sub.last_processed_invoice_id ?? null;
+      if (invoiceId && previouslyProcessedInvoiceId === invoiceId) {
+        console.log(`[StripeWebhook] Ignoring ${event.type} — invoice ${invoiceId} already processed for subscription ${subIdStr}.`);
+        break;
+      }
+
       let claimedThisInvoice = true;
       if (invoiceId) {
         const claimResult = await db.update(schema.subscriptions)
           .set({ last_processed_invoice_id: invoiceId })
           .where(and(
             eq(schema.subscriptions.id, sub.id),
-            or(isNull(schema.subscriptions.last_processed_invoice_id), ne(schema.subscriptions.last_processed_invoice_id, invoiceId)),
+            previouslyProcessedInvoiceId === null
+              ? isNull(schema.subscriptions.last_processed_invoice_id)
+              : eq(schema.subscriptions.last_processed_invoice_id, previouslyProcessedInvoiceId),
           ));
         claimedThisInvoice = extractAffectedRows(claimResult) > 0;
       }
       if (!claimedThisInvoice) {
-        console.log(`[StripeWebhook] Ignoring ${event.type} — invoice ${invoiceId} already processed (or claimed concurrently) for subscription ${subIdStr}.`);
+        console.log(`[StripeWebhook] Ignoring ${event.type} — invoice ${invoiceId} — subscription ${subIdStr} was concurrently claimed for a different update.`);
         break;
       }
 
@@ -324,10 +341,17 @@ async function handleStripeEvent(event: Stripe.Event) {
         // seeing this invoice as already claimed and silently skipping it
         // — leaving the member's billing status/confirmation/history
         // permanently incomplete for a charge that genuinely succeeded.
+        // Conditional on the row STILL holding the invoiceId we ourselves
+        // claimed: if a later, unrelated successful webhook has already
+        // moved this subscription on to a newer invoice by the time this
+        // catch runs, that newer claim must not be clobbered.
         if (invoiceId) {
           await db.update(schema.subscriptions)
-            .set({ last_processed_invoice_id: sub.last_processed_invoice_id ?? null })
-            .where(eq(schema.subscriptions.id, sub.id));
+            .set({ last_processed_invoice_id: previouslyProcessedInvoiceId })
+            .where(and(
+              eq(schema.subscriptions.id, sub.id),
+              eq(schema.subscriptions.last_processed_invoice_id, invoiceId),
+            ));
         }
         throw processingError;
       }
