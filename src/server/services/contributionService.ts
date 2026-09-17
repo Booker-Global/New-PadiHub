@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, ne } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -44,6 +44,18 @@ async function notifyGroupLeaderOfContributionActivity(
   } catch (error) {
     console.error('[ContributionService] Failed to notify group leader of contribution activity:', error);
   }
+}
+
+/**
+ * mysql2's UPDATE result shape isn't typed by drizzle — same
+ * affectedRows-extraction pattern used by rotationService/
+ * paymentEligibilityService/subscriptionService/webhookStripeController for
+ * atomic claim-style updates.
+ */
+function extractAffectedRows(result: unknown): number {
+  return (result as { affectedRows?: number }[])[0]?.affectedRows
+    ?? (result as { affectedRows?: number }).affectedRows
+    ?? 0;
 }
 
 export const contributionService = {
@@ -97,11 +109,23 @@ export const contributionService = {
     const c = rows[0];
 
     // Idempotent: a contribution may be charged and marked paid synchronously
-    // (e.g. by the auto-charge job) and again later by the provider webhook —
-    // skip re-processing so trust score / notifications / emails aren't duplicated.
+    // (e.g. by chargeContributionForUser reading the provider's immediate
+    // response) and again moments later by the provider webhook (payment_
+    // intent.succeeded / charge.completed) for that exact same charge —
+    // skip re-processing so trust score / notifications / emails aren't
+    // duplicated.
     if (c.payment_status === 'paid') return true;
 
-    await db.update(schema.contributions).set({
+    // Atomic claim, not a plain read-then-write: the synchronous charge path
+    // and the async webhook path can both reach this point within
+    // milliseconds of each other, both having read payment_status as
+    // not-yet-'paid' above. Conditioning the UPDATE itself on payment_status
+    // != 'paid' means only the first writer's UPDATE actually matches a row
+    // (affectedRows > 0) — the second writer's UPDATE matches zero rows and
+    // backs off, which is what previously let both callers fall through and
+    // send duplicate contribution-success emails/notifications for a single
+    // payment.
+    const claimResult = await db.update(schema.contributions).set({
       payment_status:     'paid',
       amount_paid:        c.amount_due,
       fee_amount:                  feeBreakdown?.feeAmount ?? c.fee_amount,
@@ -111,7 +135,9 @@ export const contributionService = {
       payout_fee_share_vat_amount: feeBreakdown?.payoutFeeShareVatAmount ?? c.payout_fee_share_vat_amount,
       paid_date:          new Date(),
       provider_reference: providerReference,
-    }).where(eq(schema.contributions.id, contributionId));
+    }).where(and(eq(schema.contributions.id, contributionId), ne(schema.contributions.payment_status, 'paid')));
+
+    if (extractAffectedRows(claimResult) === 0) return true;
 
     await createAuditLog({ userId: c.member_id, action: 'CONTRIBUTION_PAID', entity: 'contributions', entityId: contributionId, ipAddress });
     await notificationService.create({

@@ -782,10 +782,20 @@ export default function SavingsGroupDetailPage() {
         ? `/savings-groups/${group.id}/join?invite_token=${effectiveToken}`
         : returnedInviteLink;
       const fullLink = sharePath ? new window.URL(sharePath, window.location.origin).toString() : '';
+      const wasEmailInvite = Boolean(inviteEmail.trim());
 
       setInviteToken(effectiveToken);
       setInviteLink(fullLink);
-      setInviteNotice(inviteEmail.trim() ? `Invite created for ${inviteEmail.trim()}.` : 'Invite link created successfully.');
+      setInviteNotice(wasEmailInvite ? `Invite created for ${inviteEmail.trim()}.` : 'Invite link created successfully.');
+
+      // A direct email invite has nothing left for the leader to do here —
+      // there's no shareable link to copy, so the popup should close itself
+      // shortly after confirming success instead of staying open until the
+      // leader notices and clicks Close. A "Create link" invite (no email
+      // entered) still needs the modal to stay open so the link can be copied.
+      if (wasEmailInvite) {
+        window.setTimeout(() => closeInviteModal(), 1800);
+      }
     } catch {
       setInviteError('Network error. Please check your connection and try again.');
     } finally {
