@@ -26,7 +26,7 @@ import { buildOnboardingSteps, lowerFirst } from '../lib/onboardingSteps.js';
 
 export type { OnboardingStep } from '../lib/onboardingSteps.js';
 
-type EligibilityUser = {
+export type EligibilityUser = {
   id: string;
   country: string;
   account_status: 'pending_verification' | 'active' | 'suspended' | 'deactivated';
@@ -52,7 +52,9 @@ type EligibilityUser = {
  * directly with Stripe and persist the result. Mirrors the ensureSchemaSync
  * self-heal pattern used for schema drift.
  */
-async function refreshStripePayoutVerification(user: EligibilityUser): Promise<boolean> {
+export async function refreshStripePayoutVerification(
+  user: Pick<EligibilityUser, 'id' | 'payout_verified_at' | 'stripe_connected_account_id'>,
+): Promise<boolean> {
   if (user.payout_verified_at) return true;
   if (!user.stripe_connected_account_id) return false;
 
