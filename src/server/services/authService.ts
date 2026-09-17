@@ -231,6 +231,21 @@ export const authService = {
 
     await createAuditLog({ userId: user.id, action: 'LOGIN', entity: 'users', entityId: user.id, ipAddress });
 
+    // Requirement 1 — "Make this job also run immediately the user due the
+    // payout logs into their account": best-effort, non-blocking re-check
+    // of any pending payout(s) this user is due, so a cycle that only
+    // needed a Stripe payout-verification self-heal (getPaymentEligibility)
+    // or a contribution retry to resolve pays out immediately on login
+    // rather than waiting for the next scheduled catch-up sweep. Must
+    // never throw/block login — rotationService.advanceIfCycleComplete is
+    // itself idempotent/concurrency-safe (see its doc comment).
+    try {
+      const { rotationService } = await import('./rotationService.js');
+      await rotationService.advancePendingPayoutsForRecipient(user.id);
+    } catch (error) {
+      console.error('[AuthService] Failed to check pending payouts on login:', error);
+    }
+
     const { password_hash: _, ...safeUser } = user;
     return { token, user: safeUser };
   },

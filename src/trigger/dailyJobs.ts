@@ -4,11 +4,20 @@
  * Schedules (UTC):
  *   05:45  generate contribution schedules (idempotent — also covers daily/weekly groups)
  *   05:50  SAFETY-NET rotation advance — the PRIMARY trigger is now inline
- *          (contributionService.markPaid calls rotationService.advanceIfCycleComplete the
- *          instant a cycle's last contribution clears, so payout goes out the SAME DAY as the
- *          charge). This run only catches cycles the inline trigger missed; it's idempotent and
- *          concurrency-safe (see advanceIfCycleComplete's doc comment), so re-running it here is
- *          always a safe no-op for cycles already advanced.
+ *          (contributionService.markPaid/markFailed/markMissed call
+ *          rotationService.advanceIfCycleComplete the instant a cycle's last unresolved
+ *          contribution reaches a terminal state — paid, defaulted, or missed — so payout goes
+ *          out the SAME DAY that resolves, and also immediately on login for the user due the
+ *          payout — see authService.login). This run only catches cycles the inline trigger
+ *          missed; it's idempotent and concurrency-safe (see advanceIfCycleComplete's doc
+ *          comment), so re-running it here is always a safe no-op for cycles already advanced.
+ *   02:40, 06:40, 10:40, 14:40, 18:40, 22:40
+ *          Requirement 1's very-frequent (6x/day) idempotent payout catch-up sweep — the main
+ *          safety net going forward (05:50 above is kept only for job_runs history continuity).
+ *          For every active group whose cycle isn't yet resolved, also sends the one-time
+ *          "payout delayed, here's why" notice once scheduled_payout_date has passed (see
+ *          rotationService.sendPayoutDelayNoticeIfDue). Safe to run this often for the same
+ *          mutually-exclusive-claim reason as the billing reconciliation slots below.
  *   06:00  contribution reminders
  *   06:05  upcoming payout reminders (Section 22 follow-up — sent ~7 days before
  *          scheduled_payout_date, deduplicated via upcoming_payout_reminder_sent_at, never at
@@ -67,6 +76,7 @@ import { schedules } from '@trigger.dev/sdk/v3';
 import {
   monthlyGenerateContributionSchedule,
   monthlyAdvanceRotation,
+  payoutCatchUpSweep,
   dailyContributionReminders,
   dailyUpcomingPayoutReminders,
   dailyOverdueCheck,
@@ -231,6 +241,23 @@ export const dailyBillingActiveGroupReconciliationTask = schedules.task({
   run: async () => {
     await dailyBillingActiveGroupReconciliation();
     return { ok: true, task: 'daily-billing-active-group-reconciliation' };
+  },
+});
+
+export const payoutCatchUpSweepTask = schedules.task({
+  id: 'payout-catch-up-sweep',
+  // Requirement 1's very-frequent (6x/day) idempotent payout catch-up
+  // sweep — same "safe to run often" reasoning as the billing
+  // reconciliation task above: rotationService.advanceIfCycleComplete's
+  // atomic pending->processing claim makes every run mutually exclusive
+  // per rotation, so more frequent runs only find a resolved cycle sooner,
+  // never double-pay one. Also triggered immediately on login for the user
+  // due the payout — see authService.login ->
+  // rotationService.advancePendingPayoutsForRecipient.
+  cron: '40 2,6,10,14,18,22 * * *',
+  run: async () => {
+    await payoutCatchUpSweep();
+    return { ok: true, task: 'payout-catch-up-sweep' };
   },
 });
 

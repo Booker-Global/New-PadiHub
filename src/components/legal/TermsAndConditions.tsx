@@ -324,6 +324,10 @@ export const TERMS_SECTIONS: TermsSection[] = [
         text: 'Each group\'s creator sets a maximum number of permitted defaults for that group. Once a member\'s default count reaches this threshold, they are automatically suspended and removed from the group, and their Trust Score™ is reduced accordingly.',
       },
       {
+        subtitle: 'Delayed Cycles Are Paid Out at a Reduced Amount',
+        text: 'If a cycle\'s scheduled payout date arrives before every member has paid, all members are emailed with a delay notice and a summary of how many members have contributed so far. PadiHub then waits for that member\'s single automatic 72-hour grace-period retry described above. Once every contribution for that cycle is resolved — either paid, or marked as a default after the retry fails — the group is emailed with the outcome and the cycle\'s payout is sent immediately for the total amount actually collected, reduced by the share of any member who defaulted. PadiHub does not delay a payout indefinitely while waiting on a single defaulting member.',
+      },
+      {
         subtitle: 'Fund Recovery Is the Group\'s Responsibility',
         text: 'PadiHub does not guarantee, insure, or recover missed contributions on behalf of a group. Recovering funds from a member who defaults or is suspended is the responsibility of the Group Creator and remaining members, not PadiHub.',
       },

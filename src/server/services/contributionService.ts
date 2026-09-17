@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, ne } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -44,6 +44,18 @@ async function notifyGroupLeaderOfContributionActivity(
   } catch (error) {
     console.error('[ContributionService] Failed to notify group leader of contribution activity:', error);
   }
+}
+
+/**
+ * mysql2's UPDATE result shape isn't typed by drizzle — same
+ * affectedRows-extraction pattern used by rotationService/
+ * paymentEligibilityService/subscriptionService/webhookStripeController for
+ * atomic claim-style updates.
+ */
+function extractAffectedRows(result: unknown): number {
+  return (result as { affectedRows?: number }[])[0]?.affectedRows
+    ?? (result as { affectedRows?: number }).affectedRows
+    ?? 0;
 }
 
 export const contributionService = {
@@ -97,11 +109,23 @@ export const contributionService = {
     const c = rows[0];
 
     // Idempotent: a contribution may be charged and marked paid synchronously
-    // (e.g. by the auto-charge job) and again later by the provider webhook —
-    // skip re-processing so trust score / notifications / emails aren't duplicated.
+    // (e.g. by chargeContributionForUser reading the provider's immediate
+    // response) and again moments later by the provider webhook (payment_
+    // intent.succeeded / charge.completed) for that exact same charge —
+    // skip re-processing so trust score / notifications / emails aren't
+    // duplicated.
     if (c.payment_status === 'paid') return true;
 
-    await db.update(schema.contributions).set({
+    // Atomic claim, not a plain read-then-write: the synchronous charge path
+    // and the async webhook path can both reach this point within
+    // milliseconds of each other, both having read payment_status as
+    // not-yet-'paid' above. Conditioning the UPDATE itself on payment_status
+    // != 'paid' means only the first writer's UPDATE actually matches a row
+    // (affectedRows > 0) — the second writer's UPDATE matches zero rows and
+    // backs off, which is what previously let both callers fall through and
+    // send duplicate contribution-success emails/notifications for a single
+    // payment.
+    const claimResult = await db.update(schema.contributions).set({
       payment_status:     'paid',
       amount_paid:        c.amount_due,
       fee_amount:                  feeBreakdown?.feeAmount ?? c.fee_amount,
@@ -111,7 +135,9 @@ export const contributionService = {
       payout_fee_share_vat_amount: feeBreakdown?.payoutFeeShareVatAmount ?? c.payout_fee_share_vat_amount,
       paid_date:          new Date(),
       provider_reference: providerReference,
-    }).where(eq(schema.contributions.id, contributionId));
+    }).where(and(eq(schema.contributions.id, contributionId), ne(schema.contributions.payment_status, 'paid')));
+
+    if (extractAffectedRows(claimResult) === 0) return true;
 
     await createAuditLog({ userId: c.member_id, action: 'CONTRIBUTION_PAID', entity: 'contributions', entityId: contributionId, ipAddress });
     await notificationService.create({
@@ -246,6 +272,19 @@ export const contributionService = {
     }
 
     await membershipService.flagDefault(c.member_id, c.group_id, contributionId, ipAddress);
+
+    // Section [new] — a default is a TERMINAL outcome for this contribution
+    // (see getCycleResolutionStatus): if it was the last unresolved
+    // contribution in the cycle, the payout is now due — proceed
+    // immediately with whatever was actually collected, rather than
+    // waiting for the next catch-up sweep. Mirrors markPaid's own inline
+    // trigger; best-effort/never-throwing for the same reasons.
+    try {
+      const { rotationService } = await import('./rotationService.js');
+      await rotationService.advanceIfCycleComplete(c.group_id, c.cycle_number);
+    } catch (error) {
+      console.error('[ContributionService] advanceIfCycleComplete failed after markFailed default:', error);
+    }
     return true;
   },
 
@@ -280,6 +319,17 @@ export const contributionService = {
         ${p(`<strong>${memberName}</strong> missed their contribution for cycle ${c.cycle_number} in <strong>${groupName}</strong>. This affects their Trust Score and strike count.`)}
         ${table(detail('Member', memberName) + detail('Cycle', String(c.cycle_number)) + detail('Amount', amount))}
       `);
+    }
+
+    // Section [new] — 'missed' is also a terminal outcome for this cycle
+    // (see getCycleResolutionStatus); check whether the cycle is now fully
+    // resolved and the payout can proceed immediately. See the identical
+    // comment in markFailed above for why this is safe/best-effort.
+    try {
+      const { rotationService } = await import('./rotationService.js');
+      await rotationService.advanceIfCycleComplete(c.group_id, c.cycle_number);
+    } catch (error) {
+      console.error('[ContributionService] advanceIfCycleComplete failed after markMissed:', error);
     }
     return true;
   },
@@ -381,6 +431,67 @@ export const contributionService = {
    * has run for that cycle. This fallback still reflects real active
    * headcount, never capacity.
    */
+  /**
+   * The single source of truth for "is this cycle actually resolved, and
+   * how much money has really been collected for it" — used by
+   * rotationService.advanceIfCycleComplete (payout gate),
+   * transferCyclePotToRecipient (the actual amount moved), and the
+   * payout-complete emails (so the recipient/leader see the real,
+   * possibly-reduced amount rather than an inflated due-based estimate).
+   *
+   * A contribution is TERMINAL (its outcome for this cycle is final) once
+   * it's 'paid', 'defaulted' (the single grace-period retry also failed —
+   * see markFailed), or 'missed' (never even reached the provider by its
+   * due date — see markMissed). 'scheduled'/'due'/'pending_default' (still
+   * awaiting its one retry) are NOT terminal and must keep blocking payout,
+   * per the group's grace-period policy. `collectedAmount` deliberately
+   * only sums `amount_paid` for 'paid' rows — a defaulted/missed member's
+   * `amount_due` was never actually received, so it must never be counted
+   * toward the pot that gets transferred (see PR58's pot-inflation fix).
+   */
+  async getCycleResolutionStatus(groupId: string, cycleNumber: number): Promise<{
+    totalCount: number;
+    paidCount: number;
+    resolvedFailureCount: number;
+    unresolvedCount: number;
+    resolved: boolean;
+    hadAnyFailure: boolean;
+    collectedAmount: number;
+  }> {
+    const rows = await db.select({
+      payment_status: schema.contributions.payment_status,
+      amount_paid:    schema.contributions.amount_paid,
+    }).from(schema.contributions)
+      .where(and(eq(schema.contributions.group_id, groupId), eq(schema.contributions.cycle_number, cycleNumber)));
+
+    const TERMINAL_FAILURE_STATUSES = new Set(['defaulted', 'missed']);
+    let paidCount = 0;
+    let resolvedFailureCount = 0;
+    let unresolvedCount = 0;
+    let collectedAmount = 0;
+    for (const row of rows) {
+      if (row.payment_status === 'paid') {
+        paidCount += 1;
+        const parsed = parseFloat(row.amount_paid ?? '0');
+        collectedAmount += Number.isFinite(parsed) ? parsed : 0;
+      } else if (TERMINAL_FAILURE_STATUSES.has(row.payment_status)) {
+        resolvedFailureCount += 1;
+      } else {
+        unresolvedCount += 1;
+      }
+    }
+
+    return {
+      totalCount: rows.length,
+      paidCount,
+      resolvedFailureCount,
+      unresolvedCount,
+      resolved: rows.length > 0 && unresolvedCount === 0,
+      hadAnyFailure: resolvedFailureCount > 0,
+      collectedAmount,
+    };
+  },
+
   async getCyclePotAmount(groupId: string, cycleNumber: number, contributionAmount: number): Promise<number> {
     const cycleContributions = await db.select({
       amount_due:  schema.contributions.amount_due,

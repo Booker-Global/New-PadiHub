@@ -14,7 +14,10 @@ const mockState = vi.hoisted(() => ({
   sendGroupClosedEmail: vi.fn(),
   sendGroupLeaderActivityEmail: vi.fn(),
   sendPayoutTransferFailedAlertEmail: vi.fn(),
+  sendPayoutDelayedEmail: vi.fn(),
+  sendReducedPayoutSentEmail: vi.fn(),
   getCyclePotAmount: vi.fn(),
+  getCycleResolutionStatus: vi.fn(),
   computeNextPayoutDate: vi.fn(),
   reorderRotationByTrustScore: vi.fn(),
 }));
@@ -61,11 +64,18 @@ vi.mock('../integrations/email/emailService.js', () => ({
   sendGroupClosedEmail: mockState.sendGroupClosedEmail,
   sendGroupLeaderActivityEmail: mockState.sendGroupLeaderActivityEmail,
   sendPayoutTransferFailedAlertEmail: mockState.sendPayoutTransferFailedAlertEmail,
+  sendPayoutDelayedEmail: mockState.sendPayoutDelayedEmail,
+  sendReducedPayoutSentEmail: mockState.sendReducedPayoutSentEmail,
   p: (value: string) => value,
   table: (value: string) => value,
   detail: (label: string, value: string) => `${label}: ${value}`,
 }));
-vi.mock('../services/contributionService.js', () => ({ contributionService: { getCyclePotAmount: mockState.getCyclePotAmount } }));
+vi.mock('../services/contributionService.js', () => ({
+  contributionService: {
+    getCyclePotAmount: mockState.getCyclePotAmount,
+    getCycleResolutionStatus: mockState.getCycleResolutionStatus,
+  },
+}));
 vi.mock('../lib/constants.js', () => ({
   TRUST_SCORE_DELTA_CYCLE_COMPLETED: 3,
   resolveUserDisplayName: (user: { display_name?: string | null; first_name: string; last_name: string }) => user.display_name ?? `${user.first_name} ${user.last_name}`,
@@ -135,10 +145,6 @@ describe('rotationService', () => {
           first_name: 'Ada',
           last_name: 'Okafor',
         }],
-        [
-          { amount_paid: '1500.00', amount_due: '1500.00' },
-          { amount_paid: '1500.00', amount_due: '1500.00' },
-        ],
         [{
           email: 'ada@example.com',
           display_name: null,
@@ -159,6 +165,15 @@ describe('rotationService', () => {
       mockState.flutterwaveCreateTransfer.mockResolvedValue({
         providerTransferReference: 'flw-transfer-1',
         status: 'completed',
+      });
+      mockState.getCycleResolutionStatus.mockResolvedValue({
+        totalCount: 2,
+        paidCount: 2,
+        resolvedFailureCount: 0,
+        unresolvedCount: 0,
+        resolved: true,
+        hadAnyFailure: false,
+        collectedAmount: 3000,
       });
 
       const currentRotation = {

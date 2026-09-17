@@ -622,9 +622,11 @@ export async function sendMemberExitCompressionEmail(
 /**
  * Sent to every member when a member defaults but is RETAINED in the group
  * (default count below the group's max-permitted-defaults setting) — makes
- * clear the payout amount/schedule is unaffected this cycle, and that
- * recovering the specific missed amount from the defaulting member is the
- * group's own responsibility, not the platform's.
+ * clear that THIS cycle's payout will be reduced by the defaulted amount
+ * (the pot is simply short — see rotationService's collected-amount fix),
+ * while other members' own contribution amount/schedule going forward is
+ * unaffected, and that recovering the specific missed amount from the
+ * defaulting member is the group's own responsibility, not the platform's.
  */
 export async function sendDefaultRetainedNotificationEmail(
   to: string, groupName: string, defaultingName: string, amountDue: string, currency: string,
@@ -633,7 +635,7 @@ export async function sendDefaultRetainedNotificationEmail(
   await send(to, `Contribution default in ${groupName}`, wrap(`
     ${h2('A member missed their contribution')}
     ${p(`<strong>${defaultingName}</strong> defaulted on a contribution of <strong>${currency} ${amountDue}</strong> in <strong>${groupName}</strong> (default ${defaultCount} of ${maxPermittedDefaults} permitted before removal).`)}
-    ${p(`${defaultingName} remains in the group and the payout amount/schedule for this and future cycles is <strong>unchanged</strong>.`)}
+    ${p(`${defaultingName} remains in the group. This cycle's payout will now be sent, <strong>reduced</strong> by the defaulted amount above — the recipient will receive what has actually been collected. Other members' own contribution amount and future schedule are unaffected.`)}
     ${p('Recovering the missed amount from the defaulting member is the group\'s/organiser\'s own responsibility — PadiHub does not guarantee, insure, or recover missed contributions on the group\'s behalf.')}
   `));
 }
@@ -764,6 +766,54 @@ export async function sendPayoutCompleteEmail(
       detail('Reference', reference),
     )}
     ${p('Please allow 1–3 business days for the funds to appear in your account.')}
+  `));
+}
+
+/**
+ * Sent to every active member (Requirement 2) once per rotation, the first
+ * time the scheduled payout date has arrived but not everyone has paid yet
+ * — explains why the payout hasn't gone out, and that the group's standard
+ * grace-period retry will run once before it's finalised. Deduplicated via
+ * rotations.payout_delay_notice_sent_at.
+ */
+export async function sendPayoutDelayedEmail(
+  to: string, groupName: string, cycleNumber: number, paidCount: number, totalCount: number,
+): Promise<void> {
+  await send(to, `Payout delayed — ${groupName}`, wrap(`
+    ${h2('This cycle\'s payout is delayed')}
+    ${p(`The payout for cycle ${cycleNumber} in <strong>${groupName}</strong> was due today, but not every member has paid yet.`)}
+    ${table(
+      detail('Group', groupName) +
+      detail('Cycle', String(cycleNumber)) +
+      detail('Contributions received', `${paidCount} of ${totalCount}`),
+    )}
+    ${p('Any outstanding payment will be retried automatically once. The payout will go out immediately after that retry completes, based on what has actually been collected.')}
+  `));
+}
+
+/**
+ * Sent to every active member EXCEPT the recipient and the defaulting
+ * member (who already have their own payout-complete/default emails) when a
+ * cycle's payout has just gone out at a REDUCED amount because a member's
+ * contribution ultimately defaulted or was missed (Requirement 2). Tells
+ * the group the payout proceeded and that recovering the shortfall from the
+ * defaulting member remains the group/organiser's own responsibility.
+ */
+export async function sendReducedPayoutSentEmail(
+  to: string, groupName: string, cycleNumber: number, recipientName: string, amountSent: string,
+  paidCount: number, totalCount: number,
+): Promise<void> {
+  await send(to, `Payout sent (reduced) — ${groupName}`, wrap(`
+    ${h2('This cycle\'s payout has been sent — reduced')}
+    ${p(`The retry for cycle ${cycleNumber}'s outstanding contribution(s) in <strong>${groupName}</strong> did not succeed, so the payout to <strong>${recipientName}</strong> has now gone out for the amount actually collected.`)}
+    ${table(
+      detail('Group', groupName) +
+      detail('Cycle', String(cycleNumber)) +
+      detail('Recipient', recipientName) +
+      detail('Contributions received', `${paidCount} of ${totalCount}`) +
+      detail('Amount sent', amountSent),
+    )}
+    ${p('Recovering the missed amount from the defaulting member is the group\'s/organiser\'s own responsibility — PadiHub does not guarantee, insure, or recover missed contributions on the group\'s behalf.')}
   `));
 }
 

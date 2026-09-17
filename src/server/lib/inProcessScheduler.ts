@@ -78,6 +78,19 @@ const SCHEDULE: ScheduleEntry[] = [
   { jobName: 'daily_billing_active_group_reconciliation_1525', hourUtc: 15, minuteUtc: 25, cadence: 'daily', run: () => jobs.dailyBillingActiveGroupReconciliation('_1525') },
   { jobName: 'daily_billing_active_group_reconciliation_1925', hourUtc: 19, minuteUtc: 25, cadence: 'daily', run: () => jobs.dailyBillingActiveGroupReconciliation('_1925') },
   { jobName: 'daily_billing_active_group_reconciliation_2325', hourUtc: 23, minuteUtc: 25, cadence: 'daily', run: () => jobs.dailyBillingActiveGroupReconciliation('_2325') },
+  // Requirement 1's very-frequent (6x/day, i.e. "more than twice a day")
+  // idempotent payout catch-up sweep — same mutually-exclusive-claim safety
+  // as the billing reconciliation slots above (see
+  // rotationService.advanceIfCycleComplete's atomic
+  // payout_status pending->processing UPDATE), so running it this often can
+  // only find a resolved cycle sooner, never double-pay one. Each slot
+  // passes its own jobNameSuffix for the same job_runs-dedup reason as above.
+  { jobName: 'payout_catch_up_sweep_0240', hourUtc: 2, minuteUtc: 40, cadence: 'daily', run: () => jobs.payoutCatchUpSweep('_0240') },
+  { jobName: 'payout_catch_up_sweep_0640', hourUtc: 6, minuteUtc: 40, cadence: 'daily', run: () => jobs.payoutCatchUpSweep('_0640') },
+  { jobName: 'payout_catch_up_sweep_1040', hourUtc: 10, minuteUtc: 40, cadence: 'daily', run: () => jobs.payoutCatchUpSweep('_1040') },
+  { jobName: 'payout_catch_up_sweep_1440', hourUtc: 14, minuteUtc: 40, cadence: 'daily', run: () => jobs.payoutCatchUpSweep('_1440') },
+  { jobName: 'payout_catch_up_sweep_1840', hourUtc: 18, minuteUtc: 40, cadence: 'daily', run: () => jobs.payoutCatchUpSweep('_1840') },
+  { jobName: 'payout_catch_up_sweep_2240', hourUtc: 22, minuteUtc: 40, cadence: 'daily', run: () => jobs.payoutCatchUpSweep('_2240') },
   { jobName: 'daily_governance_vote_expiry', hourUtc: 7, minuteUtc: 30, cadence: 'daily', run: jobs.dailyGovernanceVoteExpiry },
   { jobName: 'daily_subscription_first_charge_retry', hourUtc: 7, minuteUtc: 35, cadence: 'daily', run: jobs.dailySubscriptionFirstChargeRetry },
   { jobName: 'daily_incomplete_profile_follow_up', hourUtc: 7, minuteUtc: 45, cadence: 'daily', run: jobs.dailyIncompleteProfileFollowUp },

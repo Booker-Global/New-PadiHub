@@ -17,6 +17,8 @@ import {
   sendGroupClosedEmail,
   sendGroupLeaderActivityEmail,
   sendPayoutTransferFailedAlertEmail,
+  sendPayoutDelayedEmail,
+  sendReducedPayoutSentEmail,
   p, table, detail,
 } from '../integrations/email/emailService.js';
 
@@ -61,16 +63,13 @@ async function transferCyclePotToRecipient(
   }).from(schema.users).where(eq(schema.users.id, rotation.recipient_id)).limit(1);
   const recipient = recipientRows[0];
 
-  const cycleContributions = await db.select({
-    amount_paid: schema.contributions.amount_paid,
-    amount_due:  schema.contributions.amount_due,
-  }).from(schema.contributions).where(and(
-    eq(schema.contributions.group_id, group.id),
-    eq(schema.contributions.cycle_number, rotation.cycle_number),
-  ));
-  const potMinorUnits = Math.round(cycleContributions.reduce(
-    (sum, c) => sum + parseFloat(c.amount_paid ?? c.amount_due), 0,
-  ) * 100);
+  const { contributionService } = await import('./contributionService.js');
+  const cycleStatus = await contributionService.getCycleResolutionStatus(group.id, rotation.cycle_number);
+  // Amount actually transferred is the real collected total (sum of
+  // amount_paid for 'paid' contributions only) — never the full amount_due
+  // for members who defaulted/missed, which was never actually received.
+  // See getCycleResolutionStatus and Requirement 2's "reduced payout".
+  const potMinorUnits = Math.round(cycleStatus.collectedAmount * 100);
 
   if (potMinorUnits <= 0) {
     await onFailure('Cycle pot total was zero — nothing to transfer.');
@@ -417,7 +416,11 @@ export const rotationService = {
         const g2 = groupRow2[0];
         const reference = transferReference ?? current.provider_transfer_reference ?? current.id;
         const { contributionService } = await import('./contributionService.js');
-        const potAmountValue = await contributionService.getCyclePotAmount(groupId, current.cycle_number, parseFloat(g2.contribution_amount));
+        // The real, possibly-reduced collected total (see
+        // getCycleResolutionStatus) — never the due-based estimate — so
+        // these emails always match the amount actually transferred above.
+        const cycleStatus = await contributionService.getCycleResolutionStatus(groupId, current.cycle_number);
+        const potAmountValue = cycleStatus.collectedAmount;
         const potAmount = `${g2.currency} ${potAmountValue.toFixed(2)}`;
         try {
           await sendPayoutCompleteEmail(recipientRow[0].email, g2.name, potAmount, reference);
@@ -437,6 +440,30 @@ export const rotationService = {
               `);
             } catch (emailError) {
               console.error(`[RotationService] Failed to send payout completion notification to leader for group ${groupId}:`, emailError);
+            }
+          }
+        }
+
+        // Requirement 2 — if this cycle's pot was short because a member's
+        // contribution ultimately defaulted/was missed, tell every OTHER
+        // active member the payout has now gone out at the reduced amount
+        // (the recipient already knows via the email above; the defaulting
+        // member already got their own default notice from
+        // membershipService.flagDefault/markMissed).
+        if (cycleStatus.hadAnyFailure) {
+          const activeMembers = await db.select().from(schema.memberships)
+            .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')));
+          const otherMemberIds = activeMembers.map(m => m.user_id).filter(id => id !== current.recipient_id);
+          if (otherMemberIds.length) {
+            const otherUsers = await db.select({ id: schema.users.id, email: schema.users.email })
+              .from(schema.users).where(inArray(schema.users.id, otherMemberIds));
+            const recipientName = resolveUserDisplayName(recipientRow[0]);
+            for (const u of otherUsers) {
+              try {
+                await sendReducedPayoutSentEmail(u.email, g2.name, current.cycle_number, recipientName, potAmount, cycleStatus.paidCount, cycleStatus.totalCount);
+              } catch (emailError) {
+                console.error(`[RotationService] Failed to send reduced-payout notice to ${u.id} for rotation ${current.id}:`, emailError);
+              }
             }
           }
         }
@@ -544,10 +571,18 @@ export const rotationService = {
    * so the next attempt (daily catch-up) can retry it.
    */
   async advanceIfCycleComplete(groupId: string, cycleNumber: number, actorId = 'system') {
-    const cycleContributions = await db.select().from(schema.contributions)
-      .where(and(eq(schema.contributions.group_id, groupId), eq(schema.contributions.cycle_number, cycleNumber)));
-    const allPaid = cycleContributions.length > 0 && cycleContributions.every(c => c.payment_status === 'paid');
-    if (!allPaid) return null;
+    // Section [new] — resolved means every contribution has reached a
+    // TERMINAL state (paid, defaulted, or missed), not merely "all paid".
+    // A cycle with one member's contribution genuinely defaulted (its
+    // grace-period retry already ran and also failed) or missed must still
+    // pay out — the pot is simply short by that member's share — rather
+    // than blocking the recipient's payout indefinitely. Contributions
+    // still 'pending_default' (awaiting their single retry) correctly
+    // continue to block until that retry resolves one way or the other.
+    // See contributionService.getCycleResolutionStatus.
+    const { contributionService } = await import('./contributionService.js');
+    const cycleStatus = await contributionService.getCycleResolutionStatus(groupId, cycleNumber);
+    if (!cycleStatus.resolved) return null;
 
     const claimResult = await db.update(schema.rotations)
       .set({ payout_status: 'processing' })
@@ -571,6 +606,108 @@ export const rotationService = {
       await db.update(schema.rotations).set({ payout_status: 'pending' })
         .where(and(eq(schema.rotations.group_id, groupId), eq(schema.rotations.cycle_number, cycleNumber)));
       throw error;
+    }
+  },
+
+  /**
+   * Requirement 1 — the shared per-group/cycle check used by BOTH the
+   * frequent (6x/day) payout catch-up sweep (scheduledJobs.payoutCatchUpSweep)
+   * and the immediate login-triggered check
+   * (advancePendingPayoutsForRecipient): try to advance the cycle if it's
+   * now resolved, and if it's still NOT resolved but the scheduled payout
+   * date has already arrived, send the one-time "your payout is delayed,
+   * here's why" notice instead. Both callers get identical behaviour.
+   */
+  async checkAndAdvanceGroupPayout(groupId: string, cycleNumber: number): Promise<{ advanced: boolean; delayNoticeSent: boolean }> {
+    const result = await this.advanceIfCycleComplete(groupId, cycleNumber);
+    if (result && !result.transferFailed) return { advanced: true, delayNoticeSent: false };
+
+    const delayNoticeSent = await this.sendPayoutDelayNoticeIfDue(groupId, cycleNumber);
+    return { advanced: false, delayNoticeSent };
+  },
+
+  /**
+   * Requirement 2 — "we send an email to members telling them of payout
+   * delay and why": once a rotation's scheduled_payout_date has arrived but
+   * the cycle still isn't resolved (not every member has paid/defaulted/
+   * missed yet), tell every active member how many have paid so far and
+   * that the payout is delayed pending the outstanding retry — exactly
+   * once per rotation, deduplicated via payout_delay_notice_sent_at (same
+   * dedicated-column pattern as upcoming_payout_reminder_sent_at).
+   */
+  async sendPayoutDelayNoticeIfDue(groupId: string, cycleNumber: number): Promise<boolean> {
+    const rotationRows = await db.select().from(schema.rotations)
+      .where(and(eq(schema.rotations.group_id, groupId), eq(schema.rotations.cycle_number, cycleNumber))).limit(1);
+    if (!rotationRows.length) return false;
+    const rotation = rotationRows[0];
+    if (rotation.payout_status !== 'pending') return false;
+    if (rotation.payout_delay_notice_sent_at) return false;
+    if (rotation.scheduled_payout_date.getTime() > Date.now()) return false;
+
+    const { contributionService } = await import('./contributionService.js');
+    const cycleStatus = await contributionService.getCycleResolutionStatus(groupId, cycleNumber);
+    if (cycleStatus.totalCount === 0 || cycleStatus.resolved) return false;
+
+    const groupRow = await db.select({ name: schema.savingsGroups.name })
+      .from(schema.savingsGroups).where(eq(schema.savingsGroups.id, groupId)).limit(1);
+    if (!groupRow.length) return false;
+
+    const activeMembers = await db.select().from(schema.memberships)
+      .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')));
+    const memberUsers = activeMembers.length
+      ? await db.select({ id: schema.users.id, email: schema.users.email })
+        .from(schema.users).where(inArray(schema.users.id, activeMembers.map(m => m.user_id)))
+      : [];
+
+    for (const u of memberUsers) {
+      try {
+        await sendPayoutDelayedEmail(u.email, groupRow[0].name, cycleNumber, cycleStatus.paidCount, cycleStatus.totalCount);
+      } catch (emailError) {
+        console.error(`[RotationService] Failed to send payout delay notice to ${u.id} for rotation ${rotation.id}:`, emailError);
+      }
+      await notificationService.create({
+        userId: u.id, type: 'payout_delayed',
+        title: 'Payout Delayed',
+        message: `Cycle ${cycleNumber}'s payout in "${groupRow[0].name}" is delayed — only ${cycleStatus.paidCount} of ${cycleStatus.totalCount} members have paid so far. Any outstanding payment will be retried once before the payout proceeds.`,
+      });
+    }
+
+    await db.update(schema.rotations).set({ payout_delay_notice_sent_at: new Date() }).where(eq(schema.rotations.id, rotation.id));
+    return true;
+  },
+
+  /**
+   * Requirement 1 — "Make this job also run immediately the user due the
+   * payout logs into their account": called from authService.login right
+   * after a successful sign-in. Best-effort/non-throwing — a failure here
+   * must never block login. Finds every group where this user is the
+   * recipient of a still-'pending' rotation and re-checks it immediately,
+   * so e.g. a Stripe payout-verification self-heal or a contribution retry
+   * that resolved just before this login is acted on right away instead of
+   * waiting for the next scheduled catch-up sweep.
+   */
+  async advancePendingPayoutsForRecipient(userId: string): Promise<void> {
+    const pendingRotations = await db.select({ group_id: schema.rotations.group_id, cycle_number: schema.rotations.cycle_number })
+      .from(schema.rotations)
+      .where(and(eq(schema.rotations.recipient_id, userId), eq(schema.rotations.payout_status, 'pending')));
+    if (!pendingRotations.length) return;
+
+    const groupIds = [...new Set(pendingRotations.map(r => r.group_id))];
+    // Never re-check a permanently closed/deleted group's payout — closing
+    // a group only flips savingsGroups.status, it never touches this
+    // rotation row (see groupService.close), so without this filter a
+    // stale 'pending' rotation from a closed group could be acted on here.
+    const closedOrExpired = await db.select({ id: schema.savingsGroups.id }).from(schema.savingsGroups)
+      .where(and(inArray(schema.savingsGroups.id, groupIds), inArray(schema.savingsGroups.status, ['closed', 'expired'])));
+    const excludedGroupIds = new Set(closedOrExpired.map(g => g.id));
+
+    for (const r of pendingRotations) {
+      if (excludedGroupIds.has(r.group_id)) continue;
+      try {
+        await this.checkAndAdvanceGroupPayout(r.group_id, r.cycle_number);
+      } catch (error) {
+        console.error(`[RotationService] advancePendingPayoutsForRecipient failed for group ${r.group_id} cycle ${r.cycle_number}:`, error);
+      }
     }
   },
 

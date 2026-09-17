@@ -999,15 +999,52 @@ export async function monthlyGenerateContributionSchedule(): Promise<void> {
  */
 export async function monthlyAdvanceRotation(): Promise<void> {
   await runJob('monthly_advance_rotation', async () => {
-    const activeGroups = await db.select().from(schema.savingsGroups)
-      .where(eq(schema.savingsGroups.status, 'active'));
+    const { advanced, total } = await sweepPendingGroupPayouts();
+    console.log(`[Job] Rotation advance: ${advanced}/${total} active groups advanced.`);
+  });
+}
 
-    let advanced = 0;
-    for (const group of activeGroups) {
-      const result = await rotationService.advanceIfCycleComplete(group.id, group.current_cycle);
-      if (result) advanced++;
-    }
-    console.log(`[Job] Rotation advance: ${advanced}/${activeGroups.length} active groups advanced.`);
+/**
+ * Requirement 1 — shared loop behind both monthlyAdvanceRotation (the
+ * original once-a-day safety net, kept for backward-compatible job_runs
+ * continuity) and payoutCatchUpSweep below (the new, much more frequent
+ * sweep). For every active group, try to advance its current cycle's
+ * payout if resolved (see rotationService.checkAndAdvanceGroupPayout), and
+ * otherwise send the one-time "payout delayed" notice if the scheduled
+ * date has already passed. Idempotent/concurrency-safe — see
+ * advanceIfCycleComplete's own doc comment — so running this many times a
+ * day only finds gaps sooner, it can never double-pay or double-notify.
+ */
+async function sweepPendingGroupPayouts(): Promise<{ advanced: number; delayNoticesSent: number; total: number }> {
+  const activeGroups = await db.select().from(schema.savingsGroups)
+    .where(eq(schema.savingsGroups.status, 'active'));
+
+  let advanced = 0;
+  let delayNoticesSent = 0;
+  for (const group of activeGroups) {
+    const result = await rotationService.checkAndAdvanceGroupPayout(group.id, group.current_cycle);
+    if (result.advanced) advanced++;
+    if (result.delayNoticeSent) delayNoticesSent++;
+  }
+  return { advanced, delayNoticesSent, total: activeGroups.length };
+}
+
+/**
+ * Requirement 1 — "a daily (very regular — more than twice a day)
+ * idempotent catch-up job which identifies all instances/groups where
+ * member contributions have been collected ... and payout hasn't been
+ * made ... and then makes the payment immediately". Runs 6x/day (see
+ * inProcessScheduler.ts's registration of this job, one per time slot via
+ * `jobNameSuffix` — mirroring dailyBillingActiveGroupReconciliation's
+ * established N-times-per-day pattern) so a cycle that becomes resolved
+ * between runs (e.g. a grace-period retry completing, or a Stripe
+ * payout-verification self-heal) is picked up within hours instead of
+ * waiting up to 24h for monthlyAdvanceRotation's once-daily run.
+ */
+export async function payoutCatchUpSweep(jobNameSuffix = ''): Promise<void> {
+  await runJob(`payout_catch_up_sweep${jobNameSuffix}`, async () => {
+    const { advanced, delayNoticesSent, total } = await sweepPendingGroupPayouts();
+    console.log(`[Job] Payout catch-up sweep: ${advanced}/${total} active groups advanced, ${delayNoticesSent} delay notice(s) sent.`);
   });
 }
 
