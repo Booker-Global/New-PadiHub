@@ -78,7 +78,31 @@ async function transferCyclePotToRecipient(
 
   try {
     if (group.payment_provider === 'stripe') {
-      if (!recipient?.stripe_connected_account_id || !recipient.payout_verified_at) {
+      if (!recipient?.stripe_connected_account_id) {
+        await onFailure('Recipient has no verified Stripe Express payout account.');
+        return { success: false };
+      }
+
+      // Self-heal before giving up: `payout_verified_at` is normally set by
+      // the `account.updated` webhook, but that event can be missed entirely
+      // (Connect-events delivery not configured for this webhook endpoint,
+      // an outage, out-of-order delivery, etc.) — previously this was only
+      // ever re-checked live via getPaymentEligibility (dashboard reload,
+      // the verify-payout endpoint, or the webhook itself), NEVER at actual
+      // payout time. That left a cycle's pot stuck retrying "no verified
+      // account" forever even after Stripe's own dashboard showed the
+      // recipient's account fully able to receive payouts. See
+      // paymentEligibilityService.refreshStripePayoutVerification.
+      let payoutVerified = Boolean(recipient.payout_verified_at);
+      if (!payoutVerified) {
+        const { refreshStripePayoutVerification } = await import('./paymentEligibilityService.js');
+        payoutVerified = await refreshStripePayoutVerification({
+          id:                          rotation.recipient_id,
+          payout_verified_at:          recipient.payout_verified_at,
+          stripe_connected_account_id: recipient.stripe_connected_account_id,
+        });
+      }
+      if (!payoutVerified) {
         await onFailure('Recipient has no verified Stripe Express payout account.');
         return { success: false };
       }
