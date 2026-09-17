@@ -402,6 +402,13 @@ export const rotations = mysqlTable('rotations', {
   // the actual payout and previously caused members to be emailed about a
   // payout that was "way too early".
   upcoming_payout_reminder_sent_at: timestamp('upcoming_payout_reminder_sent_at'),
+  // Dedicated throttle/dedup column: the "your payout is delayed, here's
+  // why" group-wide notice must only go out once per rotation, the first
+  // time the frequent payout catch-up sweep (or the login-triggered check)
+  // finds scheduled_payout_date has already arrived but the cycle still
+  // isn't fully resolved (some member hasn't paid/defaulted/missed yet) —
+  // see rotationService.sendPayoutDelayNoticeIfDue.
+  payout_delay_notice_sent_at: timestamp('payout_delay_notice_sent_at'),
   created_at:                timestamp('created_at').notNull().defaultNow(),
   updated_at:                timestamp('updated_at').notNull().defaultNow().onUpdateNow(),
 }, (t) => ({

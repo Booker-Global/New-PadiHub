@@ -190,6 +190,7 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
     { column: 'provider_transfer_reference', sqlType: 'VARCHAR(255) NULL' },
     { column: 'completed_date',              sqlType: 'TIMESTAMP NULL' },
     { column: 'upcoming_payout_reminder_sent_at', sqlType: 'TIMESTAMP NULL' },
+    { column: 'payout_delay_notice_sent_at',      sqlType: 'TIMESTAMP NULL' },
   ],
   subscriptions: [
     { column: 'provider_subscription_id', sqlType: 'VARCHAR(255) NULL' },
