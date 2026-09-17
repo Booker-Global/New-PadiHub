@@ -5,6 +5,7 @@ const mockState = vi.hoisted(() => ({
   updatePayloads: [] as unknown[],
   flutterwaveCreateTransfer: vi.fn(),
   stripeCreateTransfer: vi.fn(),
+  refreshStripePayoutVerification: vi.fn(),
   notificationCreate: vi.fn(),
   trustScoreIncrease: vi.fn(),
   monitoringLogError: vi.fn(),
@@ -76,6 +77,9 @@ vi.mock('../services/contributionService.js', () => ({
     getCycleResolutionStatus: mockState.getCycleResolutionStatus,
   },
 }));
+vi.mock('../services/paymentEligibilityService.js', () => ({
+  refreshStripePayoutVerification: mockState.refreshStripePayoutVerification,
+}));
 vi.mock('../lib/constants.js', () => ({
   TRUST_SCORE_DELTA_CYCLE_COMPLETED: 3,
   resolveUserDisplayName: (user: { display_name?: string | null; first_name: string; last_name: string }) => user.display_name ?? `${user.first_name} ${user.last_name}`,
@@ -92,6 +96,7 @@ describe('rotationService', () => {
     vi.clearAllMocks();
     mockState.getCyclePotAmount.mockResolvedValue(3000);
     mockState.computeNextPayoutDate.mockReturnValue(new Date('2026-10-01T00:00:00Z'));
+    mockState.refreshStripePayoutVerification.mockResolvedValue(false);
   });
 
   describe('getCurrent', () => {
@@ -209,6 +214,165 @@ describe('rotationService', () => {
 
       getCurrentSpy.mockRestore();
       createForCycleSpy.mockRestore();
+    });
+
+    it('should self-heal payout_verified_at via a live Stripe check before failing a transfer', async () => {
+      mockState.selectResponses.push(
+        [{
+          id: 'group-2',
+          name: 'London Circle',
+          payment_provider: 'stripe',
+          currency: 'GBP',
+          contribution_amount: '50.00',
+          current_cycle: 1,
+          current_rotation_position: 1,
+          contribution_frequency: 'monthly',
+          payout_day: 15,
+          leader_id: 'user-1',
+          full_rotations_completed: 0,
+          group_duration_type: 'indefinite',
+          group_duration_rotations: null,
+          closure_scheduled: false,
+        }],
+        [{
+          stripe_connected_account_id: 'acct_123',
+          flutterwave_payout_bank_code: null,
+          flutterwave_payout_account_number: null,
+          // Never recorded — e.g. the account.updated webhook was missed —
+          // so this must be re-checked live with Stripe rather than
+          // immediately failing the transfer.
+          payout_verified_at: null,
+          first_name: 'Ben',
+          last_name: 'Okoro',
+        }],
+        [{
+          email: 'ben@example.com',
+          display_name: null,
+          first_name: 'Ben',
+          last_name: 'Okoro',
+        }],
+        [{
+          name: 'London Circle',
+          contribution_amount: '50.00',
+          currency: 'GBP',
+          leader_id: 'user-1',
+        }],
+        [
+          { user_id: 'user-1', rotation_order: 1, status: 'active' },
+          { user_id: 'user-2', rotation_order: 2, status: 'active' },
+        ],
+      );
+      mockState.refreshStripePayoutVerification.mockResolvedValue(true);
+      mockState.stripeCreateTransfer.mockResolvedValue({
+        providerTransferReference: 'tr_123',
+        status: 'completed',
+      });
+      mockState.getCycleResolutionStatus.mockResolvedValue({
+        totalCount: 2,
+        paidCount: 2,
+        resolvedFailureCount: 0,
+        unresolvedCount: 0,
+        resolved: true,
+        hadAnyFailure: false,
+        collectedAmount: 100,
+      });
+
+      const currentRotation = {
+        id: 'rotation-5',
+        group_id: 'group-2',
+        cycle_number: 1,
+        recipient_id: 'user-1',
+        payout_status: 'processing',
+        provider_transfer_reference: null,
+      };
+      const getCurrentSpy = vi.spyOn(rotationService, 'getCurrent').mockResolvedValue(currentRotation as never);
+      const createForCycleSpy = vi.spyOn(rotationService, 'createForCycle').mockResolvedValue('rotation-6');
+
+      const result = await rotationService.advance('group-2', 'actor-1');
+
+      expect(mockState.refreshStripePayoutVerification).toHaveBeenCalledWith({
+        id: 'user-1',
+        payout_verified_at: null,
+        stripe_connected_account_id: 'acct_123',
+      });
+      expect(mockState.stripeCreateTransfer).toHaveBeenCalledWith({
+        recipientAccountId: 'acct_123',
+        amount: 10000,
+        currency: 'GBP',
+        rotationId: 'rotation-5',
+        description: 'PadiHub payout — London Circle cycle 1',
+      });
+      expect(mockState.updatePayloads).toContainEqual({
+        payout_status: 'completed',
+        completed_date: expect.any(Date),
+        provider_transfer_reference: 'tr_123',
+      });
+      expect(result).toEqual({ nextCycle: 2, nextRecipient: 'user-2' });
+
+      getCurrentSpy.mockRestore();
+      createForCycleSpy.mockRestore();
+    });
+
+    it('should fail the transfer when the live Stripe self-heal check still finds an unverified account', async () => {
+      mockState.selectResponses.push(
+        [{
+          id: 'group-3',
+          name: 'Manchester Circle',
+          payment_provider: 'stripe',
+          currency: 'GBP',
+          contribution_amount: '50.00',
+          current_cycle: 1,
+          current_rotation_position: 1,
+          contribution_frequency: 'monthly',
+          payout_day: 15,
+          leader_id: 'user-1',
+          full_rotations_completed: 0,
+          group_duration_type: 'indefinite',
+          group_duration_rotations: null,
+          closure_scheduled: false,
+        }],
+        [{
+          stripe_connected_account_id: 'acct_456',
+          flutterwave_payout_bank_code: null,
+          flutterwave_payout_account_number: null,
+          payout_verified_at: null,
+          first_name: 'Cara',
+          last_name: 'Ade',
+        }],
+      );
+      mockState.refreshStripePayoutVerification.mockResolvedValue(false);
+      mockState.getCycleResolutionStatus.mockResolvedValue({
+        totalCount: 2,
+        paidCount: 2,
+        resolvedFailureCount: 0,
+        unresolvedCount: 0,
+        resolved: true,
+        hadAnyFailure: false,
+        collectedAmount: 100,
+      });
+
+      const currentRotation = {
+        id: 'rotation-7',
+        group_id: 'group-3',
+        cycle_number: 1,
+        recipient_id: 'user-1',
+        payout_status: 'processing',
+        provider_transfer_reference: null,
+      };
+      const getCurrentSpy = vi.spyOn(rotationService, 'getCurrent').mockResolvedValue(currentRotation as never);
+
+      const result = await rotationService.advance('group-3', 'actor-1');
+
+      expect(mockState.refreshStripePayoutVerification).toHaveBeenCalledWith({
+        id: 'user-1',
+        payout_verified_at: null,
+        stripe_connected_account_id: 'acct_456',
+      });
+      expect(mockState.stripeCreateTransfer).not.toHaveBeenCalled();
+      expect(result).toEqual({ nextCycle: 1, nextRecipient: 'user-1', transferFailed: true });
+      expect(mockState.updatePayloads).toContainEqual({ payout_status: 'failed' });
+
+      getCurrentSpy.mockRestore();
     });
 
     it('should mark current rotation as completed', async () => {
