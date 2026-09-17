@@ -883,10 +883,12 @@ export const membershipService = {
       return { action: 'compressed' as const, newDefaultCount };
     }
 
-    // Retained — tell everyone (including the defaulting member) the
-    // payout amount/schedule is unchanged for now, and that recovering the
-    // specific missed amount from the defaulting member is the group's/
-    // owner's own responsibility to pursue, not the platform's.
+    // Retained — tell everyone (including the defaulting member) this
+    // cycle's payout will be reduced by the defaulted amount (the pot is
+    // simply short — see rotationService.getCycleResolutionStatus), that
+    // future cycles/contribution amounts are unaffected, and that
+    // recovering the specific missed amount from the defaulting member is
+    // the group's/owner's own responsibility to pursue, not the platform's.
     const contributionRows = await db.select({ amount_due: schema.contributions.amount_due, cycle_number: schema.contributions.cycle_number })
       .from(schema.contributions).where(eq(schema.contributions.id, contributionId)).limit(1);
     const contribution = contributionRows[0];
@@ -915,7 +917,7 @@ export const membershipService = {
       await notificationService.create({
         userId: m.user_id, type: 'contribution_default_retained',
         title: 'Contribution Default',
-        message: `${defaultingName} defaulted on their contribution for cycle ${contribution?.cycle_number ?? '?'}. They remain in the group and the payout schedule/amount is unchanged for now. Recovering the missed amount is the group's own responsibility.`,
+        message: `${defaultingName} defaulted on their contribution for cycle ${contribution?.cycle_number ?? '?'}. They remain in the group. This cycle's payout will be reduced by the defaulted amount and sent shortly. Recovering the missed amount is the group's own responsibility.`,
       });
     }
 
