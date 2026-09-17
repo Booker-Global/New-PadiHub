@@ -6,7 +6,7 @@ import Stripe from 'stripe';
 import {
   PaymentProviderConfigError,
   type IPaymentProvider, type CreateCustomerResult, type SavePaymentMethodResult,
-  type ChargeResult, type TransferResult, type PayoutResult, type SubscriptionResult, type WebhookResult,
+  type ChargeResult, type TransferResult, type SubscriptionResult, type WebhookResult,
 } from './PaymentProviderInterface.js';
 
 function getStripe(): Stripe {
@@ -140,37 +140,15 @@ export class StripeProvider implements IPaymentProvider {
       },
       { idempotencyKey: `transfer-${params.rotationId}` },
     );
+    // That's the whole payout — once funds land in the recipient's connected
+    // account balance, Stripe automatically pays them out to their linked
+    // external bank account on its own schedule (confirmed with Stripe
+    // support: manually calling payouts.create() here is unnecessary and can
+    // fail for Express accounts that only have the `transfers` capability,
+    // which is all createConnectedAccount() below requests). Track delivery
+    // to the bank via the connected account's own `payout.paid` webhook
+    // event rather than triggering a payout manually.
     return { providerTransferReference: transfer.id, status: 'completed' };
-  }
-
-  /**
-   * Step 2 of the contribution-to-payout loop — instantly push the funds
-   * createTransfer() just moved into the recipient's connected account
-   * balance out to their linked external bank account. Must run "as" the
-   * connected account (the `stripeAccount` request option below), NOT the
-   * platform account, or Stripe rejects the call/pays out the platform's own
-   * balance instead of the recipient's.
-   */
-  async createPayout(params: {
-    connectedAccountId: string; amount: number; currency: string;
-    rotationId: string; description: string;
-  }): Promise<PayoutResult> {
-    const stripe = getStripe();
-    const payout = await stripe.payouts.create(
-      {
-        amount:      params.amount,
-        currency:    params.currency.toLowerCase(),
-        description: params.description,
-        metadata:    { rotation_id: params.rotationId },
-      },
-      {
-        idempotencyKey: `payout-${params.rotationId}`,
-        stripeAccount:  params.connectedAccountId,
-      },
-    );
-    const status = payout.status === 'canceled' || payout.status === 'failed' ? 'failed'
-      : payout.status === 'paid' ? 'completed' : 'pending';
-    return { providerPayoutReference: payout.id, status };
   }
 
   async createSubscription(params: {

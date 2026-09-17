@@ -14,7 +14,7 @@ import {
 const fadeUp = { hidden: { opacity: 0, y: 16 }, visible: { opacity: 1, y: 0, transition: { duration: 0.4, ease: 'easeOut' as const } } };
 const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.06 } } };
 
-type Section = 'dashboard' | 'users' | 'groups' | 'subscriptions' | 'jobs' | 'tickets' | 'audit' | 'announcements';
+type Section = 'dashboard' | 'users' | 'groups' | 'subscriptions' | 'jobs' | 'errors' | 'tickets' | 'audit' | 'announcements';
 
 const navItems: { id: Section; icon: typeof Users; label: string }[] = [
   { id: 'dashboard',     icon: BarChart2,    label: 'Dashboard' },
@@ -22,6 +22,7 @@ const navItems: { id: Section; icon: typeof Users; label: string }[] = [
   { id: 'groups',        icon: PiggyBank,    label: 'Groups' },
   { id: 'subscriptions', icon: CreditCard,   label: 'Subscriptions' },
   { id: 'jobs',          icon: RefreshCw,    label: 'Scheduled Jobs' },
+  { id: 'errors',        icon: AlertTriangle, label: 'Error Logs' },
   { id: 'tickets',       icon: HelpCircle,   label: 'Support Tickets' },
   { id: 'audit',         icon: Activity,     label: 'Audit Log' },
   { id: 'announcements', icon: Bell,         label: 'Announcements' },
@@ -123,6 +124,15 @@ interface JobRun {
   started_at: string;
   completed_at: string | null;
   error_message: string | null;
+}
+
+interface SystemErrorRow {
+  id: string;
+  type: string;
+  endpoint: string | null;
+  message: string;
+  resolved: boolean;
+  created_at: string;
 }
 
 interface AdminUserRow {
@@ -429,6 +439,14 @@ export default function AdminPortal() {
   const [jobsLoading, setJobsLoading] = useState(true);
   const [jobsError, setJobsError] = useState<string | null>(null);
 
+  // System Errors — surfaces the actual failure reason behind things like a
+  // recipient's "Payout Delayed" notification (e.g. a Stripe transfer error),
+  // which previously was only ever visible by querying system_errors directly.
+  const [systemErrors, setSystemErrors] = useState<SystemErrorRow[]>([]);
+  const [systemErrorsLoading, setSystemErrorsLoading] = useState(true);
+  const [systemErrorsError, setSystemErrorsError] = useState<string | null>(null);
+  const [resolvingErrorId, setResolvingErrorId] = useState<string | null>(null);
+
   // Gate the whole page on a valid, admin-role session. The server already
   // rejects every real /api/admin/* and /api/system/{jobs,errors} call with
   // 403 for non-admins (requireRole('admin')) — this just stops the page
@@ -461,6 +479,28 @@ export default function AdminPortal() {
       .catch((error: unknown) => setJobsError(error instanceof Error ? error.message : 'Unable to load scheduled job status right now.'))
       .finally(() => setJobsLoading(false));
   }, [session]);
+
+  const loadSystemErrors = useCallback(() => {
+    if (!session) return;
+    setSystemErrorsLoading(true);
+    apiFetch<SystemErrorRow[]>('/api/system/errors', session)
+      .then((data) => { setSystemErrors(data); setSystemErrorsError(null); })
+      .catch((error: unknown) => setSystemErrorsError(error instanceof Error ? error.message : 'Unable to load error logs right now.'))
+      .finally(() => setSystemErrorsLoading(false));
+  }, [session]);
+
+  const resolveSystemError = async (row: SystemErrorRow) => {
+    if (!session) return;
+    setResolvingErrorId(row.id);
+    try {
+      await apiFetch(`/api/system/errors/${row.id}/resolve`, session, { method: 'PUT' });
+      setSystemErrors((prev) => prev.filter((e) => e.id !== row.id));
+    } catch (error: unknown) {
+      setSystemErrorsError(error instanceof Error ? error.message : 'Unable to resolve this error right now.');
+    } finally {
+      setResolvingErrorId(null);
+    }
+  };
 
   const loadDashboard = useCallback(() => {
     if (!session) return;
@@ -532,9 +572,10 @@ export default function AdminPortal() {
     if (section === 'users') loadUsers();
     if (section === 'groups') loadGroups();
     if (section === 'subscriptions') loadSubscriptions();
+    if (section === 'errors') loadSystemErrors();
     if (section === 'tickets') loadTickets();
     if (section === 'audit') loadAuditLog();
-  }, [authStatus, section, loadJobRuns, loadDashboard, loadUsers, loadGroups, loadSubscriptions, loadTickets, loadAuditLog]);
+  }, [authStatus, section, loadJobRuns, loadSystemErrors, loadDashboard, loadUsers, loadGroups, loadSubscriptions, loadTickets, loadAuditLog]);
 
   const suspendUser = async (user: AdminUserRow) => {
     if (!session) return;
@@ -1236,6 +1277,73 @@ export default function AdminPortal() {
                           <td className="px-5 py-3"><span className="text-xs text-gray-400 whitespace-nowrap">{formatTimestamp(run.started_at)}</span></td>
                           <td className="px-5 py-3"><span className="text-xs text-gray-400 whitespace-nowrap">{formatTimestamp(run.completed_at)}</span></td>
                           <td className="px-5 py-3"><span className="text-xs text-red-500">{run.error_message || '—'}</span></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </MotionDiv>
+              </div>
+            )}
+
+            {/* Error Logs — sourced from /api/system/errors (system_errors table), so
+                the actual reason behind things like a recipient's "Payout Delayed"
+                notification (e.g. the specific Stripe/Flutterwave transfer error) is
+                visible from the admin portal instead of requiring direct DB access. */}
+            {section === 'errors' && (
+              <div className="space-y-5">
+                <MotionDiv variants={fadeUp} className="flex items-center justify-between">
+                  <div>
+                    <h1 className="text-2xl font-extrabold text-gray-900" style={{ fontFamily: 'Nunito, sans-serif' }}>Error Logs</h1>
+                    <p className="text-gray-400 text-sm mt-1">Unresolved system errors from the last 24 hours — payment, webhook, email and scheduled-job failures</p>
+                  </div>
+                  <button
+                    onClick={loadSystemErrors}
+                    disabled={systemErrorsLoading}
+                    className="flex items-center gap-2 px-4 py-2 rounded-2xl text-xs font-bold text-white flex-shrink-0 disabled:opacity-60"
+                    style={{ background: 'linear-gradient(135deg, #2EAF6F, #1d8a55)' }}
+                    type="button"
+                  >
+                    <RefreshCw size={14} className={systemErrorsLoading ? 'animate-spin' : ''} /> Refresh
+                  </button>
+                </MotionDiv>
+
+                {systemErrorsError && (
+                  <MotionDiv variants={fadeUp} className="rounded-2xl p-4 flex items-start gap-3" style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)' }}>
+                    <AlertTriangle size={18} style={{ color: '#EF4444', flexShrink: 0 }} />
+                    <p className="text-sm font-bold" style={{ color: '#EF4444' }}>{systemErrorsError}</p>
+                  </MotionDiv>
+                )}
+
+                <MotionDiv variants={fadeUp} className="rounded-3xl bg-white overflow-hidden overflow-x-auto" style={{ border: '1px solid #F3F4F6', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
+                  <table className="w-full min-w-[880px]">
+                    <thead>
+                      <tr className="border-b border-gray-50">
+                        {['Type', 'Endpoint', 'Message', 'Occurred', 'Action'].map(h => (
+                          <th key={h} className="text-left text-xs font-bold text-gray-400 px-5 py-3 whitespace-nowrap">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {!systemErrorsLoading && systemErrors.length === 0 && !systemErrorsError && (
+                        <tr><td colSpan={5} className="px-5 py-8 text-center text-sm text-gray-400">No unresolved errors in the last 24 hours.</td></tr>
+                      )}
+                      {systemErrors.map((err) => (
+                        <tr key={err.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50 transition-colors">
+                          <td className="px-5 py-3"><span className="text-xs font-bold text-gray-900 capitalize whitespace-nowrap">{err.type.replace(/_/g, ' ')}</span></td>
+                          <td className="px-5 py-3"><span className="text-xs text-gray-400 whitespace-nowrap">{err.endpoint ?? '—'}</span></td>
+                          <td className="px-5 py-3"><span className="text-xs text-red-500">{err.message}</span></td>
+                          <td className="px-5 py-3"><span className="text-xs text-gray-400 whitespace-nowrap">{formatTimestamp(err.created_at)}</span></td>
+                          <td className="px-5 py-3">
+                            <button
+                              onClick={() => resolveSystemError(err)}
+                              disabled={resolvingErrorId === err.id}
+                              type="button"
+                              className="text-xs font-bold px-3 py-1.5 rounded-lg whitespace-nowrap disabled:opacity-60"
+                              style={{ color: '#2EAF6F', background: 'rgba(46,175,111,0.1)' }}
+                            >
+                              {resolvingErrorId === err.id ? 'Resolving…' : 'Mark resolved'}
+                            </button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
