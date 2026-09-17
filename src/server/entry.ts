@@ -334,6 +334,7 @@ app.get('/api/legal/privacy', legalController.privacy);
 // ── Monitoring ──────────────────────────────────────────────────────────[...]
 app.get('/api/system/health', monitoringController.health);
 app.get('/api/system/errors', authenticate, requireRole('admin'), monitoringController.errors);
+app.put('/api/system/errors/:id/resolve', authenticate, requireRole('admin'), monitoringController.resolveError);
 app.get('/api/system/jobs',   authenticate, requireRole('admin'), monitoringController.jobs);
 
 // ── API Documentation ───────────────────────────────────────────────────────��[...]
