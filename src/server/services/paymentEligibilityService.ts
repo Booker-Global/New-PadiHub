@@ -57,8 +57,18 @@ async function refreshStripePayoutVerification(user: EligibilityUser): Promise<b
   if (!user.stripe_connected_account_id) return false;
 
   try {
+    // Connected accounts are created with ONLY the `transfers` capability
+    // requested (see StripeProvider.createConnectedAccount) — they receive
+    // platform-initiated transfers/payouts, never card charges of their own
+    // — so `charges_enabled` requires a charge-type capability (e.g.
+    // card_payments) that was never requested and therefore never becomes
+    // true. Gating on `chargesEnabled && payoutsEnabled` made this
+    // permanently unsatisfiable for every Stripe recipient, even once
+    // Stripe's own dashboard shows Payouts/Transfers capabilities "Active".
+    // `payoutsEnabled` alone is the correct signal for whether the account
+    // can actually receive payouts.
     const status = await getStripeProvider().getAccountStatus(user.stripe_connected_account_id);
-    if (status.chargesEnabled && status.payoutsEnabled) {
+    if (status.payoutsEnabled) {
       await db.update(schema.users)
         .set({ payout_verified_at: new Date() })
         .where(eq(schema.users.id, user.id));

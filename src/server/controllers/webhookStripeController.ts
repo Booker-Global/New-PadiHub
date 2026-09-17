@@ -483,7 +483,16 @@ async function handleStripeEvent(event: Stripe.Event) {
 
     case 'account.updated': {
       const account = event.data.object as Stripe.Account;
-      const verified = Boolean(account.charges_enabled && account.payouts_enabled);
+      // Connected accounts only ever request the `transfers` capability
+      // (see StripeProvider.createConnectedAccount) — they receive
+      // platform-initiated transfers/payouts, never card charges of their
+      // own — so `charges_enabled` requires a charge-type capability (e.g.
+      // card_payments) that is never requested and therefore never becomes
+      // true. Requiring it here made `verified` permanently unreachable for
+      // every Stripe recipient, even once Stripe's own dashboard shows
+      // Payouts/Transfers capabilities "Active". `payouts_enabled` alone is
+      // the correct signal for whether the account can receive payouts.
+      const verified = Boolean(account.payouts_enabled);
 
       // Only ever SET payout_verified_at, never clear it. `account.updated`
       // fires on any change to the connected account — including Stripe's
