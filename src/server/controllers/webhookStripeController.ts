@@ -93,7 +93,8 @@ async function handleStripeEvent(event: Stripe.Event) {
       const contributionId = pi.metadata?.contribution_id;
       if (!contributionId) break;
 
-      await contributionService.markPaid(contributionId, pi.id);
+      const chargeId = typeof pi.latest_charge === 'string' ? pi.latest_charge : pi.latest_charge?.id;
+      await contributionService.markPaid(contributionId, pi.id, undefined, undefined, chargeId);
       await createAuditLog({
         action: 'STRIPE_PAYMENT_SUCCEEDED', entity: 'contributions',
         entityId: contributionId, metadata: { paymentIntentId: pi.id },

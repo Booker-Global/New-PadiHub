@@ -36,6 +36,11 @@ export interface SavePaymentMethodResult {
 export interface ChargeResult {
   providerReference: string;
   status: 'succeeded' | 'pending' | 'failed';
+  // Stripe only — the underlying Charge ID (ch_xxx) behind the
+  // PaymentIntent, distinct from `providerReference` (pi_xxx). Needed later
+  // to fund a `source_transaction` payout transfer for this exact charge —
+  // see StripeProvider.createTransfer.
+  chargeId?: string;
 }
 
 export interface TransferResult {
@@ -87,12 +92,15 @@ export interface IPaymentProvider {
   }): Promise<ChargeResult>;
 
   /**
-   * Transfer the full pot to the rotation recipient. For Stripe, this is the
-   * whole payout: once the transfer lands in the recipient's connected
-   * account balance, Stripe automatically pays it out to their linked bank
-   * account on its own schedule — no separate manual payout call is needed
-   * (confirmed with Stripe support; a connected account's own `payout.paid`
-   * webhook event tracks delivery, not a manual trigger here).
+   * Transfer a share of a completed cycle's pot to the rotation recipient.
+   * For Stripe, this is the whole payout: once the transfer lands in the
+   * recipient's connected account balance, Stripe automatically pays it out
+   * to their linked bank account on its own schedule — no separate manual
+   * payout call is needed (confirmed with Stripe support; a connected
+   * account's own `payout.paid` webhook event tracks delivery, not a manual
+   * trigger here). A single cycle's pot may be paid out via several calls
+   * to this method — one per contribution/charge that funded it — see
+   * rotationService.transferCyclePotToRecipient.
    */
   createTransfer(params: {
     recipientAccountId: string;   // stripe_connected_account_id or flutterwave_subaccount_id
@@ -103,6 +111,22 @@ export interface IPaymentProvider {
     recipientBankCode?: string;   // Flutterwave only
     recipientAccountNumber?: string; // Flutterwave only
     recipientName?: string;       // Flutterwave only
+    // Stripe only — links this transfer to the exact charge (ch_xxx) whose
+    // funds it draws down, via Stripe's `source_transaction` param. Without
+    // it, a transfer draws from the platform's general available balance,
+    // which in live mode is subject to Stripe's standard payout-delay hold
+    // and can fail with insufficient funds even when the originating charge
+    // has long since succeeded. See StripeProvider.createTransfer.
+    sourceChargeId?: string;
+    // Stripe only — Stripe's `transfer_group`, used to tie together every
+    // transfer that makes up one logical payout (e.g. all set to the
+    // rotation ID) so they can be found/reconciled together in the Stripe
+    // dashboard/API even though each is a separate transfer object.
+    transferGroup?: string;
+    // Overrides the default `transfer-${rotationId}` idempotency key —
+    // required when a single rotation is paid out via multiple transfer
+    // calls (one per funding charge), since each needs its own unique key.
+    idempotencyKey?: string;
   }): Promise<TransferResult>;
 
   /**

@@ -19,6 +19,7 @@ const mockState = vi.hoisted(() => ({
   sendReducedPayoutSentEmail: vi.fn(),
   getCyclePotAmount: vi.fn(),
   getCycleResolutionStatus: vi.fn(),
+  getPaidContributionsForCycle: vi.fn(),
   computeNextPayoutDate: vi.fn(),
   reorderRotationByTrustScore: vi.fn(),
 }));
@@ -75,6 +76,7 @@ vi.mock('../services/contributionService.js', () => ({
   contributionService: {
     getCyclePotAmount: mockState.getCyclePotAmount,
     getCycleResolutionStatus: mockState.getCycleResolutionStatus,
+    getPaidContributionsForCycle: mockState.getPaidContributionsForCycle,
   },
 }));
 vi.mock('../services/paymentEligibilityService.js', () => ({
@@ -95,6 +97,7 @@ describe('rotationService', () => {
     mockState.updatePayloads.length = 0;
     vi.clearAllMocks();
     mockState.getCyclePotAmount.mockResolvedValue(3000);
+    mockState.getPaidContributionsForCycle.mockResolvedValue([]);
     mockState.computeNextPayoutDate.mockReturnValue(new Date('2026-10-01T00:00:00Z'));
     mockState.refreshStripePayoutVerification.mockResolvedValue(false);
   });
@@ -306,6 +309,111 @@ describe('rotationService', () => {
         payout_status: 'completed',
         completed_date: expect.any(Date),
         provider_transfer_reference: 'tr_123',
+      });
+      expect(result).toEqual({ nextCycle: 2, nextRecipient: 'user-2' });
+
+      getCurrentSpy.mockRestore();
+      createForCycleSpy.mockRestore();
+    });
+
+    it('should send one Stripe transfer per funding charge, linked via source_transaction', async () => {
+      mockState.selectResponses.push(
+        [{
+          id: 'group-2b',
+          name: 'Bristol Circle',
+          payment_provider: 'stripe',
+          currency: 'GBP',
+          contribution_amount: '50.00',
+          current_cycle: 1,
+          current_rotation_position: 1,
+          contribution_frequency: 'monthly',
+          payout_day: 15,
+          leader_id: 'user-1',
+          full_rotations_completed: 0,
+          group_duration_type: 'indefinite',
+          group_duration_rotations: null,
+          closure_scheduled: false,
+        }],
+        [{
+          stripe_connected_account_id: 'acct_789',
+          flutterwave_payout_bank_code: null,
+          flutterwave_payout_account_number: null,
+          payout_verified_at: new Date('2026-09-01T00:00:00Z'),
+          first_name: 'Dee',
+          last_name: 'Adams',
+        }],
+        [{
+          email: 'dee@example.com',
+          display_name: null,
+          first_name: 'Dee',
+          last_name: 'Adams',
+        }],
+        [{
+          name: 'Bristol Circle',
+          contribution_amount: '50.00',
+          currency: 'GBP',
+          leader_id: 'user-1',
+        }],
+        [
+          { user_id: 'user-1', rotation_order: 1, status: 'active' },
+          { user_id: 'user-2', rotation_order: 2, status: 'active' },
+        ],
+      );
+      mockState.getCycleResolutionStatus.mockResolvedValue({
+        totalCount: 2,
+        paidCount: 2,
+        resolvedFailureCount: 0,
+        unresolvedCount: 0,
+        resolved: true,
+        hadAnyFailure: false,
+        collectedAmount: 100,
+      });
+      mockState.getPaidContributionsForCycle.mockResolvedValue([
+        { id: 'contrib-1', memberId: 'user-1', amountPaidMinorUnits: 5000, providerChargeId: 'ch_111' },
+        { id: 'contrib-2', memberId: 'user-2', amountPaidMinorUnits: 5000, providerChargeId: 'ch_222' },
+      ]);
+      mockState.stripeCreateTransfer
+        .mockResolvedValueOnce({ providerTransferReference: 'tr_from_ch_111', status: 'completed' })
+        .mockResolvedValueOnce({ providerTransferReference: 'tr_from_ch_222', status: 'completed' });
+
+      const currentRotation = {
+        id: 'rotation-5b',
+        group_id: 'group-2b',
+        cycle_number: 1,
+        recipient_id: 'user-1',
+        payout_status: 'processing',
+        provider_transfer_reference: null,
+      };
+      const getCurrentSpy = vi.spyOn(rotationService, 'getCurrent').mockResolvedValue(currentRotation as never);
+      const createForCycleSpy = vi.spyOn(rotationService, 'createForCycle').mockResolvedValue('rotation-6b');
+
+      const result = await rotationService.advance('group-2b', 'actor-1');
+
+      expect(mockState.stripeCreateTransfer).toHaveBeenNthCalledWith(1, {
+        recipientAccountId: 'acct_789',
+        amount: 5000,
+        currency: 'GBP',
+        rotationId: 'rotation-5b',
+        description: 'PadiHub payout — Bristol Circle cycle 1',
+        sourceChargeId: 'ch_111',
+        transferGroup: 'rotation-5b',
+        idempotencyKey: 'transfer-rotation-5b-contrib-1',
+      });
+      expect(mockState.stripeCreateTransfer).toHaveBeenNthCalledWith(2, {
+        recipientAccountId: 'acct_789',
+        amount: 5000,
+        currency: 'GBP',
+        rotationId: 'rotation-5b',
+        description: 'PadiHub payout — Bristol Circle cycle 1',
+        sourceChargeId: 'ch_222',
+        transferGroup: 'rotation-5b',
+        idempotencyKey: 'transfer-rotation-5b-contrib-2',
+      });
+      expect(mockState.stripeCreateTransfer).toHaveBeenCalledTimes(2);
+      expect(mockState.updatePayloads).toContainEqual({
+        payout_status: 'completed',
+        completed_date: expect.any(Date),
+        provider_transfer_reference: 'tr_from_ch_111,tr_from_ch_222',
       });
       expect(result).toEqual({ nextCycle: 2, nextRecipient: 'user-2' });
 
