@@ -122,12 +122,21 @@ export class StripeProvider implements IPaymentProvider {
     );
     const status = intent.status === 'succeeded' ? 'succeeded'
       : intent.status === 'requires_action' ? 'pending' : 'failed';
-    return { providerReference: intent.id, status };
+    // `latest_charge` is the underlying Charge ID (ch_xxx) — always present
+    // as a plain string ID once the PaymentIntent has actually attempted a
+    // charge (no expand needed). Captured so this contribution's own share
+    // of a later payout can be moved via a `source_transaction` transfer
+    // tied to this exact charge — see createTransfer below.
+    const chargeId = typeof intent.latest_charge === 'string'
+      ? intent.latest_charge
+      : intent.latest_charge?.id;
+    return { providerReference: intent.id, status, chargeId };
   }
 
   async createTransfer(params: {
     recipientAccountId: string; amount: number; currency: string;
     rotationId: string; description: string;
+    sourceChargeId?: string; transferGroup?: string; idempotencyKey?: string;
   }): Promise<TransferResult> {
     const stripe = getStripe();
     const transfer = await stripe.transfers.create(
@@ -137,8 +146,20 @@ export class StripeProvider implements IPaymentProvider {
         destination: params.recipientAccountId,
         description: params.description,
         metadata:    { rotation_id: params.rotationId },
+        // Ties this transfer to the exact charge that funded it, so Stripe
+        // draws these funds from that charge's own balance instead of the
+        // platform's general available balance — which in live mode is
+        // subject to Stripe's standard payout-delay hold and can otherwise
+        // fail a legitimate transfer with insufficient funds even though the
+        // charge that paid for it already succeeded (Stripe's "Separate
+        // Charges and Transfers" guidance). Omitted when unavailable (e.g. a
+        // contribution charged before this field existed) — the transfer
+        // then falls back to drawing from the general available balance, as
+        // it always did.
+        ...(params.sourceChargeId ? { source_transaction: params.sourceChargeId } : {}),
+        ...(params.transferGroup ? { transfer_group: params.transferGroup } : {}),
       },
-      { idempotencyKey: `transfer-${params.rotationId}` },
+      { idempotencyKey: params.idempotencyKey ?? `transfer-${params.rotationId}` },
     );
     // That's the whole payout — once funds land in the recipient's connected
     // account balance, Stripe automatically pays them out to their linked

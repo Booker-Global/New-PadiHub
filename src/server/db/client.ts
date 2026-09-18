@@ -177,6 +177,7 @@ const REQUIRED_COLUMNS: Record<string, Array<{ column: string; sqlType: string }
     { column: 'payout_fee_share_vat_amount',  sqlType: 'DECIMAL(12,2) NULL' },
     { column: 'paid_date',          sqlType: 'TIMESTAMP NULL' },
     { column: 'provider_reference', sqlType: 'VARCHAR(255) NULL' },
+    { column: 'provider_charge_id', sqlType: 'VARCHAR(255) NULL' },
     { column: 'grace_period_ends_at', sqlType: 'TIMESTAMP NULL' },
     { column: 'retry_attempted',      sqlType: 'BOOLEAN NOT NULL DEFAULT false' },
     { column: 'reminder_sent_at',     sqlType: 'TIMESTAMP NULL' },

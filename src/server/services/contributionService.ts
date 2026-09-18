@@ -101,6 +101,10 @@ export const contributionService = {
       payoutFeeShareAmount?: string;
       payoutFeeShareVatAmount?: string;
     },
+    // Stripe only — the underlying Charge ID (ch_xxx), distinct from
+    // providerReference (pi_xxx). See schema.ts's provider_charge_id doc
+    // comment / rotationService.transferCyclePotToRecipient.
+    providerChargeId?: string,
   ) {
     
     const rows = await db.select().from(schema.contributions)
@@ -135,6 +139,7 @@ export const contributionService = {
       payout_fee_share_vat_amount: feeBreakdown?.payoutFeeShareVatAmount ?? c.payout_fee_share_vat_amount,
       paid_date:          new Date(),
       provider_reference: providerReference,
+      provider_charge_id: providerChargeId ?? c.provider_charge_id,
     }).where(and(eq(schema.contributions.id, contributionId), ne(schema.contributions.payment_status, 'paid')));
 
     if (extractAffectedRows(claimResult) === 0) return true;
@@ -490,6 +495,43 @@ export const contributionService = {
       hadAnyFailure: resolvedFailureCount > 0,
       collectedAmount,
     };
+  },
+
+  /**
+   * Every 'paid' contribution for a cycle, each with the Stripe Charge ID
+   * that funded it (if captured — see provider_charge_id's doc comment).
+   * Used exclusively by rotationService.transferCyclePotToRecipient to pay
+   * out a cycle's pooled pot as one Stripe transfer PER funding charge
+   * (`source_transaction`), rather than one lump transfer drawn from the
+   * platform's general available balance.
+   */
+  async getPaidContributionsForCycle(groupId: string, cycleNumber: number): Promise<Array<{
+    id: string;
+    memberId: string;
+    amountPaidMinorUnits: number;
+    providerChargeId: string | null;
+  }>> {
+    const rows = await db.select({
+      id:                  schema.contributions.id,
+      member_id:           schema.contributions.member_id,
+      amount_paid:         schema.contributions.amount_paid,
+      provider_charge_id:  schema.contributions.provider_charge_id,
+    }).from(schema.contributions)
+      .where(and(
+        eq(schema.contributions.group_id, groupId),
+        eq(schema.contributions.cycle_number, cycleNumber),
+        eq(schema.contributions.payment_status, 'paid'),
+      ));
+
+    return rows.map(row => {
+      const parsed = parseFloat(row.amount_paid ?? '0');
+      return {
+        id: row.id,
+        memberId: row.member_id,
+        amountPaidMinorUnits: Math.round((Number.isFinite(parsed) ? parsed : 0) * 100),
+        providerChargeId: row.provider_charge_id,
+      };
+    });
   },
 
   async getCyclePotAmount(groupId: string, cycleNumber: number, contributionAmount: number): Promise<number> {

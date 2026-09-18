@@ -361,6 +361,16 @@ export const contributions = mysqlTable('contributions', {
   grace_period_ends_at: timestamp('grace_period_ends_at'),
   retry_attempted:    boolean('retry_attempted').notNull().default(false),
   provider_reference: varchar('provider_reference', { length: 255 }),
+  // Stripe only — the underlying Charge ID (ch_xxx) behind this
+  // contribution's PaymentIntent (provider_reference stores the
+  // PaymentIntent ID, pi_xxx, which Stripe's transfers.create does NOT
+  // accept for `source_transaction`). Captured so rotationService can move
+  // this specific member's share of the pot via a `source_transaction`
+  // transfer tied to the exact charge that funded it, instead of drawing
+  // from the platform's general available balance (which in live mode is
+  // subject to Stripe's payout-delay hold and can otherwise fail with
+  // insufficient funds even though the charge itself already succeeded).
+  provider_charge_id: varchar('provider_charge_id', { length: 255 }),
   // Set whenever the most recent charge attempt for this contribution never
   // reached the payment provider at all (PaymentProviderConfigError — a
   // missing PadiHub-side secret key/Price ID, not a member-facing card

@@ -275,7 +275,7 @@ export async function chargeContributionForUser(userId: string, contributionId: 
     payoutFeeShareVatAmount:    (breakdown.payoutFeeShareVat / 100).toFixed(2),
   };
   if (result.status === 'succeeded') {
-    await contributionService.markPaid(contributionId, result.providerReference, undefined, feeBreakdownStrings);
+    await contributionService.markPaid(contributionId, result.providerReference, undefined, feeBreakdownStrings, result.chargeId);
   } else if (result.status === 'failed') {
     await contributionService.markFailed(contributionId, undefined, isGraceRetry);
   }

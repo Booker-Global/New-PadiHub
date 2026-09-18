@@ -41,6 +41,31 @@ function shouldSendPayoutTransferFailureAlertEmail(rotationId: string): boolean 
 }
 
 /**
+ * `rotations.provider_transfer_reference` is a VARCHAR(255) — a cycle paid
+ * out via several Stripe transfers (one per funding charge, see
+ * transferCyclePotToRecipient) can't always fit every transfer ID in that
+ * width (up to GROUP_MAX_MEMBERS=20 members). Keep as many full IDs as fit
+ * and note how many were omitted; every transfer is still discoverable via
+ * Stripe's transfer_group, set to this rotation's ID on each one.
+ */
+function joinTransferReferences(ids: string[]): string {
+  const MAX_LENGTH = 255;
+  const joined = ids.join(',');
+  if (joined.length <= MAX_LENGTH) return joined;
+
+  let out = '';
+  let used = 0;
+  for (const id of ids) {
+    const candidate = out ? `${out},${id}` : id;
+    if (candidate.length > MAX_LENGTH - 16) break; // headroom for the "+N more" suffix
+    out = candidate;
+    used += 1;
+  }
+  const remaining = ids.length - used;
+  return remaining > 0 ? `${out},+${remaining} more` : out;
+}
+
+/**
  * Move a completed cycle's collected pot from the platform's provider balance
  * to that cycle's recipient using the group's configured payout provider.
  * `onFailure` defaults to flipping the rotation to payout_status:'failed' (the
@@ -108,24 +133,80 @@ async function transferCyclePotToRecipient(
       }
 
       const stripeProvider = getStripeProvider();
-      const result = await stripeProvider.createTransfer({
-        recipientAccountId: recipient.stripe_connected_account_id,
-        amount:              potMinorUnits,
-        currency:            group.currency,
-        rotationId:          rotation.id,
-        description:         `PadiHub payout — ${group.name} cycle ${rotation.cycle_number}`,
-      });
+      const description = `PadiHub payout — ${group.name} cycle ${rotation.cycle_number}`;
+
+      // A cycle's pot is pooled from every member's own charge — pay it out
+      // as one Stripe transfer PER funding charge (`source_transaction`),
+      // tied together via `transfer_group`, instead of one lump transfer.
+      // This is what actually lets each transfer draw its funds from the
+      // specific charge that paid for it rather than the platform's general
+      // available balance (subject to Stripe's payout-delay hold in live
+      // mode) — see StripeProvider.createTransfer's doc comment. Each
+      // transfer's own idempotency key (rotation + contribution) means a
+      // retry after a partial failure never re-sends funds already
+      // transferred for a given contribution.
+      const paidContributions = await contributionService.getPaidContributionsForCycle(group.id, rotation.cycle_number);
+      const withChargeId = paidContributions.filter(c => c.providerChargeId && c.amountPaidMinorUnits > 0);
+      const legacyMinorUnits = paidContributions
+        .filter(c => !c.providerChargeId)
+        .reduce((sum, c) => sum + c.amountPaidMinorUnits, 0);
+
+      const transferIds: string[] = [];
+      if (withChargeId.length || legacyMinorUnits > 0) {
+        for (const contribution of withChargeId) {
+          const result = await stripeProvider.createTransfer({
+            recipientAccountId: recipient.stripe_connected_account_id,
+            amount:              contribution.amountPaidMinorUnits,
+            currency:            group.currency,
+            rotationId:          rotation.id,
+            description,
+            sourceChargeId:      contribution.providerChargeId ?? undefined,
+            transferGroup:       rotation.id,
+            idempotencyKey:      `transfer-${rotation.id}-${contribution.id}`,
+          });
+          transferIds.push(result.providerTransferReference);
+        }
+        // Contributions charged before provider_charge_id was captured have
+        // no charge to link a `source_transaction` to — fall back to a
+        // single ordinary transfer for their combined share, exactly like
+        // the pre-Option-3 behaviour.
+        if (legacyMinorUnits > 0) {
+          const result = await stripeProvider.createTransfer({
+            recipientAccountId: recipient.stripe_connected_account_id,
+            amount:              legacyMinorUnits,
+            currency:            group.currency,
+            rotationId:          rotation.id,
+            description,
+            transferGroup:       rotation.id,
+            idempotencyKey:      `transfer-${rotation.id}-legacy`,
+          });
+          transferIds.push(result.providerTransferReference);
+        }
+      } else {
+        // No per-contribution data available at all (shouldn't normally
+        // happen once a cycle is resolved) — preserve the original
+        // behaviour of a single lump transfer for the whole pot rather than
+        // silently transferring nothing.
+        const result = await stripeProvider.createTransfer({
+          recipientAccountId: recipient.stripe_connected_account_id,
+          amount:              potMinorUnits,
+          currency:            group.currency,
+          rotationId:          rotation.id,
+          description,
+        });
+        transferIds.push(result.providerTransferReference);
+      }
 
       // That's the whole payout for Stripe Express recipients — once the
-      // transfer above lands in the recipient's CONNECTED ACCOUNT balance,
-      // Stripe automatically pays it out to their linked external bank
+      // transfer(s) above land in the recipient's CONNECTED ACCOUNT balance,
+      // Stripe automatically pays them out to their linked external bank
       // account on their own schedule (confirmed with Stripe support: a
       // manual payouts.create() call here is unnecessary and can fail for
       // Express accounts that only have the `transfers` capability, which
       // is all PadiHub requests — see createConnectedAccount below). Track
       // delivery to the bank via the connected account's own `payout.paid`
       // webhook event, not a manual trigger here.
-      return { success: true, reference: result.providerTransferReference };
+      return { success: true, reference: joinTransferReferences(transferIds) };
     }
 
     if (
