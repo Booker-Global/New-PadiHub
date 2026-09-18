@@ -245,6 +245,13 @@ describe('rotationService', () => {
           first_name: 'Ben',
           last_name: 'Okoro',
         }],
+        // Each 'paid' contribution's own settled charge — the payout must
+        // be tied to these via `source_transaction` (one transfer per
+        // charge) rather than one lump-sum transfer for the whole pot.
+        [
+          { id: 'contrib-1', amount_paid: '50.00', provider_charge_id: 'ch_1' },
+          { id: 'contrib-2', amount_paid: '50.00', provider_charge_id: 'ch_2' },
+        ],
         [{
           email: 'ben@example.com',
           display_name: null,
@@ -263,9 +270,10 @@ describe('rotationService', () => {
         ],
       );
       mockState.refreshStripePayoutVerification.mockResolvedValue(true);
-      mockState.stripeCreateTransfer.mockResolvedValue({
-        providerTransferReference: 'tr_123',
-        status: 'completed',
+      let transferCallCount = 0;
+      mockState.stripeCreateTransfer.mockImplementation(async () => {
+        transferCallCount += 1;
+        return { providerTransferReference: `tr_${transferCallCount}`, status: 'completed' };
       });
       mockState.getCycleResolutionStatus.mockResolvedValue({
         totalCount: 2,
@@ -295,17 +303,26 @@ describe('rotationService', () => {
         payout_verified_at: null,
         stripe_connected_account_id: 'acct_123',
       });
-      expect(mockState.stripeCreateTransfer).toHaveBeenCalledWith({
+      expect(mockState.stripeCreateTransfer).toHaveBeenNthCalledWith(1, {
         recipientAccountId: 'acct_123',
-        amount: 10000,
+        amount: 5000,
         currency: 'GBP',
-        rotationId: 'rotation-5',
+        rotationId: 'rotation-5-contrib-1',
+        sourceChargeId: 'ch_1',
+        description: 'PadiHub payout — London Circle cycle 1',
+      });
+      expect(mockState.stripeCreateTransfer).toHaveBeenNthCalledWith(2, {
+        recipientAccountId: 'acct_123',
+        amount: 5000,
+        currency: 'GBP',
+        rotationId: 'rotation-5-contrib-2',
+        sourceChargeId: 'ch_2',
         description: 'PadiHub payout — London Circle cycle 1',
       });
       expect(mockState.updatePayloads).toContainEqual({
         payout_status: 'completed',
         completed_date: expect.any(Date),
-        provider_transfer_reference: 'tr_123',
+        provider_transfer_reference: 'tr_1,tr_2',
       });
       expect(result).toEqual({ nextCycle: 2, nextRecipient: 'user-2' });
 

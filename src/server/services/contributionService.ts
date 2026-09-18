@@ -101,6 +101,11 @@ export const contributionService = {
       payoutFeeShareAmount?: string;
       payoutFeeShareVatAmount?: string;
     },
+    // Stripe only — the settled Charge ID (ch_xxx) behind this payment (see
+    // ChargeResult.chargeId / contributions.provider_charge_id doc comment).
+    // Stored so rotationService can tie this contribution's later payout
+    // transfer to its own charge via `source_transaction`.
+    providerChargeId?: string,
   ) {
     
     const rows = await db.select().from(schema.contributions)
@@ -135,6 +140,7 @@ export const contributionService = {
       payout_fee_share_vat_amount: feeBreakdown?.payoutFeeShareVatAmount ?? c.payout_fee_share_vat_amount,
       paid_date:          new Date(),
       provider_reference: providerReference,
+      provider_charge_id: providerChargeId ?? c.provider_charge_id,
     }).where(and(eq(schema.contributions.id, contributionId), ne(schema.contributions.payment_status, 'paid')));
 
     if (extractAffectedRows(claimResult) === 0) return true;

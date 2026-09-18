@@ -122,12 +122,17 @@ export class StripeProvider implements IPaymentProvider {
     );
     const status = intent.status === 'succeeded' ? 'succeeded'
       : intent.status === 'requires_action' ? 'pending' : 'failed';
-    return { providerReference: intent.id, status };
+    // latest_charge is a plain Charge ID string on the PaymentIntent response
+    // (no `expand` needed) — captured so a later payout transfer can be tied
+    // to this exact charge via `source_transaction` (see createTransfer below
+    // and contributions.provider_charge_id).
+    const chargeId = typeof intent.latest_charge === 'string' ? intent.latest_charge : intent.latest_charge?.id;
+    return { providerReference: intent.id, status, chargeId };
   }
 
   async createTransfer(params: {
     recipientAccountId: string; amount: number; currency: string;
-    rotationId: string; description: string;
+    rotationId: string; description: string; sourceChargeId?: string;
   }): Promise<TransferResult> {
     const stripe = getStripe();
     const transfer = await stripe.transfers.create(
@@ -137,6 +142,16 @@ export class StripeProvider implements IPaymentProvider {
         destination: params.recipientAccountId,
         description: params.description,
         metadata:    { rotation_id: params.rotationId },
+        // Ties this transfer to the specific charge that funded it, so it
+        // can succeed off that charge's own settlement rather than
+        // requiring `amount` to already sit in the platform's available
+        // balance (per Stripe support's guidance on test-mode payout
+        // failures). Stripe caps the transferable amount to the referenced
+        // charge's own amount, so callers must pass a charge whose amount
+        // covers `amount` — see rotationService.transferCyclePotToRecipient,
+        // which transfers each contribution's own charge separately instead
+        // of one lump sum spanning multiple charges.
+        ...(params.sourceChargeId ? { source_transaction: params.sourceChargeId } : {}),
       },
       { idempotencyKey: `transfer-${params.rotationId}` },
     );

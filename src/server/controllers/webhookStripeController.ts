@@ -93,7 +93,11 @@ async function handleStripeEvent(event: Stripe.Event) {
       const contributionId = pi.metadata?.contribution_id;
       if (!contributionId) break;
 
-      await contributionService.markPaid(contributionId, pi.id);
+      // latest_charge is a plain Charge ID string on the webhook's
+      // PaymentIntent payload (no `expand` needed) — see
+      // StripeProvider.chargeContribution's matching extraction.
+      const chargeId = typeof pi.latest_charge === 'string' ? pi.latest_charge : pi.latest_charge?.id;
+      await contributionService.markPaid(contributionId, pi.id, undefined, undefined, chargeId);
       await createAuditLog({
         action: 'STRIPE_PAYMENT_SUCCEEDED', entity: 'contributions',
         entityId: contributionId, metadata: { paymentIntentId: pi.id },

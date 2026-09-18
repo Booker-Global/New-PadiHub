@@ -36,6 +36,11 @@ export interface SavePaymentMethodResult {
 export interface ChargeResult {
   providerReference: string;
   status: 'succeeded' | 'pending' | 'failed';
+  // Stripe only — the settled Charge ID (ch_xxx) behind the PaymentIntent
+  // returned above (paymentIntent.latest_charge). Persisted alongside the
+  // contribution so a later payout transfer can be tied to this exact
+  // charge via `source_transaction` — see StripeProvider.createTransfer.
+  chargeId?: string;
 }
 
 export interface TransferResult {
@@ -103,6 +108,15 @@ export interface IPaymentProvider {
     recipientBankCode?: string;   // Flutterwave only
     recipientAccountNumber?: string; // Flutterwave only
     recipientName?: string;       // Flutterwave only
+    // Stripe only — the Charge ID (ch_xxx) that funded this transfer amount
+    // (see contributions.provider_charge_id). When set, StripeProvider
+    // passes it as `source_transaction`, so the transfer draws from — and
+    // is tied to the settlement of — that specific charge instead of
+    // requiring the amount to already sit in the platform's available
+    // balance. Per Stripe support: the transfer amount must not exceed the
+    // referenced charge's own amount, so callers must transfer per-charge
+    // rather than one lump sum across multiple charges.
+    sourceChargeId?: string;
   }): Promise<TransferResult>;
 
   /**

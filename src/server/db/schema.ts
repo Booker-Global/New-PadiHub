@@ -361,6 +361,16 @@ export const contributions = mysqlTable('contributions', {
   grace_period_ends_at: timestamp('grace_period_ends_at'),
   retry_attempted:    boolean('retry_attempted').notNull().default(false),
   provider_reference: varchar('provider_reference', { length: 255 }),
+  // Stripe only — the settled Charge ID (ch_xxx) behind this contribution's
+  // PaymentIntent (paymentIntent.latest_charge), captured at chargeContribution
+  // time. Lets rotationService.transferCyclePotToRecipient tie each member's
+  // share of a cycle's payout directly to the charge that funded it via
+  // Stripe's `source_transaction` transfer parameter, so the transfer can
+  // succeed off that charge's own settlement instead of requiring the whole
+  // pot to already sit in the platform's available balance. Null for
+  // Flutterwave contributions and any Stripe contribution charged before
+  // this column existed.
+  provider_charge_id: varchar('provider_charge_id', { length: 255 }),
   // Set whenever the most recent charge attempt for this contribution never
   // reached the payment provider at all (PaymentProviderConfigError — a
   // missing PadiHub-side secret key/Price ID, not a member-facing card

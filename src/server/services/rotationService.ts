@@ -108,24 +108,75 @@ async function transferCyclePotToRecipient(
       }
 
       const stripeProvider = getStripeProvider();
-      const result = await stripeProvider.createTransfer({
-        recipientAccountId: recipient.stripe_connected_account_id,
-        amount:              potMinorUnits,
-        currency:            group.currency,
-        rotationId:          rotation.id,
-        description:         `PadiHub payout — ${group.name} cycle ${rotation.cycle_number}`,
-      });
+
+      // Per Stripe support (after a test-mode "insufficient available
+      // balance" payout failure): a transfer's `source_transaction` ties it
+      // to one specific charge, and Stripe caps the transferable amount to
+      // that charge's own amount — so a single lump-sum transfer for the
+      // whole pot can't be tied to any one member's charge. Instead,
+      // transfer each 'paid' contribution's own amount separately, tied to
+      // the charge that actually funded it (contributions.provider_charge_id
+      // — see StripeProvider.chargeContribution/createTransfer). This lets
+      // each transfer succeed off its own charge's settlement instead of
+      // requiring the entire pot to already sit in the platform's available
+      // balance. Contributions charged before provider_charge_id existed
+      // (or otherwise missing it) are combined into one balance-only
+      // fallback transfer.
+      const paidContributions = await db.select({
+        id:                 schema.contributions.id,
+        amount_paid:        schema.contributions.amount_paid,
+        provider_charge_id: schema.contributions.provider_charge_id,
+      }).from(schema.contributions).where(and(
+        eq(schema.contributions.group_id, group.id),
+        eq(schema.contributions.cycle_number, rotation.cycle_number),
+        eq(schema.contributions.payment_status, 'paid'),
+      ));
+
+      type TransferLeg = { amount: number; idSuffix: string; sourceChargeId?: string };
+      const legs: TransferLeg[] = [];
+      let unattributedMinorUnits = 0;
+      for (const c of paidContributions) {
+        const minorUnits = Math.round(parseFloat(c.amount_paid ?? '0') * 100);
+        if (!Number.isFinite(minorUnits) || minorUnits <= 0) continue;
+        if (c.provider_charge_id) {
+          legs.push({ amount: minorUnits, idSuffix: c.id, sourceChargeId: c.provider_charge_id });
+        } else {
+          unattributedMinorUnits += minorUnits;
+        }
+      }
+      if (unattributedMinorUnits > 0) legs.push({ amount: unattributedMinorUnits, idSuffix: 'unattributed' });
+
+      // Safety net: both potMinorUnits and the legs above are derived from
+      // the same 'paid' contributions, so they should always match. If they
+      // don't (e.g. a contribution changed status between the two reads),
+      // fall back to a single whole-pot transfer rather than under/over-
+      // paying the recipient.
+      const legsTotal = legs.reduce((sum, leg) => sum + leg.amount, 0);
+      const transferLegs = legsTotal === potMinorUnits ? legs : [{ amount: potMinorUnits, idSuffix: 'whole-pot' } as TransferLeg];
+
+      const transferReferences: string[] = [];
+      for (const leg of transferLegs) {
+        const result = await stripeProvider.createTransfer({
+          recipientAccountId: recipient.stripe_connected_account_id,
+          amount:              leg.amount,
+          currency:            group.currency,
+          rotationId:          `${rotation.id}-${leg.idSuffix}`,
+          sourceChargeId:      leg.sourceChargeId,
+          description:         `PadiHub payout — ${group.name} cycle ${rotation.cycle_number}`,
+        });
+        transferReferences.push(result.providerTransferReference);
+      }
 
       // That's the whole payout for Stripe Express recipients — once the
-      // transfer above lands in the recipient's CONNECTED ACCOUNT balance,
-      // Stripe automatically pays it out to their linked external bank
+      // transfers above land in the recipient's CONNECTED ACCOUNT balance,
+      // Stripe automatically pays them out to their linked external bank
       // account on their own schedule (confirmed with Stripe support: a
       // manual payouts.create() call here is unnecessary and can fail for
       // Express accounts that only have the `transfers` capability, which
       // is all PadiHub requests — see createConnectedAccount below). Track
       // delivery to the bank via the connected account's own `payout.paid`
       // webhook event, not a manual trigger here.
-      return { success: true, reference: result.providerTransferReference };
+      return { success: true, reference: transferReferences.join(',') };
     }
 
     if (
