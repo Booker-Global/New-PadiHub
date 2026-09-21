@@ -404,6 +404,7 @@ async function handleStripeEvent(event: Stripe.Event) {
         id: schema.users.id,
         email: schema.users.email,
         subscription_status: schema.users.subscription_status,
+        subscription_tier: schema.users.subscription_tier,
         stripe_customer_id: schema.users.stripe_customer_id,
       }).from(schema.users).where(eq(schema.users.id, subForFailedInvoice.user_id)).limit(1);
       const user = userRows[0];
@@ -449,7 +450,11 @@ async function handleStripeEvent(event: Stripe.Event) {
         // Item 7 — a genuine failed charge attempt against a live (not
         // merely deferred) subscription is exactly the case a
         // payment-failure email is for.
-        await sendSubscriptionPaymentFailedEmail(user.email, formatInvoiceAmount(invoice.amount_due, invoice.currency) ?? '');
+        await sendSubscriptionPaymentFailedEmail(
+          user.email,
+          formatInvoiceAmount(invoice.amount_due, invoice.currency) ?? '',
+          isSubscriptionTierKey(user.subscription_tier) ? SUBSCRIPTION_TIERS[user.subscription_tier].name : undefined,
+        );
       }
 
       await createAuditLog({

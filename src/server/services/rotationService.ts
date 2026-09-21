@@ -248,7 +248,7 @@ async function recordTransferFailure(group: SavingsGroupRow, rotation: RotationR
   await notificationService.create({
     userId: rotation.recipient_id, type: 'payout_failed',
     title: 'Payout Delayed',
-    message: `Your payout for cycle ${rotation.cycle_number} could not be sent yet. Our team has been notified and it will be retried automatically.`,
+    message: `Your payout for cycle ${rotation.cycle_number} in "${group.name}" could not be sent yet. Our team has been notified and it will be retried automatically.`,
   });
   await createAuditLog({
     action: 'STRIPE_PAYOUT_TRANSFER_FAILED', entity: 'rotations', entityId: rotation.id,
@@ -382,10 +382,14 @@ export const rotationService = {
       payout_status: 'pending',
     });
 
+    const groupRow = await db.select({ name: schema.savingsGroups.name })
+      .from(schema.savingsGroups).where(eq(schema.savingsGroups.id, groupId)).limit(1);
     await notificationService.create({
       userId: recipientId, type: 'upcoming_payout',
       title: 'Upcoming Payout',
-      message: `You are scheduled to receive the payout for cycle ${cycleNumber}.`,
+      message: groupRow.length
+        ? `You are scheduled to receive the payout for cycle ${cycleNumber} in "${groupRow[0].name}".`
+        : `You are scheduled to receive the payout for cycle ${cycleNumber}.`,
     });
 
     // The "you're scheduled to receive a payout" EMAIL is deliberately NOT
@@ -484,7 +488,7 @@ export const rotationService = {
       await notificationService.create({
         userId: current.recipient_id, type: 'payout_completed',
         title: 'Payout Completed',
-        message: `Your payout for cycle ${current.cycle_number} has been completed.`,
+        message: `Your payout for cycle ${current.cycle_number} in "${group.name}" has been completed.`,
       });
       await trustScoreService.increase(current.recipient_id, TRUST_SCORE_DELTA_CYCLE_COMPLETED, 'CYCLE_COMPLETED');
 

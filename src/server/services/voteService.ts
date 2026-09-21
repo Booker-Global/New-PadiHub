@@ -1,5 +1,4 @@
 import { v4 as uuidv4 } from 'uuid';
-import crypto from 'crypto';
 import { eq, and, inArray, lt } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import * as schema from '../db/schema.js';
@@ -8,8 +7,6 @@ import { createAuditLog } from '../middleware/auditLogger.js';
 import { notificationService } from './notificationService.js';
 import { GOVERNANCE_VOTE_DEADLINE_MS, resolveUserDisplayName } from '../lib/constants.js';
 import { sendGovernanceVoteEmail, sendVoteOutcomeEmail } from '../integrations/email/emailService.js';
-
-const APP_URL = process.env.APP_URL ?? 'https://padihub.com';
 
 type ProposalType = 'payout_swap' | 'exceptional_request' | 'member_admission' | 'contribution_claim' | 'member_removal';
 type VoteRow = typeof schema.votes.$inferSelect;
@@ -47,14 +44,16 @@ export const voteService = {
    * Propose swapping payout rotation positions with another member of the
    * same group. This is a direct 1:1 accept/decline matter (Section 4) —
    * only the target member's response decides the outcome, emailed to them
-   * with accept/decline links; on decline or 48h timeout, nothing changes.
+   * with a link to review and respond from the group's Governance section;
+   * on decline or 48h timeout, nothing changes.
    */
   async proposePayoutSwap(groupId: string, proposerId: string, targetMemberId: string, note: string | undefined, ipAddress?: string) {
     if (proposerId === targetMemberId) throw new AppError('You cannot propose a swap with yourself.', 400);
 
     const groupRows = await db.select().from(schema.savingsGroups).where(eq(schema.savingsGroups.id, groupId)).limit(1);
     if (!groupRows.length) throw new AppError('Group not found.', 404);
-    if (!groupRows[0].allow_payout_swaps) throw new AppError('Payout swaps are not permitted in this group.', 403);
+    const group = groupRows[0];
+    if (!group.allow_payout_swaps) throw new AppError('Payout swaps are not permitted in this group.', 403);
 
     const memberRows = await db.select().from(schema.memberships)
       .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')));
@@ -66,11 +65,16 @@ export const voteService = {
       throw new AppError('Payout rotation positions are not yet assigned for this group.', 400);
     }
 
+    const userRows = await db.select({ id: schema.users.id, first_name: schema.users.first_name, last_name: schema.users.last_name, display_name: schema.users.display_name })
+      .from(schema.users).where(inArray(schema.users.id, [proposerId, targetMemberId]));
+    const proposerName = resolveUserDisplayName(userRows.find(u => u.id === proposerId));
+    const targetName = resolveUserDisplayName(userRows.find(u => u.id === targetMemberId));
+
     return this.create({
       group_id:           groupId,
       proposal_type:      'payout_swap',
       proposer_id:        proposerId,
-      proposal_text:      note?.trim() || 'Requesting to swap payout rotation position with another member.',
+      proposal_text:      `${proposerName} (payout position ${proposer.rotation_order}) wants to swap payout rotation positions with ${targetName} (payout position ${target.rotation_order}) in "${group.name}".${note?.trim() ? ` Note: ${note.trim()}` : ''}`,
       target_member_id:   targetMemberId,
       requires_unanimous: false,
       voting_deadline:    new Date(Date.now() + GOVERNANCE_VOTE_DEADLINE_MS),
@@ -274,7 +278,9 @@ export const voteService = {
       await notificationService.create({
         userId, type: 'payout_swap_completed',
         title: 'Payout Schedule Updated',
-        message: 'Your payout rotation swap was accepted — your payout position has been updated.',
+        message: group
+          ? `Your payout rotation swap in "${group.name}" was accepted — your payout position has been updated.`
+          : 'Your payout rotation swap was accepted — your payout position has been updated.',
       });
     }
 
@@ -320,6 +326,10 @@ export const voteService = {
       .where(eq(schema.savingsGroups.id, data.group_id)).limit(1);
     const groupName = groupRows.length ? groupRows[0].name : 'your group';
 
+    const proposerRows = await db.select({ first_name: schema.users.first_name, last_name: schema.users.last_name, display_name: schema.users.display_name })
+      .from(schema.users).where(eq(schema.users.id, data.proposer_id)).limit(1);
+    const proposerName = resolveUserDisplayName(proposerRows[0]);
+
     // Who needs to be asked to respond: the single target member (1:1
     // matters like payout_swap), or every active member except the
     // auto-approved proposer (unanimous / legacy percentage votes) — and,
@@ -345,20 +355,18 @@ export const voteService = {
         await notificationService.create({
           userId: r.id, type: 'vote_required',
           title: 'Vote Required',
-          message: `A new vote has been raised in your group. Please respond before the deadline.`,
+          message: `${data.proposal_text} Please respond before the deadline in "${groupName}".`,
         });
 
-        // Email-based accept/decline for the new governance flows (Section
-        // 4); the older percentage-threshold 'exceptional_request' keeps
-        // its existing in-app-only notification.
+        // Email notice for the new governance flows (Section 4); the older
+        // percentage-threshold 'exceptional_request' keeps its existing
+        // in-app-only notification. The call-to-action deep-links to the
+        // group's page — no one-click email action; the member must log in
+        // and cast their real response from the Governance section.
         if (data.proposal_type !== 'exceptional_request') {
-          const token = crypto.randomBytes(32).toString('hex');
-          await db.insert(schema.voteEmailTokens).values({ id: uuidv4(), vote_id: id, member_id: r.id, token });
-          const acceptUrl = `${APP_URL}/api/votes/respond?token=${token}&decision=approve`;
-          const declineUrl = `${APP_URL}/api/votes/respond?token=${token}&decision=reject`;
           await sendGovernanceVoteEmail(
-            r.email, groupName, subjectFor(data.proposal_type), data.proposal_text,
-            data.voting_deadline.toISOString(), acceptUrl, declineUrl,
+            r.email, groupName, data.group_id, subjectFor(data.proposal_type), data.proposal_text,
+            data.voting_deadline.toISOString(), proposerName,
           );
         }
       }
@@ -543,11 +551,14 @@ export const voteService = {
       } else {
         const members = await db.select().from(schema.memberships)
           .where(and(eq(schema.memberships.group_id, vote.group_id), eq(schema.memberships.status, 'active')));
+        const groupRows = await db.select({ name: schema.savingsGroups.name }).from(schema.savingsGroups)
+          .where(eq(schema.savingsGroups.id, vote.group_id)).limit(1);
+        const groupName = groupRows.length ? groupRows[0].name : 'your group';
         for (const m of members) {
           await notificationService.create({
             userId: m.user_id, type: 'vote_closed',
             title: 'Vote Closed',
-            message: `A vote in your group has been ${newStatus}.`,
+            message: `A vote in "${groupName}" has been ${newStatus}.`,
           });
         }
       }
@@ -572,7 +583,7 @@ export const voteService = {
       ? 'The payout swap was accepted — both members\u2019 payout positions have been updated.'
       : 'The payout swap request was declined or timed out — nothing has changed.';
     for (const p of parties) {
-      await sendVoteOutcomeEmail(p.email, groupName, status === 'approved' ? 'Payout Swap Accepted' : 'Payout Swap Not Completed', outcomeText);
+      await sendVoteOutcomeEmail(p.email, groupName, vote.group_id, status === 'approved' ? 'Payout Swap Accepted' : 'Payout Swap Not Completed', outcomeText);
     }
 
     // Every OTHER active group member must also be told a swap went through
@@ -622,7 +633,7 @@ export const voteService = {
         ? `, including who receives the payout in the current cycle (cycle ${executed.currentCycleNumber}).`
         : '.');
     for (const m of otherEmails) {
-      await sendVoteOutcomeEmail(m.email, groupName, 'Payout Schedule Updated', changeText);
+      await sendVoteOutcomeEmail(m.email, groupName, groupId, 'Payout Schedule Updated', changeText);
     }
     for (const uid of otherMemberIds) {
       await notificationService.create({
@@ -671,10 +682,10 @@ export const voteService = {
       .from(schema.users).where(inArray(schema.users.id, members.map(m => m.user_id)));
 
     const message = status === 'approved'
-      ? `Your group approved a temporary contribution increase to ${meta?.claimed_amount}. This applies until every member has received a payout at this level this cycle, then it reverts to ${group.contribution_amount}.`
-      : 'The proposed contribution increase was not approved by all members (or the vote timed out) and will not take effect.';
+      ? `"${group.name}" approved a temporary contribution increase to ${meta?.claimed_amount}. This applies until every member has received a payout at this level this cycle, then it reverts to ${group.contribution_amount}.`
+      : `The proposed contribution increase in "${group.name}" was not approved by all members (or the vote timed out) and will not take effect.`;
     for (const r of recipients) {
-      await sendVoteOutcomeEmail(r.email, group.name, status === 'approved' ? 'Contribution Claim Approved' : 'Contribution Claim Not Approved', message);
+      await sendVoteOutcomeEmail(r.email, group.name, vote.group_id, status === 'approved' ? 'Contribution Claim Approved' : 'Contribution Claim Not Approved', message);
       await notificationService.create({
         userId: r.id, type: 'vote_closed',
         title: status === 'approved' ? 'Contribution Claim Approved' : 'Contribution Claim Not Approved',
@@ -711,7 +722,7 @@ export const voteService = {
       .where(eq(schema.users.id, targetMemberId)).limit(1);
     if (targetRow.length) {
       await sendVoteOutcomeEmail(
-        targetRow[0].email, groupName, 'Removal Vote Not Approved',
+        targetRow[0].email, groupName, vote.group_id, 'Removal Vote Not Approved',
         'A vote to remove you from the group was not approved by all other members (or it timed out) — you remain an active member.',
       );
     }
