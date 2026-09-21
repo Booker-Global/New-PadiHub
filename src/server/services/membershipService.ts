@@ -917,7 +917,7 @@ export const membershipService = {
       await notificationService.create({
         userId: m.user_id, type: 'contribution_default_retained',
         title: 'Contribution Default',
-        message: `${defaultingName} defaulted on their contribution for cycle ${contribution?.cycle_number ?? '?'}. They remain in the group. This cycle's payout will be reduced by the defaulted amount and sent shortly. Recovering the missed amount is the group's own responsibility.`,
+        message: `${defaultingName} defaulted on their contribution for cycle ${contribution?.cycle_number ?? '?'} in "${group.name}". They remain in the group. This cycle's payout will be reduced by the defaulted amount and sent shortly. Recovering the missed amount is the group's own responsibility.`,
       });
     }
 

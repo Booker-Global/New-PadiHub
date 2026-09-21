@@ -145,16 +145,21 @@ export const contributionService = {
     if (extractAffectedRows(claimResult) === 0) return true;
 
     await createAuditLog({ userId: c.member_id, action: 'CONTRIBUTION_PAID', entity: 'contributions', entityId: contributionId, ipAddress });
+
+    // Look up user email and group name — the group name is needed both for
+    // the email below and for the in-app notification, so this now runs
+    // before the notification is created rather than after it.
+    const userRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, c.member_id)).limit(1);
+    const groupRow = await db.select({ name: schema.savingsGroups.name, currency: schema.savingsGroups.currency }).from(schema.savingsGroups).where(eq(schema.savingsGroups.id, c.group_id)).limit(1);
     await notificationService.create({
       userId: c.member_id, type: 'contribution_paid',
       title: 'Contribution Recorded',
-      message: `Your contribution for cycle ${c.cycle_number} has been recorded.`,
+      message: groupRow.length
+        ? `Your contribution for cycle ${c.cycle_number} in "${groupRow[0].name}" has been recorded.`
+        : `Your contribution for cycle ${c.cycle_number} has been recorded.`,
     });
     await trustScoreService.increase(c.member_id, TRUST_SCORE_DELTA_CONTRIBUTION_PAID, 'CONTRIBUTION_PAID');
 
-    // Email — look up user email and group name
-    const userRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, c.member_id)).limit(1);
-    const groupRow = await db.select({ name: schema.savingsGroups.name, currency: schema.savingsGroups.currency }).from(schema.savingsGroups).where(eq(schema.savingsGroups.id, c.group_id)).limit(1);
     if (userRow.length && groupRow.length) {
       const amount = `${groupRow[0].currency} ${parseFloat(c.amount_due).toFixed(2)}`;
       const date = new Date().toLocaleDateString('en-GB');
@@ -229,7 +234,9 @@ export const contributionService = {
       await notificationService.create({
         userId: c.member_id, type: 'contribution_grace_period_started',
         title: 'Payment Failed — Grace Period Started',
-        message: `Your contribution for cycle ${c.cycle_number} failed. You have a 72-hour grace period before a single automatic retry on ${graceEndsAt.toLocaleString('en-GB')}.`,
+        message: groupRow.length
+          ? `Your contribution for cycle ${c.cycle_number} in "${groupRow[0].name}" failed. You have a 72-hour grace period before a single automatic retry on ${graceEndsAt.toLocaleString('en-GB')}.`
+          : `Your contribution for cycle ${c.cycle_number} failed. You have a 72-hour grace period before a single automatic retry on ${graceEndsAt.toLocaleString('en-GB')}.`,
       });
 
       const activeMembers = await db.select().from(schema.memberships)
@@ -239,7 +246,9 @@ export const contributionService = {
         await notificationService.create({
           userId: m.user_id, type: 'group_member_payment_grace_period',
           title: 'Member Payment Pending',
-          message: `A member's contribution for cycle ${c.cycle_number} failed and is now in a 72-hour grace period before one automatic retry.`,
+          message: groupRow.length
+            ? `A member's contribution for cycle ${c.cycle_number} in "${groupRow[0].name}" failed and is now in a 72-hour grace period before one automatic retry.`
+            : `A member's contribution for cycle ${c.cycle_number} failed and is now in a 72-hour grace period before one automatic retry.`,
         });
       }
 
@@ -264,7 +273,9 @@ export const contributionService = {
     await notificationService.create({
       userId: c.member_id, type: 'contribution_defaulted',
       title: 'Contribution Defaulted',
-      message: `Your contribution for cycle ${c.cycle_number} is now in default after the automatic retry also failed.`,
+      message: groupRow.length
+        ? `Your contribution for cycle ${c.cycle_number} in "${groupRow[0].name}" is now in default after the automatic retry also failed.`
+        : `Your contribution for cycle ${c.cycle_number} is now in default after the automatic retry also failed.`,
     });
     await trustScoreService.decrease(c.member_id, TRUST_SCORE_DELTA_CONTRIBUTION_MISSED, 'CONTRIBUTION_MISSED');
 
@@ -308,15 +319,17 @@ export const contributionService = {
     await membershipService.applyStrike(c.member_id, c.group_id, ipAddress);
 
     await createAuditLog({ userId: c.member_id, action: 'CONTRIBUTION_MISSED', entity: 'contributions', entityId: contributionId, ipAddress });
+    const userRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, c.member_id)).limit(1);
+    const groupRow = await db.select({ name: schema.savingsGroups.name, currency: schema.savingsGroups.currency }).from(schema.savingsGroups).where(eq(schema.savingsGroups.id, c.group_id)).limit(1);
     await notificationService.create({
       userId: c.member_id, type: 'contribution_missed',
       title: 'Missed Contribution',
-      message: `You missed your contribution for cycle ${c.cycle_number}. This affects your Trust Score.`,
+      message: groupRow.length
+        ? `You missed your contribution for cycle ${c.cycle_number} in "${groupRow[0].name}". This affects your Trust Score.`
+        : `You missed your contribution for cycle ${c.cycle_number}. This affects your Trust Score.`,
     });
     await trustScoreService.decrease(c.member_id, TRUST_SCORE_DELTA_CONTRIBUTION_MISSED, 'CONTRIBUTION_MISSED');
 
-    const userRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, c.member_id)).limit(1);
-    const groupRow = await db.select({ name: schema.savingsGroups.name, currency: schema.savingsGroups.currency }).from(schema.savingsGroups).where(eq(schema.savingsGroups.id, c.group_id)).limit(1);
     if (userRow.length && groupRow.length) {
       const amount = `${groupRow[0].currency} ${parseFloat(c.amount_due).toFixed(2)}`;
       await sendContributionOverdueEmail(userRow[0].email, groupRow[0].name, amount);

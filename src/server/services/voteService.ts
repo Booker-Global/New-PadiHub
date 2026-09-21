@@ -274,7 +274,9 @@ export const voteService = {
       await notificationService.create({
         userId, type: 'payout_swap_completed',
         title: 'Payout Schedule Updated',
-        message: 'Your payout rotation swap was accepted — your payout position has been updated.',
+        message: group
+          ? `Your payout rotation swap in "${group.name}" was accepted — your payout position has been updated.`
+          : 'Your payout rotation swap was accepted — your payout position has been updated.',
       });
     }
 
@@ -345,7 +347,7 @@ export const voteService = {
         await notificationService.create({
           userId: r.id, type: 'vote_required',
           title: 'Vote Required',
-          message: `A new vote has been raised in your group. Please respond before the deadline.`,
+          message: `A new vote has been raised in "${groupName}". Please respond before the deadline.`,
         });
 
         // Email-based accept/decline for the new governance flows (Section
@@ -543,11 +545,14 @@ export const voteService = {
       } else {
         const members = await db.select().from(schema.memberships)
           .where(and(eq(schema.memberships.group_id, vote.group_id), eq(schema.memberships.status, 'active')));
+        const groupRows = await db.select({ name: schema.savingsGroups.name }).from(schema.savingsGroups)
+          .where(eq(schema.savingsGroups.id, vote.group_id)).limit(1);
+        const groupName = groupRows.length ? groupRows[0].name : 'your group';
         for (const m of members) {
           await notificationService.create({
             userId: m.user_id, type: 'vote_closed',
             title: 'Vote Closed',
-            message: `A vote in your group has been ${newStatus}.`,
+            message: `A vote in "${groupName}" has been ${newStatus}.`,
           });
         }
       }
@@ -671,8 +676,8 @@ export const voteService = {
       .from(schema.users).where(inArray(schema.users.id, members.map(m => m.user_id)));
 
     const message = status === 'approved'
-      ? `Your group approved a temporary contribution increase to ${meta?.claimed_amount}. This applies until every member has received a payout at this level this cycle, then it reverts to ${group.contribution_amount}.`
-      : 'The proposed contribution increase was not approved by all members (or the vote timed out) and will not take effect.';
+      ? `"${group.name}" approved a temporary contribution increase to ${meta?.claimed_amount}. This applies until every member has received a payout at this level this cycle, then it reverts to ${group.contribution_amount}.`
+      : `The proposed contribution increase in "${group.name}" was not approved by all members (or the vote timed out) and will not take effect.`;
     for (const r of recipients) {
       await sendVoteOutcomeEmail(r.email, group.name, status === 'approved' ? 'Contribution Claim Approved' : 'Contribution Claim Not Approved', message);
       await notificationService.create({
