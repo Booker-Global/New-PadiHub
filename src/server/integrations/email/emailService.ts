@@ -324,12 +324,16 @@ export async function sendInvitationAcceptedEmail(
 }
 
 export async function sendMemberRemovedEmail(
-  to: string, groupName: string, reason: string,
+  to: string, groupName: string, reason: string, memberName?: string,
 ): Promise<void> {
   await send(to, `You have been removed from ${groupName}`, wrap(`
     ${h2('Membership removed')}
     ${p(`You have been removed from <strong>${groupName}</strong>.`)}
-    ${table(detail('Reason', reason))}
+    ${table(
+      detail('Group', groupName) +
+      (memberName ? detail('Member', memberName) : '') +
+      detail('Reason', reason),
+    )}
     ${p('If you believe this was a mistake, please contact the group leader or <a href="mailto:hello@padihub.com" style="color:#2EAF6F;">PadiHub support</a>.')}
   `));
 }
@@ -346,6 +350,10 @@ export async function sendGroupMemberSuspendedNotificationEmail(
   await send(to, `A member of ${groupName} has been suspended`, wrap(`
     ${h2('Group membership update')}
     ${p(`<strong>${suspendedMemberName}</strong> has been suspended from <strong>${groupName}</strong> after repeated missed contributions.`)}
+    ${table(
+      detail('Group', groupName) +
+      detail('Suspended member', suspendedMemberName),
+    )}
     ${p('This may affect the group\'s rotation order and payout schedule. Check the group page for the latest details.')}
   `));
 }
@@ -556,31 +564,47 @@ export async function sendGroupClosedDueToGracePeriodExpiry(to: string, groupNam
 }
 
 /** Notify every active member (except the Owner who made the change) that the group's settings/parameters were edited. */
-export async function sendGroupSettingsUpdatedEmail(to: string, groupName: string): Promise<void> {
+export async function sendGroupSettingsUpdatedEmail(
+  to: string, groupName: string, changes: { label: string; from: string; to: string }[] = [],
+): Promise<void> {
   await send(to, `${groupName}'s settings have been updated`, wrap(`
     ${h2('Group settings updated')}
-    ${p(`The group leader has updated <strong>${groupName}</strong>'s settings — this may include the contribution amount, payout date, membership limit, or minimum Trust Score for new join requests.`)}
+    ${p(`The group leader has updated <strong>${groupName}</strong>'s settings.`)}
+    ${changes.length ? table(
+      detail('Group', groupName) +
+      changes.map(c => detail(c.label, `${c.from} → ${c.to}`)).join(''),
+    ) : table(detail('Group', groupName))}
     ${p('Sign in to your dashboard to review the latest details before your next contribution is due.')}
     ${btn('View Group', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
   `));
 }
 
 /** Notify the group leader that a group stuck below the minimum member count for 30 days has auto-expired. */
-export async function sendGroupExpiredEmail(to: string, groupName: string): Promise<void> {
+export async function sendGroupExpiredEmail(to: string, groupName: string, activeCount?: number, minRequired?: number): Promise<void> {
   await send(to, `${groupName} has expired`, wrap(`
     ${h2('Group expired')}
     ${p(`<strong>${groupName}</strong> remained below the minimum member count for 30 days and has automatically <strong>Expired</strong>. No further contributions or payouts will occur for this group.`)}
+    ${(activeCount !== undefined && minRequired !== undefined) ? table(
+      detail('Group', groupName) +
+      detail('Active members', String(activeCount)) +
+      detail('Minimum required', String(minRequired)),
+    ) : ''}
     ${p('You can create a new group at any time.')}
   `));
 }
 
 /** Reminder nudge before a below-minimum group auto-expires. */
 export async function sendGroupExpiryReminderEmail(
-  to: string, groupName: string, daysRemaining: number,
+  to: string, groupName: string, daysRemaining: number, activeCount?: number, minRequired?: number,
 ): Promise<void> {
   await send(to, `${groupName} will expire in ${daysRemaining} day${daysRemaining === 1 ? '' : 's'}`, wrap(`
     ${h2('Group expiring soon')}
     ${p(`<strong>${groupName}</strong> has been below the minimum member count for a while and will automatically expire in <strong>${daysRemaining} day${daysRemaining === 1 ? '' : 's'}</strong> if not refilled.`)}
+    ${(activeCount !== undefined && minRequired !== undefined) ? table(
+      detail('Group', groupName) +
+      detail('Active members', String(activeCount)) +
+      detail('Minimum required', String(minRequired)),
+    ) : ''}
     ${p('Invite more members via your existing invite link to keep the group active.')}
     ${btn('Invite Members', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
   `));
@@ -843,41 +867,49 @@ export async function sendGroupLeaderActivityEmail(
 // caller — they were superseded before launch by the richer functions below,
 // which ARE the ones actually sent for every vote-required/vote-resolved
 // situation (member admission, contribution "claim", and payout-swap
-// proposals): sendGovernanceVoteEmail (vote required — with working
-// one-click accept/decline links, no login needed) and sendVoteOutcomeEmail
+// proposals): sendGovernanceVoteEmail (vote required) and sendVoteOutcomeEmail
 // (vote result). Removed as dead code rather than kept "just in case".
+//
+// Both emails' call-to-action deep-links straight to the group's page
+// (/savings-groups/:id) rather than performing the vote itself or linking to
+// a generic list page — the member must be signed in and cast their actual
+// approve/reject response from the group's Governance section on the
+// dashboard, never via a one-click email action or a bare confirmation
+// screen. See voteController.respond / the now-legacy GET /api/votes/respond
+// token flow, which is no longer linked from any outbound email but is left
+// in place to honour any already-sent email still carrying an old link.
 
 /**
- * Governance vote notice with working single-click accept/decline links
- * (Section 4/8) — used for new-member admission, contribution "claim", and
- * payout-swap proposals. The links themselves are the authentication
- * (GET /api/votes/respond?token=...&decision=...), so no login is required
- * to respond — this is deliberately email-based, not push/in-app-only.
+ * Governance vote notice (Section 4/8) — used for new-member admission,
+ * contribution "claim", payout-swap, and member-removal proposals. The
+ * single call-to-action takes the member to the group's own page, where
+ * they log in (if needed) and cast their real approve/reject response from
+ * the Governance section — never a one-click email action.
  */
 export async function sendGovernanceVoteEmail(
-  to: string, groupName: string, subjectLine: string, description: string,
-  deadline: string, acceptUrl: string, declineUrl: string,
+  to: string, groupName: string, groupId: string, subjectLine: string, description: string,
+  deadline: string, proposerName?: string,
 ): Promise<void> {
   await send(to, `${subjectLine} — ${groupName}`, wrap(`
     ${h2(subjectLine)}
     ${p(description)}
     ${table(
       detail('Group', groupName) +
+      (proposerName ? detail('Proposed by', proposerName) : '') +
       detail('Respond by', deadline),
     )}
-    ${btn('Accept', acceptUrl)}
-    <div style="margin-top:12px;">
-      <a href="${declineUrl}" style="color:#DC2626;font-size:14px;text-decoration:underline;">Decline instead</a>
-    </div>
+    ${btn('Review & Respond', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups/${groupId}`)}
+    ${p('<small style="color:#9CA3AF;">You\'ll need to be logged in to cast your response from the group\'s Governance section.</small>')}
   `));
 }
 
-/** Generic result notice for any governance vote (member admission, contribution claim, payout swap). */
-export async function sendVoteOutcomeEmail(to: string, groupName: string, subjectLine: string, message: string): Promise<void> {
+/** Generic result notice for any governance vote (member admission, contribution claim, payout swap, member removal). */
+export async function sendVoteOutcomeEmail(to: string, groupName: string, groupId: string, subjectLine: string, message: string): Promise<void> {
   await send(to, `${subjectLine} — ${groupName}`, wrap(`
     ${h2(subjectLine)}
     ${p(message)}
-    ${btn('View Group', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups`)}
+    ${table(detail('Group', groupName))}
+    ${btn('View Group', `${process.env.APP_URL ?? 'https://padihub.com'}/savings-groups/${groupId}`)}
   `));
 }
 
@@ -965,13 +997,16 @@ export async function sendSubscriptionRenewalReminderEmail(
 }
 
 export async function sendSubscriptionPaymentFailedEmail(
-  to: string, amount: string,
+  to: string, amount: string, planName?: string, retryInfo?: string,
 ): Promise<void> {
   await send(to, 'PadiHub subscription payment failed', wrap(`
     ${h2('Subscription payment failed')}
     ${p('We were unable to process your PadiHub subscription payment.')}
-    ${table(detail('Amount', amount))}
-    ${p('Your account access is currently restricted until this is resolved. Please update your payment method as soon as possible to restore full access — depending on your account status, PadiHub may automatically retry the charge once your card is updated.')}
+    ${table(
+      (planName ? detail('Plan', planName) : '') +
+      detail('Amount', amount),
+    )}
+    ${p(`Your account access is currently restricted until this is resolved. Please update your payment method as soon as possible to restore full access.${retryInfo ? ` ${retryInfo}` : ' Depending on your account status, PadiHub may automatically retry the charge once your card is updated.'}`)}
     ${btn('Update Payment Method', `${process.env.APP_URL ?? 'https://padihub.com'}/dashboard`)}
   `));
 }
@@ -1112,11 +1147,14 @@ export async function sendSupportTicketReceivedEmail(
 }
 
 export async function sendSupportTicketUpdatedEmail(
-  to: string, ticketRef: string, response: string,
+  to: string, ticketRef: string, subject: string, response: string,
 ): Promise<void> {
   await send(to, `Update on your support ticket — ${ticketRef}`, wrap(`
     ${h2('Your support ticket has been updated')}
-    ${p(`Ticket reference: <strong>${ticketRef}</strong>`)}
+    ${table(
+      detail('Ticket reference', ticketRef) +
+      detail('Subject', subject),
+    )}
     ${p('Our team has responded to your request:')}
     <div style="background:#F9FAFB;border-left:4px solid #2EAF6F;padding:16px;border-radius:0 4px 4px 0;margin:16px 0;">
       <p style="margin:0;font-size:15px;color:#374151;">${response}</p>
@@ -1126,11 +1164,14 @@ export async function sendSupportTicketUpdatedEmail(
 }
 
 export async function sendSupportTicketClosedEmail(
-  to: string, ticketRef: string, resolution: string,
+  to: string, ticketRef: string, subject: string, resolution: string,
 ): Promise<void> {
   await send(to, `Support ticket resolved — ${ticketRef}`, wrap(`
     ${h2('Your support ticket has been resolved')}
-    ${p(`Ticket reference: <strong>${ticketRef}</strong>`)}
+    ${table(
+      detail('Ticket reference', ticketRef) +
+      detail('Subject', subject),
+    )}
     ${p('Your support request has been resolved:')}
     <div style="background:#F9FAFB;border-left:4px solid #2EAF6F;padding:16px;border-radius:0 4px 4px 0;margin:16px 0;">
       <p style="margin:0;font-size:15px;color:#374151;">${resolution}</p>

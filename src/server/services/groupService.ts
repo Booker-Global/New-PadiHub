@@ -837,6 +837,22 @@ export const groupService = {
         .from(schema.memberships)
         .innerJoin(schema.users, eq(schema.memberships.user_id, schema.users.id))
         .where(and(eq(schema.memberships.group_id, groupId), eq(schema.memberships.status, 'active')));
+      const settingsChanges: { label: string; from: string; to: string }[] = [];
+      if (data.contribution_amount !== undefined && data.contribution_amount !== group.contribution_amount) {
+        settingsChanges.push({ label: 'Contribution amount', from: String(group.contribution_amount), to: String(data.contribution_amount) });
+      }
+      if (data.contribution_frequency !== undefined && data.contribution_frequency !== group.contribution_frequency) {
+        settingsChanges.push({ label: 'Contribution frequency', from: group.contribution_frequency, to: data.contribution_frequency });
+      }
+      if (data.payout_day !== undefined && data.payout_day !== group.payout_day) {
+        settingsChanges.push({ label: 'Payout day', from: String(group.payout_day), to: String(data.payout_day) });
+      }
+      if (data.maximum_members !== undefined && data.maximum_members !== group.maximum_members) {
+        settingsChanges.push({ label: 'Maximum members', from: String(group.maximum_members), to: String(data.maximum_members) });
+      }
+      if (data.min_trust_score !== undefined && data.min_trust_score !== group.min_trust_score) {
+        settingsChanges.push({ label: 'Minimum Trust Score', from: String(group.min_trust_score), to: String(data.min_trust_score) });
+      }
       for (const member of activeMembers) {
         if (member.id === leaderId) continue;
         await notificationService.create({
@@ -844,7 +860,7 @@ export const groupService = {
           title: 'Group Settings Updated',
           message: `"${group.name}"'s settings were updated by the group leader — check the group dashboard for the latest contribution amount, payout date, and membership rules.${frequencyChangeEffectiveDate ? ` Payout frequency changes take effect on ${frequencyChangeEffectiveDate.toLocaleDateString()}.` : ''}${payoutDayChangeEffectiveDate ? ` The new payout ${group.contribution_frequency === 'weekly' ? 'day' : 'date'} takes effect on ${payoutDayChangeEffectiveDate.toLocaleDateString()}.` : ''}`,
         });
-        await sendGroupSettingsUpdatedEmail(member.email, group.name);
+        await sendGroupSettingsUpdatedEmail(member.email, group.name, settingsChanges);
       }
     }
 

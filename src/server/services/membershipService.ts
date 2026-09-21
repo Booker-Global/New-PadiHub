@@ -801,7 +801,8 @@ export const membershipService = {
     });
 
     if (departedUserRow.length) {
-      await sendMemberRemovedEmail(departedUserRow[0].email, group.name, departedReasonText);
+      const departedMemberName = `${departedUserRow[0].first_name} ${departedUserRow[0].last_name}`.trim();
+      await sendMemberRemovedEmail(departedUserRow[0].email, group.name, departedReasonText, departedMemberName);
     }
 
     // Every remaining member's payout timing and pool size just changed —

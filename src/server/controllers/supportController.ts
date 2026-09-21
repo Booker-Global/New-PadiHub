@@ -213,7 +213,7 @@ export async function notifySupportTicketUpdated(ticketId: string, response: str
     .from(schema.users).where(eq(schema.users.id, ticket[0].user_id)).limit(1);
   if (userRow.length) {
     const ticketRef = `TKT-${ticketId.slice(0, 8).toUpperCase()}`;
-    await sendSupportTicketUpdatedEmail(userRow[0].email, ticketRef, response);
+    await sendSupportTicketUpdatedEmail(userRow[0].email, ticketRef, ticket[0].subject, response);
   }
   await notificationService.create({
     userId: ticket[0].user_id, type: 'support_ticket_updated',
@@ -223,7 +223,7 @@ export async function notifySupportTicketUpdated(ticketId: string, response: str
 }
 
 export async function notifySupportTicketClosed(ticketId: string, resolution: string) {
-  const ticket = await db.select({ user_id: schema.supportTickets.user_id })
+  const ticket = await db.select({ user_id: schema.supportTickets.user_id, subject: schema.supportTickets.subject })
     .from(schema.supportTickets).where(eq(schema.supportTickets.id, ticketId)).limit(1);
   if (!ticket.length) return;
   const userRow = await db.select({ email: schema.users.email })
@@ -231,9 +231,9 @@ export async function notifySupportTicketClosed(ticketId: string, resolution: st
   if (userRow.length) {
     const ticketRef = `TKT-${ticketId.slice(0, 8).toUpperCase()}`;
     // Send email to user
-    await sendSupportTicketClosedEmail(userRow[0].email, ticketRef, resolution);
+    await sendSupportTicketClosedEmail(userRow[0].email, ticketRef, ticket[0].subject, resolution);
     // Also send confirmation email to admin
-    await sendSupportTicketClosedEmail('hello@padihub.com', ticketRef, resolution);
+    await sendSupportTicketClosedEmail('hello@padihub.com', ticketRef, ticket[0].subject, resolution);
   }
   await notificationService.create({
     userId: ticket[0].user_id, type: 'support_ticket_closed',

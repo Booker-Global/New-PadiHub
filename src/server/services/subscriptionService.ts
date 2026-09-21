@@ -228,7 +228,7 @@ async function chargeFirstFlutterwaveSubscription(
       userId, type: 'subscription_payment_failed', title: 'Payment could not be completed',
       message: 'We could not confirm payment for your subscription. Please check your card details.',
     });
-    await sendSubscriptionPaymentFailedEmail(user.email, formatTierPrice(tier, 'NG'));
+    await sendSubscriptionPaymentFailedEmail(user.email, formatTierPrice(tier, 'NG'), SUBSCRIPTION_TIERS[tier].name);
     return;
   }
 
@@ -278,7 +278,7 @@ async function chargeFirstFlutterwaveSubscription(
       userId, type: 'subscription_payment_failed', title: 'Payment could not be completed',
       message: 'We could not confirm payment for your subscription. Please check your card details or complete any additional verification your bank requires.',
     });
-    await sendSubscriptionPaymentFailedEmail(user.email, formatTierPrice(tier, 'NG'));
+    await sendSubscriptionPaymentFailedEmail(user.email, formatTierPrice(tier, 'NG'), SUBSCRIPTION_TIERS[tier].name);
     return;
   }
 
@@ -432,6 +432,7 @@ async function confirmFlutterwaveSubscriptionCharge(
   });
   await sendSubscriptionPaymentFailedEmail(
     user.email, isSubscriptionTierKey(user.subscription_tier) ? formatTierPrice(user.subscription_tier, user.country) : '',
+    isSubscriptionTierKey(user.subscription_tier) ? SUBSCRIPTION_TIERS[user.subscription_tier].name : undefined,
   );
   return true;
 }
@@ -845,7 +846,7 @@ export const subscriptionService = {
       // This branch is reached again on every retry of a persistently
       // declined/unconfirmed card, so only actually email once per hour.
       if (await shouldNotifyActivationFailureByEmail(userId)) {
-        await sendSubscriptionPaymentFailedEmail(user.email, formatTierPrice(tier, country));
+        await sendSubscriptionPaymentFailedEmail(user.email, formatTierPrice(tier, country), SUBSCRIPTION_TIERS[tier].name);
       }
     }
 
@@ -992,7 +993,7 @@ export const subscriptionService = {
             message: 'We could not confirm payment for your upgraded plan. Please check your card details or complete any additional verification your bank requires.',
           });
           if (await shouldNotifyActivationFailureByEmail(userId)) {
-            await sendSubscriptionPaymentFailedEmail(user.email, newAmount);
+            await sendSubscriptionPaymentFailedEmail(user.email, newAmount, SUBSCRIPTION_TIERS[newTier].name);
           }
         }
       }

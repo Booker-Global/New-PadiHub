@@ -445,7 +445,7 @@ export async function dailyGroupLifecycleExpiry(): Promise<void> {
           message: `"${group.name}" remained below ${GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH} members for 30 days and has expired.`,
         });
         const leaderRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, group.leader_id)).limit(1);
-        if (leaderRow.length) await sendGroupExpiredEmail(leaderRow[0].email, group.name);
+        if (leaderRow.length) await sendGroupExpiredEmail(leaderRow[0].email, group.name, activeCount, GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH);
         continue;
       }
 
@@ -456,7 +456,7 @@ export async function dailyGroupLifecycleExpiry(): Promise<void> {
           message: `"${group.name}" will expire in ${daysRemaining} day(s) unless it reaches ${GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH} active members.`,
         });
         const leaderRow = await db.select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, group.leader_id)).limit(1);
-        if (leaderRow.length) await sendGroupExpiryReminderEmail(leaderRow[0].email, group.name, daysRemaining);
+        if (leaderRow.length) await sendGroupExpiryReminderEmail(leaderRow[0].email, group.name, daysRemaining, activeCount, GROUP_MIN_ACTIVE_MEMBERS_TO_LAUNCH);
       }
     }
   });
@@ -1112,6 +1112,7 @@ export async function monthlySubscriptionRenewalCharge(): Promise<void> {
         await sendSubscriptionPaymentFailedEmail(
           user.email,
           isSubscriptionTierKey(user.subscription_tier) ? formatTierPrice(user.subscription_tier, user.country) : '',
+          isSubscriptionTierKey(user.subscription_tier) ? SUBSCRIPTION_TIERS[user.subscription_tier].name : undefined,
         );
         continue;
       }
@@ -1180,6 +1181,7 @@ export async function monthlySubscriptionRenewalCharge(): Promise<void> {
           await sendSubscriptionPaymentFailedEmail(
             user.email,
             isSubscriptionTierKey(user.subscription_tier) ? formatTierPrice(user.subscription_tier, user.country) : '',
+            isSubscriptionTierKey(user.subscription_tier) ? SUBSCRIPTION_TIERS[user.subscription_tier].name : undefined,
           );
         }
 
@@ -1198,6 +1200,7 @@ export async function monthlySubscriptionRenewalCharge(): Promise<void> {
         await sendSubscriptionPaymentFailedEmail(
           user.email,
           isSubscriptionTierKey(user.subscription_tier) ? formatTierPrice(user.subscription_tier, user.country) : '',
+          isSubscriptionTierKey(user.subscription_tier) ? SUBSCRIPTION_TIERS[user.subscription_tier].name : undefined,
         );
         console.warn(
           `[Job] monthly_subscription_renewal_charge: renewal charge failed for subscription ${sub.id}:`,
