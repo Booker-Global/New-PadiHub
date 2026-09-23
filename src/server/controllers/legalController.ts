@@ -27,7 +27,7 @@ const TERMS_SECTIONS = [
   },
   {
     title: 'Payout Timing',
-    content: 'Because PadiHub uses a separate-charges-and-transfers model (contributions are charged to PadiHub\'s platform balance, then transferred to each cycle\'s recipient), the very first payout made to a new recipient\'s connected account may be delayed by approximately 7–14 days while the platform\'s payment processor completes its standard risk review for new payout destinations. Standard payouts thereafter are typically completed within approximately 3 business days.',
+    content: 'Because PadiHub uses a separate-charges-and-transfers model (contributions are charged to PadiHub\'s platform balance, then transferred to each cycle\'s recipient), the very first payout made to a new UK recipient\'s Stripe-connected account may be delayed by approximately 7–14 days while Stripe completes its standard risk review for new payout destinations; standard UK payouts thereafter are typically completed within approximately 3 business days. This first-payout risk-review hold is a Stripe-specific requirement and does not apply to Nigerian recipients, whose payouts are processed through Flutterwave.',
   },
   {
     title: 'Savings Groups',
