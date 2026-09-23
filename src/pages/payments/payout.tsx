@@ -438,7 +438,13 @@ export default function ConnectPayoutPage() {
                     <div className="flex items-start gap-3">
                       <Shield size={18} style={{ color: '#2EAF6F', flexShrink: 0 }} />
                       <p className="text-sm text-gray-700">
-                        Your payout destination is verified. When it&apos;s your turn in the rotation, your payout will be sent here. Your very first payout may take up to 7–14 days while our payment processor completes a standard review for new payout destinations; payouts after that typically arrive within about 3 business days.
+                        Your payout destination is verified. When it&apos;s your turn in the rotation, your payout will be sent here.
+                        {' '}
+                        {profile?.country === 'NG'
+                          // Flutterwave payouts (Nigeria) go straight to bank transfer — there is
+                          // no processor risk-review hold on the first payout, unlike Stripe (UK).
+                          ? 'Payouts typically arrive within about 3 business days.'
+                          : 'Your very first payout may take up to 7–14 days while our payment processor completes a standard review for new payout destinations; payouts after that typically arrive within about 3 business days.'}
                       </p>
                     </div>
                     <button

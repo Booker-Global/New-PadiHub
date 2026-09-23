@@ -1,13 +1,10 @@
-import { useEffect, useState } from 'react';
 import { Helmet } from '@dr.pogodin/react-helmet';
 import { Link } from 'react-router-dom';
 import { ArrowRight, CheckCircle, Users } from 'lucide-react';
-import { getValidSession } from '@/lib/session';
+import { useResolvedPricingRegion, type PricingRegion } from '@/lib/pricingRegion';
 
 const _jsonLd = "{\"@context\":\"https://schema.org\",\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/pricing#webpage\",\"name\":\"Membership Pricing — PadiHub\",\"url\":\"https://padihub.com/pricing\",\"description\":\"Region-aware monthly pricing for PadiHub's Basic and Premium subscriptions.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"}}";
 
-type PricingRegion = 'UK' | 'NG';
-type GeoRegion = PricingRegion | 'BOTH';
 type PlanKey = 'basic' | 'premium';
 
 type PlanCard = {
@@ -19,17 +16,6 @@ type PlanCard = {
   joinLimitLabel: string;
   highlights: string[];
   recommended?: boolean;
-};
-
-type GeoResponse = {
-  region?: GeoRegion;
-};
-
-type ProfileResponse = {
-  success?: boolean;
-  data?: {
-    country?: string | null;
-  };
 };
 
 const commonFeatures = [
@@ -94,49 +80,8 @@ const plansByRegion: Record<PricingRegion, PlanCard[]> = {
   ],
 };
 
-function normalizeProfileCountry(country?: string | null): PricingRegion | null {
-  if (country === 'NG') return 'NG';
-  if (country === 'GB' || country === 'UK') return 'UK';
-  return null;
-}
-
-function fallbackRegionFromGeo(region?: GeoRegion): PricingRegion {
-  // Match the existing UK-first fallback already used across the pricing/signup flow.
-  return region === 'NG' ? 'NG' : 'UK';
-}
-
 export default function PricingPage() {
-  const [region, setRegion] = useState<PricingRegion>('UK');
-
-  useEffect(() => {
-    let active = true;
-    const session = getValidSession();
-
-    const geoRequest = window.fetch('/api/geo')
-      .then(response => response.ok ? response.json() as Promise<GeoResponse> : null)
-      .catch(() => null);
-
-    const profileRequest = session?.token
-      ? window.fetch('/api/users/profile', {
-        headers: {
-          Authorization: 'Bearer ' + session.token,
-        },
-      })
-        .then(response => response.ok ? response.json() as Promise<ProfileResponse> : null)
-        .catch(() => null)
-      : Promise.resolve<ProfileResponse | null>(null);
-
-    void Promise.all([geoRequest, profileRequest]).then(([geo, profile]) => {
-      if (!active) return;
-      const profileRegion = normalizeProfileCountry(profile?.data?.country);
-      setRegion(profileRegion ?? fallbackRegionFromGeo(geo?.region));
-    });
-
-    return () => {
-      active = false;
-    };
-  }, []);
-
+  const region = useResolvedPricingRegion();
   const visiblePlans = plansByRegion[region];
   const currencyLabel = region === 'NG' ? 'NGN (₦)' : 'GBP (£)';
 

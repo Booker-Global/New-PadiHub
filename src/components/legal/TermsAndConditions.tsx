@@ -281,7 +281,9 @@ export const TERMS_SECTIONS: TermsSection[] = [
       },
       {
         subtitle: 'First Payout May Be Delayed',
-        text: 'The first payout made to a new recipient may be delayed by approximately 7–14 days while our payment processor completes its standard risk review for new payout destinations. This is a standard processor requirement and not specific to any individual member.',
+        text: (region: TermsRegion) => region === 'NG'
+          ? 'PadiHub\'s Nigeria payout processor does not apply a first-payout risk-review hold, so this delay does not apply to payouts made to Nigerian recipients.'
+          : 'The first payout made to a new recipient may be delayed by approximately 7–14 days while our payment processor completes its standard risk review for new payout destinations. This is a standard processor requirement and not specific to any individual member.',
       },
       {
         subtitle: 'Standard Payout Timing',
