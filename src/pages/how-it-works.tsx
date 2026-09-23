@@ -107,10 +107,14 @@ export default function HowItWorksPage() {
       return {
         ...step,
         desc: 'When it is your turn, PadiHub transfers that cycle’s pot to your registered payout account after contributions have been collected.',
-        details: [
-          'Your first payout may take around 7–14 days while the payment processor reviews a new payout destination',
-          'Later payouts typically complete within about 3 business days',
-        ],
+        // The 7–14 day first-payout review hold is a Stripe (UK) processor
+        // requirement — Flutterwave (Nigeria) payouts have no such delay.
+        details: region === 'NG'
+          ? ['Payouts typically complete within about 3 business days']
+          : [
+            'Your first payout may take around 7–14 days while the payment processor reviews a new payout destination',
+            'Later payouts typically complete within about 3 business days',
+          ],
       };
     }
 

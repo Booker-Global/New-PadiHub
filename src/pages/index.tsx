@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { getValidSession } from '@/lib/session';
+import { useResolvedPricingRegion } from '@/lib/pricingRegion';
 import GroupSearch from '@/components/GroupSearch';
 
 const _jsonLd = "{\"@context\":\"https://schema.org\",\"@graph\":[{\"@type\":\"WebSite\",\"@id\":\"https://padihub.com/#website\",\"name\":\"PadiHub\",\"url\":\"https://padihub.com/\"},{\"@type\":\"Organization\",\"@id\":\"https://padihub.com/#organization\",\"name\":\"PadiHub\",\"url\":\"https://padihub.com/\",\"logo\":\"https://padihub.com/airo-assets/images/logo/primary\"},{\"@type\":\"WebPage\",\"@id\":\"https://padihub.com/#webpage\",\"url\":\"https://padihub.com/\",\"name\":\"PadiHub — Save Together. Grow Together. Belong.\",\"isPartOf\":{\"@id\":\"https://padihub.com/#website\"},\"about\":{\"@id\":\"https://padihub.com/#organization\"},\"datePublished\":\"2026-07-16\",\"dateModified\":\"2026-07-16\"},{\"@type\":\"SoftwareApplication\",\"name\":\"PadiHub\",\"applicationCategory\":\"FinanceApplication\",\"operatingSystem\":\"Web\",\"offers\":{\"@type\":\"Offer\",\"price\":\"4.99\",\"priceCurrency\":\"GBP\"}}]}";
@@ -33,18 +34,6 @@ const regionCopy: Record<Region, { hero: string; illustration: string; pricing: 
     finalCta: 'Monthly-only plans · Cancel anytime',
   },
 };
-
-function usePricingRegion(): Region {
-  const [region, setRegion] = useState<Region>('BOTH');
-  useEffect(() => {
-    // Only fetch geo after hydration — never during SSR or first client render
-    window.fetch('/api/geo')
-      .then(r => r.json())
-      .then(data => { if (data?.region) setRegion(data.region); })
-      .catch(() => setRegion('BOTH'));
-  }, []);
-  return region;
-}
 
 
 
@@ -320,14 +309,15 @@ const homeTiersByRegion: Record<'UK' | 'NG', HomeTier[]> = {
 
 // ── Main Page ────────────────────────────────────────────────────────────────
 export default function HomePage() {
-  const pricingRegion = usePricingRegion();
+  // useResolvedPricingRegion() checks the signed-in user's saved profile
+  // country first (most authoritative), then IP-based geolocation, and
+  // caches the resolved region for the rest of the session — so, unlike the
+  // previous geo-only/'BOTH' hook here, the homepage always agrees with
+  // /pricing and never shows one region's price and then flips to another's.
+  const pricingRegion = useResolvedPricingRegion();
   const authUser = useAuthUser();
   const regionalCopy = regionCopy[pricingRegion];
-  // The teaser must always show exactly one region's tiers (per location),
-  // never both at once — fall back the transient 'BOTH' hook state to 'UK'
-  // (matching the UK-first fallback already used on /pricing) until geo
-  // resolves client-side.
-  const homeTiers = homeTiersByRegion[pricingRegion === 'NG' ? 'NG' : 'UK'];
+  const homeTiers = homeTiersByRegion[pricingRegion];
   return (
     <>
       <Helmet>
@@ -505,7 +495,15 @@ export default function HomePage() {
             {[
               { step: '01', icon: Users,       title: 'Create or Join a Group', desc: 'Premium members can create groups, while all members can join within plan limits. New groups only start once at least 3 verified members are ready.', color: '#2EAF6F' },
               { step: '02', icon: TrendingUp,  title: 'Contribute on Schedule', desc: 'Make each scheduled contribution on time. If a charge fails, there is a fixed 72-hour grace period and one automatic retry.', color: '#F59E0B' },
-              { step: '03', icon: CheckCircle, title: 'Receive Your Payout',    desc: 'When it is your turn, the cycle pot is transferred to your payout account. First payouts to a new recipient may take around 7–14 days; later payouts typically complete within about 3 business days.', color: '#2eafaf' },
+              {
+                step: '03', icon: CheckCircle, title: 'Receive Your Payout',
+                // The 7–14 day first-payout hold is a Stripe (UK) processor
+                // risk-review requirement — Flutterwave (Nigeria) has none.
+                desc: pricingRegion === 'NG'
+                  ? 'When it is your turn, the cycle pot is transferred to your payout account. Payouts typically complete within about 3 business days.'
+                  : 'When it is your turn, the cycle pot is transferred to your payout account. First payouts to a new recipient may take around 7–14 days; later payouts typically complete within about 3 business days.',
+                color: '#2eafaf',
+              },
             ].map((s, i) => (
               <div key={i} style={{ borderRadius: 24, padding: '2rem', textAlign: 'center', background: '#F9FAFB', border: '1px solid #E5E7EB', boxSizing: 'border-box' }}>
                 <div style={{ width: 56, height: 56, borderRadius: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1rem', background: `${s.color}20`, flexShrink: 0 }}>
