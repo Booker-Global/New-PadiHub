@@ -15,8 +15,11 @@
  *          Requirement 1's very-frequent (6x/day) idempotent payout catch-up sweep — the main
  *          safety net going forward (05:50 above is kept only for job_runs history continuity).
  *          For every active group whose cycle isn't yet resolved, also sends the one-time
- *          "payout delayed, here's why" notice once scheduled_payout_date has passed (see
- *          rotationService.sendPayoutDelayNoticeIfDue). Safe to run this often for the same
+ *          "payout delayed, here's why" notice — but only once scheduled_payout_date has passed
+ *          AND that day's 07:00/07:05 contribution charge run has had a chance to complete (see
+ *          rotationService.sendPayoutDelayNoticeIfDue / payoutSchedule.isPastPayoutDelayNoticeCutoff),
+ *          so the 02:40/06:40 runs never wrongly declare a same-day payout "delayed" before
+ *          contributions were even attempted. Safe to run this often for the same
  *          mutually-exclusive-claim reason as the billing reconciliation slots below.
  *   06:00  contribution reminders
  *   06:05  upcoming payout reminders (Section 22 follow-up — sent ~7 days before

@@ -48,9 +48,40 @@ export const CONTRIBUTION_SAME_DAY_CUTOFF_HOUR_UTC = 17;
  */
 export const CONTRIBUTION_CHARGE_CATCHUP_HOUR_UTC = 18;
 
+/**
+ * The earliest hour (UTC) at which it's safe to conclude a rotation's
+ * payout is genuinely "delayed" (see rotationService.sendPayoutDelayNoticeIfDue).
+ * A rotation's scheduled_payout_date is stored at midnight UTC (00:00) of
+ * the due day, so comparing it against "now" alone goes true the instant
+ * the clock rolls over — hours before dailyAutoChargeDueContributionsTask
+ * (CONTRIBUTION_CHARGE_HOUR_UTC, 07:00) has even had a chance to attempt
+ * that day's contribution charges. The very-frequent payoutCatchUpSweep
+ * (02:40/06:40/...) would otherwise wrongly tell members the payout is
+ * delayed before charging was ever attempted, only for a "payout
+ * confirmed"/contribution-collected follow-up to arrive minutes later once
+ * the 07:00-07:05 charge run actually completes. Set a few minutes after
+ * the 07:05 auto-charge run so it has time to finish before this fires.
+ */
+export const PAYOUT_DELAY_NOTICE_EARLIEST_HOUR_UTC = CONTRIBUTION_CHARGE_HOUR_UTC + 1;
+
 /** True once `date` (UTC) is at/after the same-day charging cut-off. */
 export function isPastSameDayChargeCutoff(date: Date = new Date()): boolean {
   return date.getUTCHours() >= CONTRIBUTION_SAME_DAY_CUTOFF_HOUR_UTC;
+}
+
+/**
+ * True once it's safe to send the "payout delayed" notice for a rotation
+ * whose scheduled_payout_date is `payoutDate` — i.e. once that day's
+ * contribution charge run (CONTRIBUTION_CHARGE_HOUR_UTC) has had a chance
+ * to complete. For a payout date in the past (charging should already be
+ * long resolved) this is always true; for a payout date that's today, it's
+ * only true from PAYOUT_DELAY_NOTICE_EARLIEST_HOUR_UTC onward; for a
+ * future-dated payout it's always false.
+ */
+export function isPastPayoutDelayNoticeCutoff(payoutDate: Date, now: Date = new Date()): boolean {
+  const chargeAttemptCutoff = new Date(payoutDate);
+  chargeAttemptCutoff.setUTCHours(PAYOUT_DELAY_NOTICE_EARLIEST_HOUR_UTC, 0, 0, 0);
+  return now.getTime() >= chargeAttemptCutoff.getTime();
 }
 
 /** Inclusive min/max bounds for payout_day, or null if not applicable (daily). */

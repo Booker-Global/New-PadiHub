@@ -305,8 +305,8 @@ export default function TrustScorePage() {
                         }}>
                         {isPast ? <CheckCircle size={18} /> : <Shield size={16} />}
                       </div>
-                      <p className="text-xs font-bold mt-2 text-center max-w-16 leading-tight"
-                        style={{ color: isActive ? t.color : isPast ? '#6B7280' : '#9CA3AF' }}>
+                      <p className="text-xs font-bold mt-2 text-center max-w-20 leading-tight"
+                        style={{ color: isActive ? t.color : isPast ? '#6B7280' : '#9CA3AF', overflowWrap: 'normal', wordBreak: 'normal' }}>
                         {t.name}
                       </p>
                       <p className="text-xs text-gray-400 mt-0.5">{t.min}–{t.max}</p>
