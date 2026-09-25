@@ -10,7 +10,7 @@ import { monitoringService } from './monitoringService.js';
 import { groupService } from './groupService.js';
 import { getStripeProvider, getFlutterwaveProvider } from '../integrations/payments/PaymentProviderFactory.js';
 import { TRUST_SCORE_DELTA_CYCLE_COMPLETED, resolveUserDisplayName, UPCOMING_PAYOUT_REMINDER_ADVANCE_DAYS } from '../lib/constants.js';
-import { computeNextPayoutDate } from '../lib/payoutSchedule.js';
+import { computeNextPayoutDate, isPastPayoutDelayNoticeCutoff } from '../lib/payoutSchedule.js';
 import {
   sendUpcomingPayoutEmail,
   sendPayoutCompleteEmail,
@@ -727,7 +727,11 @@ export const rotationService = {
     const rotation = rotationRows[0];
     if (rotation.payout_status !== 'pending') return false;
     if (rotation.payout_delay_notice_sent_at) return false;
-    if (rotation.scheduled_payout_date.getTime() > Date.now()) return false;
+    // Don't declare the payout "delayed" until that day's contribution
+    // charge run has actually had a chance to complete — otherwise the
+    // very-frequent catch-up sweep can fire this notice hours before
+    // charging was even attempted (see isPastPayoutDelayNoticeCutoff).
+    if (!isPastPayoutDelayNoticeCutoff(rotation.scheduled_payout_date)) return false;
 
     const { contributionService } = await import('./contributionService.js');
     const cycleStatus = await contributionService.getCycleResolutionStatus(groupId, cycleNumber);
